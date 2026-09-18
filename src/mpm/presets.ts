@@ -36,24 +36,28 @@ export const PRESETS: Preset[] = [
   {
     id: 'central-burst',
     label: '厚肉・軽圧下の中心割れ',
-    note: '接触長に比べて板が厚く（h/L > 1）、変形が板厚中心まで届かない。中心に静水圧の引張が残る。',
+    note: '接触長に比べて板が厚い（Δ ≈ 3.6）と変形が中心まで届かず、前方張力の下で中心が引張のまま塑性流動する。中心偏析帯が周期的に割れる。',
     build: () => {
       const p = defaultParams();
-      p.rolling.h0 = 4 * mm;
-      p.rolling.reduction = 0.08;
-      p.rolling.rollRadius = 25 * mm;
-      p.rolling.sheetLength = 24 * mm;
+      p.rolling.h0 = 10 * mm;
+      p.rolling.reduction = 0.05;
+      p.rolling.rollRadius = 15 * mm;
+      p.rolling.sheetLength = 32 * mm;
       p.rolling.mu = 0.1;
+      p.rolling.frontTension = 500 * MPa;
       p.material = { ...STEEL_4340 };
-      p.damage = { ...DAMAGE_4340, D1: 0.02, D2: 0.6 };
+      // the paper's 4340 constants; damage only under tensile triaxiality
+      p.damage = { ...DAMAGE_4340, etaCutoff: 0 };
       p.numerics.cellsThrough = 16;
+      // centreline segregation: a thin low-ductility band along the whole plate
+      p.defects = [{ kind: 'weak', x: 16 * mm, y: 0, ax: 17 * mm, ay: 0.6 * mm, ductility: 0.005 }];
       return p;
     },
   },
   {
     id: 'void',
-    label: '内部欠陥（空洞）起点',
-    note: '板厚中心に空洞がある板。ロールバイトで潰れるか、出口側の引張で開くか。',
+    label: '内部の空洞が圧着される',
+    note: '板厚中心の空洞がロールバイトで押し潰される（30 % 圧下で高さ 0.30 → 約 0.06 mm）。周りの延性の低い部分も圧縮の三軸度では損傷がほとんど進まない。',
     build: () => {
       const p = defaultParams();
       p.rolling.h0 = 1.5 * mm;

@@ -243,7 +243,10 @@ export class Sim {
       { cx: 0, cy, R, omega }, // top: counter-clockwise → bottom surface moves +x
       { cx: 0, cy: -cy, R, omega: -omega },
     ];
-    this.xExitProbe = Math.max(3 * r.h0, 6 * h);
+    // Exit probe: a few thicknesses past the exit plane, but for thick plates (short contact
+    // arc against the thickness) no further than two contact lengths — otherwise the head of a
+    // plate barely reaches it and the steady phase, the exit gauge and the front tension never start.
+    this.xExitProbe = Math.max(6 * h, Math.min(3 * r.h0, 2 * Lc));
 
     // Material points on a regular lattice.
     const NI = Math.round(r.sheetLength / dp);
