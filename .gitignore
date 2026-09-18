@@ -1,0 +1,10 @@
+node_modules
+dist
+.DS_Store
+
+# Machine-local Claude Code settings (records absolute paths of this machine).
+.claude/settings.local.json
+
+# Tool output
+*.log
+tools/out/

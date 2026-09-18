@@ -1,0 +1,85 @@
+# MPM Rolling Lab — 作業メモ
+
+薄板の冷間圧延を 2D 平面ひずみの MPM（material point method）で解き、応力状態から亀裂の発生を
+判定するブラウザアプリ。参考は Banerjee, "Material Point Method Simulations of Fragmenting
+Cylinders", arXiv:1201.2439（Johnson-Cook / MTS 流動応力、GTN、Johnson-Cook 損傷、
+Hancock-MacKenzie、破壊した粒子の応力の扱い）。式と出典の対応は `docs/model.md`。
+
+## 構成
+
+| 場所 | 中身 |
+|---|---|
+| `src/mpm/` | ソルバー（DOM に依存しない。node からそのまま import できる） |
+| `src/mpm/solver.ts` | `Sim`: P2G → 格子更新（ロール接触）→ G2P 2 段（J-bar）→ 構成則・損傷 |
+| `src/mpm/material.ts` | 流動応力、J2 リターンマップ、破断ひずみ（純関数） |
+| `src/mpm/params.ts` / `presets.ts` | 入力（SI 単位）と、名前付きの条件 |
+| `src/app/` | ワーカー（`sim.worker.ts`）、描画（`view.ts`）、グラフ、条件パネル |
+| `tools/check.mjs` | 回帰関門。`// @check` の付いたスクリプトを集めて回す |
+| `tools/run.mjs` | ヘッドレスで 1 回圧延して数値を出す（`npm run sim -- --cells 6 --L 8`） |
+| `tools/browser/` | 自分専用のヘッドレス Chrome（CDP）を操作する道具 |
+| `docs/` | モデル（`model.md`）、検証値（`validation.md`）、デザイン（`design.md`）、条件（`presets.md`） |
+
+## 検証の基本
+
+1. **時間でなく信号で待つ。** ブラウザでは `__mpm.done` / `__mpm.diag.phase === 'steady'` などが真になるのを
+   `cdp-cli.mjs wait` で待つ。固定 sleep は計算の速さで結果が変わる
+2. **答えの分かっているケースでハーネスを先に校正する。** チェックを足したら、壊した版（例: J-bar を切る、
+   摩擦を 0 にする）で FAIL することを確かめる。壊すのはコピーで（並行して同じファイルを読む計算を壊さない）
+3. **推測せず中間量を出す。** 荷重がおかしいときは、J・圧力・三軸度の範囲、接触節点の数、押し込み力を
+   ステップごとにダンプする。J-bar が要ることもこれで分かった（`docs/model.md`「体積ロッキング」）
+4. **数値を変えたら `docs/validation.md` の実測値と測定条件を直す。** 条件（格子、板長、質量スケーリング、
+   Node の版、日付）を必ず併記する
+5. MPM の粒子は格子に対して動くので、同じ条件でも**格子の細かさで荷重が数十 % 変わる**。
+   比べるときは格子を揃え、収束を主張するときは 2 段以上の格子で示す
+
+## 実行
+
+```bash
+npm ci
+npm run dev -- --port <dev> --strictPort      # アプリ
+npm run check                                 # tsc + @check スクリプト一式（どれか FAIL で exit 1）
+npm run build                                 # tsc + vite build
+npm run sim -- --cells 6 --L 8 --every 2000   # 粗い圧延を 1 回（約 6 秒）
+```
+
+node は 22.18 以降（型の除去が既定で有効）。`src/` は**消去できる構文だけ**（enum・namespace・
+コンストラクタ引数のプロパティ禁止。`erasableSyntaxOnly`）で書き、import は `.ts` の拡張子付き。
+チェックを足すときはスクリプトの先頭付近に `// @check` を書くだけ（一覧や package.json は触らない）。
+文書にチェックの件数を書かない（並行する変更が同じ行で衝突する）。
+
+## ヘッドレス検証
+
+`screencapture` はユーザーの画面を撮るので使わない。人が使っている Chrome にも触らない。
+
+```bash
+npm run dev -- --port <dev> --strictPort &
+tools/browser/browser.sh start <cdp> <作業用ディレクトリ>/chrome-<cdp>
+export CDP_PORT=<cdp>; C=tools/browser/cdp-cli.mjs
+node $C nav 'http://localhost:<dev>/?autorun=1&cells=6&L=8&stopafter=12000'
+node $C wait '__mpm.done' 180000
+node $C eval '__mpm.diag'
+node $C shot <作業用ディレクトリ>/x.png 1600 1000     # → 画像を自分で見る
+node $C nav about:blank                                # 描画を止める（開いたままだと CPU を食う）
+tools/browser/browser.sh stop <cdp>; tools/browser/browser.sh stop <dev>
+```
+
+ポートは必ず渡す（既定値は無い）。`window.__mpm` は `frames` `running` `ready` `done` `diag` `cracks`
+`geometry` `params` `history` と `run()` `restart()` `setField(id)` を持つ。
+
+## クエリパラメータ
+
+`?preset=standard|front-tension|central-burst|void|high-friction&h0=1&r=25&R=100&L=16&mu=0.08&tb=0&tf=0`
+`&mat=spcc|s4340|al6061&damage=johnson-cook|hancock-mackenzie|cockcroft-latham|none&cells=10&ms=10000`
+`&field=seq|eta|s1|pres|ep|damage|sxx|syy|sxy|lagrange&autorun=1&stopafter=<step>`
+— 長さは mm、張力は MPa、`r` は %。不正な値は黙って無視される。効いたかは `__mpm.params` で確かめる。
+
+## Git 運用
+
+`main` に直接コミットしない。ブランチ（`feat/` `fix/` `refactor/` `docs/` `perf/`）→ PR。
+
+push 前に確認すること:
+- 個人の絶対パス（`/Users/<name>/…`）、ユーザー名、メールアドレスがコード・ログ・文書に無い
+- 認証情報・トークン・`.env` の類が無い
+- `.claude/settings.local.json` はマシン固有なので `.gitignore` 済み
+
+リポジトリは **private**。コミットのメールは GitHub の noreply アドレス（ローカル git config 済み）。
