@@ -3,7 +3,10 @@
 // one, has its whole history when it is picked), and the state of the points
 // being followed. Reads the simulation only. In a tandem the tracker of each stand after the first has the
 // one before as its parent: a point's path starts with its parent point's (parentOf, from the transfer), and
-// each sample knows its stand.
+// each sample knows its stand. The first crack's point and the η the crack started at go on to the parent
+// point's children. Once the next stand has taken what it needs, a finished stand's tracker lets go of its
+// Sim and keeps only its paths, at most KEEP samples a point, packed in one array (the later stands have
+// 1/(1 − r)² times the points of the one before, and a pass of five would otherwise hold every stand).
 import { localization } from '../mpm/bifurcation.ts';
 import { homologousTemperature } from '../mpm/material.ts';
 import type { Sim } from '../mpm/solver.ts';
@@ -12,6 +15,7 @@ import type { PointState, Track } from './protocol.ts';
 const DEP = 0.004; // a new path point per this much plastic strain
 const DETA = 0.1; // ... or per this change of triaxiality while flowing
 const CAP = 600; // path points per material point (a pass stays far below)
+const KEEP = 24; // path points per material point kept of a finished stand (the first, the last and evenly between)
 
 /** the tracker of the stand before and the transfer's map, new point → the point it was copied from */
 export interface TrackerParent {
@@ -20,15 +24,20 @@ export interface TrackerParent {
 }
 
 export class Tracker {
-  private readonly sim: Sim;
+  /** the stand's Sim while it runs (null once the tracker is retired) */
+  private sim: Sim | null;
   /** stand of this tracker (0 first) */
   readonly stand: number;
   private readonly parent: TrackerParent | null;
-  private readonly paths: (number[] | undefined)[];
-  private readonly lastEp: Float64Array;
-  private readonly lastEta: Float64Array;
-  private readonly closed: Uint8Array; // the failure point is recorded
+  private paths: (number[] | undefined)[];
+  /** a retired tracker's paths: point p's samples are data[start[p] .. start[p + 1]) */
+  private packed: { data: Float32Array; start: Int32Array } | null = null;
+  private lastEp: Float64Array;
+  private lastEta: Float64Array;
+  private closed: Uint8Array; // the failure point is recorded
   private readonly initiators = new Map<number, number>(); // point that started a crack → its η at failure
+  /** crack records whose starting point has been looked for (a stand after the first takes the stand before's as done) */
+  private located = 0;
   private firstCrack = -1;
 
   constructor(sim: Sim, parent: TrackerParent | null = null) {
@@ -40,20 +49,65 @@ export class Tracker {
     this.lastEta = new Float64Array(sim.n);
     this.closed = new Uint8Array(sim.n);
     if (parent) {
-      // a point carries on from its parent: the same sampling reference, and a failure already recorded stays closed
+      const up = parent.tracker;
+      // a point carries on from its parent: the same sampling reference, a failure already recorded stays closed,
+      // and a crack's starting point hands its η on
       for (let p = 0; p < sim.n; p++) {
         const q = parent.parentOf[p];
         if (q < 0) continue;
-        this.lastEp[p] = parent.tracker.lastEp[q];
-        this.lastEta[p] = parent.tracker.lastEta[q];
-        this.closed[p] = parent.tracker.closed[q];
+        this.lastEp[p] = up.lastEp[q];
+        this.lastEta[p] = up.lastEta[q];
+        this.closed[p] = up.closed[q];
+        const eta = up.initiators.get(q);
+        if (eta !== undefined) this.initiators.set(p, eta);
+      }
+      // the records carried over were located in the stand they started in (their sheetX / sheetY are that
+      // stand's): the first crack stays that point's child, not whichever point of this stand sits there
+      this.located = sim.cracks.length;
+      this.firstCrack = up.firstCrack >= 0 ? this.childOf(up.firstCrack) : -1;
+      up.retire();
+    }
+  }
+
+  /** the tracker's Sim while its stand runs */
+  private get live(): Sim {
+    if (!this.sim) throw new Error('a retired tracker has no Sim');
+    return this.sim;
+  }
+
+  /**
+   * The stand is over and the next stand's tracker has taken what it needs: keep only the paths, for fullPath, at
+   * most KEEP samples a point (the first, the last and evenly between), packed in one array; let go of the Sim.
+   */
+  retire(): void {
+    if (!this.sim) return;
+    const paths = this.paths;
+    const n = paths.length;
+    const start = new Int32Array(n + 1);
+    for (let p = 0; p < n; p++) start[p + 1] = start[p] + 3 * Math.min(KEEP, (paths[p]?.length ?? 0) / 3);
+    const data = new Float32Array(start[n]);
+    for (let p = 0; p < n; p++) {
+      const path = paths[p];
+      if (!path) continue;
+      const m = path.length / 3;
+      const k = (start[p + 1] - start[p]) / 3;
+      for (let j = 0; j < k; j++) {
+        const from = 3 * (k === m ? j : Math.round((j * (m - 1)) / (k - 1)));
+        data[start[p] + 3 * j] = path[from];
+        data[start[p] + 3 * j + 1] = path[from + 1];
+        data[start[p] + 3 * j + 2] = path[from + 2];
       }
     }
+    this.packed = { data, start };
+    this.paths = [];
+    this.sim = null;
+    this.lastEp = this.lastEta = new Float64Array(0);
+    this.closed = new Uint8Array(0);
   }
 
   /** The path of point p with its ancestors' in the stands before: flat (η, εp, D) and the stand of each sample. */
   fullPath(p: number): { path: number[]; stand: number[] } {
-    const own = this.paths[p] ?? [];
+    const own = this.packed ? Array.from(this.packed.data.subarray(this.packed.start[p], this.packed.start[p + 1])) : (this.paths[p] ?? []);
     const before = this.parent && p >= 0 && this.parent.parentOf[p] >= 0 ? this.parent.tracker.fullPath(this.parent.parentOf[p]) : { path: [], stand: [] };
     return { path: before.path.concat(own), stand: before.stand.concat(new Array(own.length / 3).fill(this.stand)) };
   }
@@ -68,11 +122,12 @@ export class Tracker {
 
   /** Add path points where the plastic strain or the triaxiality moved on; call every few steps. */
   record(): void {
-    const s = this.sim;
+    const s = this.live;
     const { active, failed, ep, eta } = s;
     const { lastEp, lastEta, closed, paths } = this;
     // the points that started cracks keep their stress state at failure in the crack record
-    for (let i = this.initiators.size; i < s.cracks.length; i++) {
+    for (; this.located < s.cracks.length; this.located++) {
+      const i = this.located;
       const p = this.locate(i);
       if (p >= 0) this.initiators.set(p, s.cracks[i].eta);
       if (i === 0) this.firstCrack = p;
@@ -99,7 +154,7 @@ export class Tracker {
   /** The followed points: the selected one, the first to fail, and the most damaged one still intact. */
   tracks(selected: number | null): Track[] {
     const out: Track[] = [];
-    const s = this.sim;
+    const s = this.live;
     if (selected !== null && selected >= 0 && selected < s.n) out.push(this.track('selected', selected));
     if (this.firstCrack >= 0) out.push(this.track('first-crack', this.firstCrack));
     let best = -1;
@@ -127,7 +182,7 @@ export class Tracker {
   }
 
   private state(p: number): PointState {
-    const s = this.sim;
+    const s = this.live;
     const P = s.params;
     const pr = s.pres[p];
     // the strain rate as the constitutive update sees it (deviatoric rate of deformation, mill speed)
@@ -169,7 +224,7 @@ export class Tracker {
 
   /** The point that started crack i (the crack keeps where it sat in the undeformed sheet). */
   private locate(i: number): number {
-    const s = this.sim;
+    const s = this.live;
     const c = s.cracks[i];
     const X = s.xHead0 - c.sheetX;
     let best = -1;
