@@ -13,6 +13,8 @@ import { applyQuery, stopAfterOf } from './app/query.ts';
 import { Overview } from './app/overview.ts';
 import { PlanMode } from './app/planMode.ts';
 import { BiteView } from './app/view.ts';
+import { StandViews } from './app/standViews.ts';
+import type { StandResult } from './app/tandemStub.ts';
 import { attachViewControls } from './app/viewControls.ts';
 import { SteadyForce, drawForceChart, drawHillChart, slabRatio, slabReference, type ForceChartData } from './app/slabOverlay.ts';
 
@@ -28,6 +30,11 @@ let field: FieldName = (FIELDS.find((f) => f.id === query.get('field'))?.id ?? '
 const stopAfter = stopAfterOf(query);
 
 const view = new BiteView($<HTMLCanvasElement>('bite'));
+// a tandem's stands side by side (one stand: unused)
+const standViews = new StandViews(document.querySelector<HTMLElement>('.bite')!, view, $<HTMLCanvasElement>('bite'));
+/** stands of the run shown, and the finished stands' results */
+let runStands = 1;
+let standResults: StandResult[] = [];
 const explorer = new Explorer(
   $('explorer'),
   $('locus'),
@@ -35,7 +42,8 @@ const explorer = new Explorer(
   () => (dirty = true),
 );
 $('bite').addEventListener('click', (e) => explorer.select(view.pick(e.clientX, e.clientY)));
-const history: { t: number[]; F: number[]; T: number[] } = { t: [], F: [], T: [] };
+// t is the whole pass's time (the stands one after the other), stand the stand of each point (0 first)
+const history: { t: number[]; F: number[]; T: number[]; stand: number[] } = { t: [], F: [], T: [], stand: [] };
 let geometry: Geometry | null = null;
 let last: Frame | null = null;
 // mean of the kinetic-energy ratio measured in the steady phase (held after it ends)
@@ -170,9 +178,22 @@ function startWorker() {
       if (!geometry || geometry.h0 !== m.geometry.h0 || geometry.contactLength !== m.geometry.contactLength) view.resetView();
       geometry = m.geometry;
       view.geometry = geometry;
+      standViews.setup(runStands, geometry);
       if (query.get('autorun') === '1' && frames === 0 && !plan.active) run();
     } else if (m.type === 'frame') {
       if (!awaitingReady) onFrame(m);
+    } else if (m.type === 'stand') {
+      if (awaitingReady) return;
+      // a stand is over: its slot keeps its last frame, the live view goes on with the next stand
+      standViews.hold(m.stand, m.frame, m.geometry);
+      standResults[m.stand] = m.result;
+      if (m.next) {
+        geometry = m.next;
+        view.geometry = m.next;
+        standViews.setCurrent(m.stand + 1);
+        steadyForce.reset(); // the steady force of the stand on show
+      }
+      dirty = true;
     }
     else if (m.type === 'error') showError(m.message);
   };
@@ -196,6 +217,9 @@ function restart() {
   kineticN = 0;
   history.F.length = 0;
   history.T.length = 0;
+  history.stand.length = 0;
+  runStands = params.rolling.stands ?? 1;
+  standResults = [];
   steadyForce.reset();
   last = null;
   view.frame = null;
@@ -206,7 +230,7 @@ function restart() {
   explorer.reset();
   view.marks = [];
   awaitingReady = true;
-  send({ type: 'init', params: cloneParams(params), stands: params.rolling.stands ?? 1, field, stopAfter });
+  send({ type: 'init', params: cloneParams(params), stands: runStands, field, stopAfter });
   updateButtons();
 }
 
@@ -231,7 +255,7 @@ $('reset').addEventListener('click', () => {
 
 function updateButtons() {
   if (plan.active) return plan.updateButtons();
-  const done = last?.diag.phase === 'done' || last?.diag.phase === 'stalled';
+  const done = !!last?.passDone;
   ($('run') as HTMLButtonElement).disabled = running || done;
   ($('pause') as HTMLButtonElement).disabled = !running;
   $('run').textContent = frames > 1 && !done ? '続ける' : '圧延を始める';
@@ -244,8 +268,10 @@ function onFrame(f: Frame) {
   running = f.running;
   view.frame = f;
   const d = f.diag;
-  if (d.step > 0 && (history.t.length === 0 || d.t * 1e3 > history.t[history.t.length - 1])) {
-    history.t.push(d.t * 1e3);
+  const tPass = (f.tOffset + d.t) * 1e3;
+  if (d.step > 0 && (history.t.length === 0 || tPass > history.t[history.t.length - 1])) {
+    history.t.push(tPass);
+    history.stand.push(f.stand);
     history.F.push(d.rollForce * 1e-6);
     history.T.push(d.rollTorque * 1e-3);
     steadyForce.add(d);
@@ -310,7 +336,10 @@ function updateResults(d: Diagnostics, f: Frame) {
 function showClock() {
   if (plan.active) return;
   const d = last?.diag;
-  $('clock').textContent = `t = ${((d?.t ?? 0) * 1e3).toFixed(2)} ms　${(d?.step ?? 0).toLocaleString()} step`;
+  const t = (last?.tOffset ?? 0) + (d?.t ?? 0);
+  const step = (last?.stepOffset ?? 0) + (d?.step ?? 0);
+  const stand = runStands > 1 ? `　スタンド ${(last?.stand ?? 0) + 1} / ${runStands}` : '';
+  $('clock').textContent = `t = ${(t * 1e3).toFixed(2)} ms　${step.toLocaleString()} step${stand}`;
 }
 
 let crackSeen = 0;
@@ -385,7 +414,9 @@ function frameLoop() {
   try {
     if (dirty) {
       dirty = false;
+      standViews.prepare();
       view.draw();
+      standViews.draw();
       overview.draw();
       drawLegend();
       drawCharts();
@@ -397,6 +428,7 @@ function frameLoop() {
 
 const ro = new ResizeObserver(() => {
   view.resize();
+  standViews.resize();
   dirty = true;
 });
 ro.observe($('bite'));
@@ -422,7 +454,7 @@ window.__mpm = {
     return geometry !== null;
   },
   get done() {
-    return last?.diag.phase === 'done' || last?.diag.phase === 'stalled' || (stopAfter !== null && (last?.diag.step ?? 0) >= stopAfter && !running);
+    return !!last?.passDone || (stopAfter !== null && (last?.stepOffset ?? 0) + (last?.diag.step ?? 0) >= stopAfter && !running);
   },
   get diag() {
     return last?.diag ?? null;
@@ -461,6 +493,16 @@ window.__mpm = {
     return { role: explorer.shownRole, id: explorer.shown?.id ?? null };
   },
   /** the points the stress explorer follows, with their paths (flat η, εp, D) */
+  /** the tandem: the stand on show (0 first), the stands of the run, the finished stands' results */
+  get stand() {
+    return last?.stand ?? 0;
+  },
+  get stands() {
+    return runStands;
+  },
+  get standResults() {
+    return standResults.map((r) => ({ ...r }));
+  },
   get tracks() {
     return last?.tracks ?? [];
   },

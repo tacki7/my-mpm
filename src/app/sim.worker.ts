@@ -97,6 +97,7 @@ function makeFrame(s: Sim, tr: Tracker | null): [Frame, Transferable[]] {
     tOffset: t.tOffset,
     stepOffset: t.stepOffset,
     results: t.results.map((r) => ({ ...r })),
+    passDone: s === sim && finished(),
   };
   return [msg, [pos.buffer, F.buffer, val.buffer, flags.buffer, ...(dirs ? [dirs.buffer] : [])]];
 }
