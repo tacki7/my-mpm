@@ -4,7 +4,7 @@
 // pressure differences between neighbouring points in the bite, and the cracks. Not a
 // gate check (a 100 mm wide strip takes a few minutes).
 //
-//   node tools/planview.mjs [--W 20] [--cells 20] [--L 28] [--tailgap 8] [--h0 1] [--r 0.25] [--R 100]
+//   node tools/planview.mjs [--W 20] [--cells 20] [--L 28] [--gap 8] [--h0 1] [--r 0.25] [--R 100]
 //                           [--mu 0.08] [--ms 10000] [--cfl 0.4] [--tb 0] [--tf 0]
 //                           [--damage none|johnson-cook|hancock-mackenzie|cockcroft-latham] [--cl 0.6]
 //                           [--notch <radius mm>] [--max 4000000] [--json]
@@ -12,12 +12,13 @@
 // Lengths in mm, tensions in MPa; --W is the full width, --cells the grid cells across the
 // half width. --notch cuts a semicircular notch of that radius into the edge half-way along
 // the strip. Steady values are means over the samples (every 250 steps) in the steady phase while
-// the tail is still at least --tailgap mm before the entry: as the tail comes within about 8 mm of
-// the entry the stresses in the bite fall (by up to 40 % in a narrow strip), and that transient is
-// not the steady state. A strip too short for the window has no samples (lengthen it with --L).
+// the head is at least a gap past the exit and the tail at least a gap before the entry: the gap is
+// 8 mm or the half width, whichever is more (--gap sets it): the middle's load settles only a half
+// width past the exit and falls again within about a half width of the entry. A strip too short for
+// the window has no samples (lengthen it with --L to twice the gap and 8 mm).
 import { PlanSim } from '../src/mpm/planview/sim.ts';
 import { planCondition } from '../src/mpm/planview/condition.ts';
-import { SAMPLE_STEPS, SteadySampler } from '../src/mpm/planview/steady.ts';
+import { SAMPLE_STEPS, SteadySampler, steadyGap, steadyLength } from '../src/mpm/planview/steady.ts';
 import { defaultParams } from '../src/mpm/params.ts';
 
 const args = process.argv.slice(2);
@@ -34,7 +35,8 @@ r.h0 = +opt('h0', 1) * 1e-3;
 r.reduction = +opt('r', r.reduction);
 r.rollRadius = +opt('R', 100) * 1e-3;
 r.sheetLength = +opt('L', 28) * 1e-3;
-const tailGap = +opt('tailgap', 8) * 1e-3;
+const gapOpt = opt('gap', null);
+const gapGiven = gapOpt === null ? null : +gapOpt * 1e-3;
 const maxSteps = +opt('max', 4e6);
 r.mu = +opt('mu', r.mu);
 r.backTension = +opt('tb', 0) * 1e6;
@@ -54,7 +56,8 @@ const wus = Math.pow(1 - r.reduction, -Math.pow(10, -1.269 * (W / r.h0) * Math.p
 
 const t0 = performance.now();
 // the steady looks, read the same way as the page does (src/mpm/planview/steady.ts)
-const sampler = new SteadySampler(tailGap);
+const sampler = new SteadySampler(gapGiven);
+const gap = gapGiven ?? steadyGap(sim.halfWidth0);
 while (sim.step < maxSteps) {
   for (let k = 0; k < SAMPLE_STEPS; k++) sim.advance();
   if (sampler.look(sim) === 'done') break;
@@ -68,7 +71,7 @@ const out = {
   secs,
   steadySamples: m.samples,
   steadyLooks: m.looks,
-  tailGap_mm: tailGap * 1e3,
+  gap_mm: gap * 1e3,
   forceHalfWidth_kN: m.forceHalfWidth * 1e-3,
   forcePerWidthMid_kN_per_mm: m.samples ? m.forcePerWidthByZ[0] * 1e-6 : NaN,
   forcePerWidthByZ_kN_per_mm: m.forcePerWidthByZ.map((v) => v * 1e-6),
@@ -95,8 +98,8 @@ const out = {
 if (json) console.log(JSON.stringify(out));
 else {
   const f = (a, d = 0) => a.map((v) => v.toFixed(d).padStart(6)).join('');
-  say(`${m.samples} of ${m.looks} steady samples (the tail ≥ ${(tailGap * 1e3).toFixed(0)} mm before the entry), ${sim.step} steps, ${secs.toFixed(1)} s`);
-  if (!m.samples) say('no steady sample with the tail that far before the entry: lengthen the strip (--L)');
+  say(`${m.samples} of ${m.looks} steady samples (the head ≥ ${(gap * 1e3).toFixed(0)} mm past the exit and the tail as far before the entry), ${sim.step} steps, ${secs.toFixed(1)} s`);
+  if (!m.samples) say(`no steady sample: lengthen the strip (--L) to ${(steadyLength(sim.halfWidth0) * 1e3).toFixed(0)} mm or more (twice the gap and 8 mm)`);
   say(`force per unit width, mid → edge, bands of whole lattice columns [kN/mm]: ${f(out.forcePerWidthByZ_kN_per_mm, 2)}   (whole half width ${out.forceHalfWidth_kN.toFixed(2)} kN per roll)`);
   if (out.forcePerWidthByColumn_kN_per_mm.length <= 40) say(`  per lattice column: ${f(out.forcePerWidthByColumn_kN_per_mm, 2)}`);
   // Wusatowski's fit is for narrow strips; past W/h0 ≈ 20 it gives no spread at all

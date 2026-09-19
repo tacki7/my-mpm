@@ -1,14 +1,26 @@
 // The steady values of a plan-view run, read the same way by tools/planview.mjs and the page
 // (src/app/plan.worker.ts), so the two agree to the last digit: a look every SAMPLE_STEPS steps,
-// kept while the phase is steady and the tail is still at least `tailGap` before the entry (as the
-// tail comes within about 8 mm of the entry the stresses in the bite fall; that transient is not
-// the steady state). docs/validation.md "平面図モデル".
+// kept while the phase is steady, the head is at least a gap past the exit and the tail at least a gap
+// before the entry. The gap is 8 mm or the half width, whichever is more: the middle's load per unit
+// width settles only when the head has gone about a half width past the exit, and falls again as the
+// tail comes within about a half width of the entry (8 mm at narrow strips), so a strip needs about
+// twice the gap and more to have steady looks. docs/validation.md "平面図モデル".
 import type { PlanPhase, PlanSim } from './sim.ts';
 
 /** steps between two looks */
 export const SAMPLE_STEPS = 250;
-/** the tail must be at least this far before the entry for a look to count [m] */
-export const TAIL_GAP = 8e-3;
+/** the least gap between the head and the exit, and between the tail and the entry, for a look to count [m] */
+export const GAP_MIN = 8e-3;
+
+/** the gap for a strip of this half width [m]: GAP_MIN, or the half width when that is more */
+export function steadyGap(halfWidth: number): number {
+  return Math.max(GAP_MIN, halfWidth);
+}
+
+/** a strip at least this long has steady looks, about ten at the standard pass (twice the gap and 8 mm) [m] */
+export function steadyLength(halfWidth: number): number {
+  return 2 * steadyGap(halfWidth) + 8e-3;
+}
 
 /** one look at the strip: force per unit width by band of lattice columns, σxx by z in the bite and past the exit, spread, pressure jumps */
 export interface PlanSnapshot {
@@ -125,14 +137,15 @@ const mean = (a: number[]) => {
  * the phase and the roll force since the last look (sim.readForce), and keeps a snapshot when it counts.
  */
 export class SteadySampler {
-  readonly tailGap: number;
+  /** the gap given (null: steadyGap of the strip's half width) */
+  readonly gap: number | null;
   private readonly kept: { F: number; snap: PlanSnapshot }[] = [];
   private steadyLooks = 0;
   /** roll force per roll on the half width read at the last look [N] */
   lastForce = NaN;
 
-  constructor(tailGap = TAIL_GAP) {
-    this.tailGap = tailGap;
+  constructor(gap: number | null = null) {
+    this.gap = gap;
   }
 
   look(sim: PlanSim): PlanPhase {
@@ -141,7 +154,8 @@ export class SteadySampler {
     this.lastForce = F;
     if (phase !== 'steady') return phase;
     this.steadyLooks++;
-    if (sim.tailX() <= -sim.contactLength - this.tailGap) this.kept.push({ F, snap: snapshot(sim) });
+    const gap = this.gap ?? steadyGap(sim.halfWidth0);
+    if (sim.headX() >= gap && sim.tailX() <= -sim.contactLength - gap) this.kept.push({ F, snap: snapshot(sim) });
     return phase;
   }
 
