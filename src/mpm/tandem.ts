@@ -51,6 +51,12 @@ export interface StandResult {
   massLost: number;
   /** a crack goes through the thickness: three neighbouring lattice columns have a failed point in every row */
   separated: boolean;
+  /** crack records that started in this stand */
+  cracksBorn: number;
+  /** the area that failed into cracks in this stand, new ones and older ones growing [m², per unit width]; a stand
+   *  that only carries its cracks on adds 0 (the remap's recount on the finer lattice is not growth) */
+  crackGrowth: number;
+  /** over the points still on the grid (the ones that left it are in massLost) */
   maxDamage: number;
   nFailed: number;
   /** crack records so far, this stand's and the stands' before */
@@ -96,6 +102,8 @@ export class TandemSim {
   stopped: TandemStop | null = null;
   private steady: Reading[] = [];
   private finished = false;
+  /** per crack id, the mass of its failed points when the current stand started (after the remap) */
+  private crackBase: Float64Array = new Float64Array(0);
 
   constructor(params: SimParams, stands: number, every = READ_STEPS) {
     if (!(Number.isInteger(stands) && stands >= 1 && stands <= MAX_STANDS)) throw new Error(`stands must be 1 to ${MAX_STANDS}`);
@@ -150,16 +158,26 @@ export class TandemSim {
 
   private endStand(phase: 'done' | 'stalled'): void {
     const old = this.sim;
-    const result = this.close(old, phase);
+    const { growth, ...result } = this.close(old, phase);
     this.results.push(result);
-    // a tandem of more than one stand marks its records with the stand; a single stand leaves them as the single pass has them
-    if (this.stands > 1) for (const c of old.cracks) if (c.stand === undefined) c.stand = this.stand;
+    // a tandem of more than one stand marks its records with the stand and the area; a single stand leaves them as the
+    // single pass has them
+    if (this.stands > 1) {
+      for (const c of old.cracks) {
+        if (c.stand === undefined) c.stand = this.stand;
+        const a = c.areaByStand ?? [];
+        while (a.length < this.stand) a.push(0);
+        a[this.stand] = growth[c.id];
+        c.areaByStand = a;
+      }
+    }
     const more = this.stand + 1 < this.stands;
     if (more) {
       this.stopped =
         phase === 'stalled' ? 'stalled' : result.separated ? 'separated' : result.massLost > 0 || !(result.thicknessOut > 0) ? 'lost' : null;
     }
     const [next, parentOf] = more && !this.stopped ? remap(old, this.base, result.thicknessOut) : [null, null];
+    if (next) this.crackBase = crackMass(next);
     this.onStandDone?.({ stand: this.stand, sim: old, next, parentOf, result });
     if (!next) {
       this.finished = true;
@@ -173,7 +191,7 @@ export class TandemSim {
     this.steady = [];
   }
 
-  private close(sim: Sim, phase: 'done' | 'stalled'): StandResult {
+  private close(sim: Sim, phase: 'done' | 'stalled'): StandResult & { growth: number[] } {
     const s = this.steady;
     // as tools/run-summary.mjs: the plain mean over the readings (a thickness of 0 counts as none)
     const mean = (a: number[]) => (a.length ? a.reduce((x, v) => x + v, 0) / Math.max(1, a.length) : null);
@@ -182,12 +200,21 @@ export class TandemSim {
     let mass = 0;
     let lost = 0;
     for (let p = 0; p < sim.n; p++) {
+      mass += sim.mass[p];
+      if (!sim.active[p]) {
+        lost += sim.mass[p];
+        continue;
+      }
       const D = sim.governingDamage(p);
       if (D > maxDamage) maxDamage = D;
       if (sim.failed[p]) nFailed++;
-      mass += sim.mass[p];
-      if (!sim.active[p]) lost += sim.mass[p];
     }
+    // the area each crack gained in this stand: its failed mass now, less at the start, over ρ
+    const rho = sim.params.material.rho * sim.params.numerics.massScale;
+    const now = crackMass(sim);
+    const growth = Array.from(now, (m, id) => (m - (this.crackBase[id] ?? 0)) / rho);
+    let born = 0;
+    for (const c of sim.cracks) if ((c.stand ?? this.stand) === this.stand) born++;
     const r = sim.params.rolling;
     return {
       stand: this.stand,
@@ -204,9 +231,12 @@ export class TandemSim {
       thicknessOut: thicknessOut(sim),
       massLost: lost / mass,
       separated: separated(sim),
+      cracksBorn: born,
+      crackGrowth: growth.reduce((x, v) => x + v, 0),
       maxDamage,
       nFailed,
       cracks: sim.cracks.length,
+      growth,
     };
   }
 }
@@ -351,7 +381,17 @@ export function remap(old: Sim, base: SimParams, h1: number): [Sim, Int32Array] 
   }
 
   // the crack records, with the new points counted
-  for (const c of old.cracks) sim.cracks.push({ ...c, count: 0 });
+  for (const c of old.cracks) sim.cracks.push({ ...c, count: 0, ...(c.areaByStand ? { areaByStand: c.areaByStand.slice() } : {}) });
   for (let q = 0; q < n; q++) if (sim.crackId[q] >= 0) sim.cracks[sim.crackId[q]].count++;
   return [sim, parentOf];
+}
+
+/** per crack id, the mass of the failed points in it (every point, on the grid or not) */
+function crackMass(sim: Sim): Float64Array {
+  const m = new Float64Array(sim.cracks.length);
+  for (let p = 0; p < sim.n; p++) {
+    const id = sim.crackId[p];
+    if (id >= 0 && sim.failed[p]) m[id] += sim.mass[p];
+  }
+  return m;
 }

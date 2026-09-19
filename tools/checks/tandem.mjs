@@ -7,9 +7,9 @@
 //   towards the next rolls (they are the rolled sheet's residual stresses, in balance: F = I instead of
 //   √J I would drop the pressure at the first step)
 // - the same with the rows sheared by high friction
-// - damage adds up over the stands, and a crack of the first stand is still there in the second
-// - a stand ends at the first step it is done, with the whole sheet on the grid; a crack through the
-//   thickness stops the tandem; a crack record with no point left keeps its start as the centroid
+// - damage adds up over the stands
+// - a stand ends at the first step it is done, with the whole sheet on the grid
+// The cracks across the stands are in tools/checks/tandem-cracks.mjs.
 // @check
 import { ok, between, near, done } from './lib.mjs';
 import { Sim } from '../../src/mpm/solver.ts';
@@ -203,61 +203,7 @@ for (const [name, mod] of [
   ok(t.stand === 1 && Number.isFinite(t.sim.params.rolling.h0) && t.sim.n > 0 && Math.abs(m1 / m0 - 1) < 1e-12, `${name}: stand 2 has the whole sheet`, `h0 ${t.sim.params.rolling.h0}, ${t.sim.n} points, mass ${m1 / m0}`);
 }
 
-// ── a crack through the thickness: the strip is broken, the tandem stops there (a mill stops at a strip break)
-{
-  const P = short(defaultParams());
-  P.damage = { ...DAMAGE_4340, etaCutoff: -10 };
-  P.defects = [{ kind: 'weak', x: 2e-3, y: 0, ax: 0.15e-3, ay: 0.6e-3, ductility: 1e-3 }];
-  const t = new TandemSim(P, 2);
-  let ev = null;
-  t.onStandDone = (e) => (ev = e);
-  toEnd(t);
-  ok(t.done && t.stopped === 'separated' && t.results.length === 1 && t.results[0].separated && ev.next === null && t.stand === 0,
-    'a crack through the thickness in stand 1: the tandem stops, separated', `${t.stopped}, ${t.results.length} results`);
-}
-
-// ── a crack record with no point left (it would be one whose points left the grid): its centroid is where it started
-{
-  const s = new Sim(short(defaultParams()));
-  s.cracks.push({ id: 0, t: 0, step: 0, x: 1e-3, y: 2e-4, sheetX: 0, sheetY: 0, eta: 0, s1: 0, seq: 0, ep: 0, criterion: 'johnson-cook', count: 0 });
-  const [c] = s.crackCentroids();
-  ok(c.x === 1e-3 && c.y === 2e-4, 'a crack record without points: the centroid is its start, not NaN', `${c.x}, ${c.y}`);
-}
-
 // high friction: the rows shear in the bite
 remapCheck('high friction', short(presetById('high-friction').build()));
 
-// ── one stand with a crack: the records are the single pass's (no stand field added)
-{
-  const P = short(defaultParams());
-  P.damage = { ...DAMAGE_4340, etaCutoff: -10 };
-  P.defects = [{ kind: 'weak', x: 2e-3, y: 0, ax: 1.2e-3, ay: 0.13e-3, ductility: 1e-3 }];
-  const a = new Sim(P);
-  const t = new TandemSim(P, 1);
-  while (!t.done) {
-    a.advance();
-    t.advance();
-  }
-  ok(a.cracks.length > 0 && JSON.stringify(t.sim.cracks) === JSON.stringify(a.cracks), 'one stand with cracks: the crack records are the single pass\'s, as they are', `${a.cracks.length} records`);
-}
-
-// ── a crack of the first stand is in the second: a centreline band that fails in compression too
-{
-  const P = short(defaultParams());
-  P.damage = { ...DAMAGE_4340, etaCutoff: -10 };
-  P.defects = [{ kind: 'weak', x: 2e-3, y: 0, ax: 1.2e-3, ay: 0.13e-3, ductility: 1e-3 }];
-  const t = new TandemSim(P, 2);
-  let before = 0;
-  let failedBefore = 0;
-  t.onStandDone = (e) => {
-    before = e.sim.cracks.length;
-    failedBefore = e.sim.failed.reduce((s, v) => s + v, 0);
-  };
-  toEnd(t);
-  const s = t.sim;
-  const failed = s.failed.reduce((a, v) => a + v, 0);
-  const counted = s.cracks.reduce((a, c) => a + c.count, 0);
-  ok(before > 0 && s.step === 0 && s.cracks.length === before && t.cracks.every((c) => c.stand === 0), 'a crack of stand 1: its records are there at the start of stand 2, marked stand 1', `${before} records`);
-  ok(failed > failedBefore && counted === failed && s.crackCentroids().length === before, 'and its failed points (more of them on the finer lattice), each in its crack', `${failedBefore} → ${failed} failed points`);
-}
 done();
