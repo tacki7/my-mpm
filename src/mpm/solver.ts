@@ -29,6 +29,8 @@ import {
   homologousTemperature,
   jcFractureStrain,
   plasticIncrement,
+  staticStrength,
+  strengthFactor,
   type Elastic,
 } from './material.ts';
 
@@ -187,6 +189,15 @@ export class Sim {
   readonly contactJn: Float64Array;
   readonly contactJt: Float64Array;
   readonly contactSlip: Uint8Array;
+  /**
+   * The grid nodes the active points' stencils cover this step, [gLo, gHi), and last step's: only those are
+   * written, so only last step's range needs clearing (the first step clears all) and only this step's is
+   * visited. The rest of the grid keeps its cleared values, as if the whole grid were cleared every step.
+   */
+  private gLo = 0;
+  private gHi = 0;
+  private gPrevLo = 0;
+  private gPrevHi = 0;
   // 'surface': per roll and node (roll k at k · nodes + node), Σ w m (requested normal velocity change) and Σ w m
   private readonly gfolN: Float64Array;
   private readonly gfolD: Float64Array;
@@ -225,6 +236,9 @@ export class Sim {
   readonly pres: Float64Array;
   readonly ep: Float64Array;
   readonly temp: Float64Array;
+  /** staticStrength at the plastic strain it was last computed for (NaN: not yet): σy = it × strengthFactor */
+  private readonly strengthEp: Float64Array;
+  private readonly strength: Float64Array;
   readonly seq: Float64Array;
   readonly eta: Float64Array;
   readonly s1: Float64Array;
@@ -345,6 +359,7 @@ export class Sim {
     this.gJe = new Float64Array(nNodes);
     this.gB = new Float64Array(nNodes);
     this.gMv = new Float64Array(nNodes);
+    this.gPrevHi = nNodes;
 
     const R = r.rollRadius;
     const cy = R + this.gap / 2;
@@ -418,6 +433,8 @@ export class Sim {
     this.pres = F();
     this.ep = F();
     this.temp = F();
+    this.strengthEp = F().fill(NaN);
+    this.strength = F();
     this.seq = F();
     this.eta = F();
     this.s1 = F();
@@ -498,36 +515,43 @@ export class Sim {
   advance(): void {
     const { gm, gvx, gvy, gpush } = this;
     const [gpen0, gpen1] = this.gpen;
-    gm.fill(0);
-    gvx.fill(0);
-    gvy.fill(0);
-    gpen0.fill(INF);
-    gpen1.fill(INF);
-    gpush.fill(0);
-    this.gcon.fill(0);
-    this.contactJn.fill(0);
-    this.contactJt.fill(0);
-    this.contactSlip.fill(0);
+    // clear what last step wrote (the whole grid at the first step)
+    const lo = this.gPrevLo;
+    const hi = this.gPrevHi;
+    gm.fill(0, lo, hi);
+    gvx.fill(0, lo, hi);
+    gvy.fill(0, lo, hi);
+    gpen0.fill(INF, lo, hi);
+    gpen1.fill(INF, lo, hi);
+    gpush.fill(0, lo, hi);
+    this.gcon.fill(0, lo, hi);
+    this.contactJn.fill(0, lo, hi);
+    this.contactJt.fill(0, lo, hi);
+    this.contactSlip.fill(0, lo, hi);
     this.updatePusher();
     if (!this.pusherActive && !this.stalled && this.step % 50 === 0) this.checkStall();
     this.p2g();
     this.gridUpdate();
     if (this.params.numerics.jbar) {
-      this.gJ.fill(0);
+      this.gJ.fill(0, lo, hi);
       if (this.params.numerics.volumetric !== 'total') {
-        this.gJe.fill(0);
-        this.gB.fill(0);
-        this.gMv.fill(0);
+        this.gJe.fill(0, lo, hi);
+        this.gB.fill(0, lo, hi);
+        this.gMv.fill(0, lo, hi);
       }
     }
     this.g2pVelocity();
     this.g2pUpdate();
+    this.gPrevLo = this.gLo;
+    this.gPrevHi = this.gHi;
     this.t += this.dt;
     this.step++;
   }
 
   private p2g(): void {
     const { n, active, px, py, vx, vy, mass, vol0, gm, gvx, gvy, gpush, tag, dt, h, invH, ox, oy, nyN } = this;
+    const { f00, f01, f10, f11, sxx, syy, sxy, pres, c00, c01, c10, c11, touch } = this;
+    const halfDp = 0.5 * this.dp;
     const [gpen0, gpen1] = this.gpen;
     const [r0, r1] = this.rolls;
     const k4 = 4 * invH * invH;
@@ -542,6 +566,9 @@ export class Sim {
     // 'surface': a penetrating point marks only the nodes on its roll side and its nearest row (the top roll is roll 0)
     const rollSide = this.params.numerics.contact === 'surface';
     const hh = 0.5 * h;
+    // the lowest and highest stencil base (bx, by) index: the stencils cover [loBase, hiBase + 2 nyN + 3)
+    let loBase = INF;
+    let hiBase = -INF;
     for (let p = 0; p < n; p++) {
       if (!active[p]) continue;
       const xp = px[p];
@@ -550,6 +577,9 @@ export class Sim {
       const gy = (yp - oy) * invH;
       const bx = Math.floor(gx - 0.5);
       const by = Math.floor(gy - 0.5);
+      const base = bx * nyN + by;
+      if (base < loBase) loBase = base;
+      if (base > hiBase) hiBase = base;
       const fx = gx - bx;
       const fy = gy - by;
       const wx0 = 0.5 * (1.5 - fx) * (1.5 - fx);
@@ -559,32 +589,60 @@ export class Sim {
       const wy1 = 0.75 - (fy - 1) * (fy - 1);
       const wy2 = 0.5 * (fy - 0.5) * (fy - 0.5);
 
-      const J = this.f00[p] * this.f11[p] - this.f01[p] * this.f10[p];
+      const F01 = f01[p];
+      const F11 = f11[p];
+      const J = f00[p] * F11 - F01 * f10[p];
       const vol = vol0[p] * J;
-      const pr = this.pres[p];
+      const pr = pres[p];
       const k = -dt * vol * k4;
       const m = mass[p];
-      const a00 = k * (this.sxx[p] - pr) + m * this.c00[p];
-      const a01 = k * this.sxy[p] + m * this.c01[p];
-      const a10 = k * this.sxy[p] + m * this.c10[p];
-      const a11 = k * (this.syy[p] - pr) + m * this.c11[p];
+      const a00 = k * (sxx[p] - pr) + m * c00[p];
+      const a01 = k * sxy[p] + m * c01[p];
+      const a10 = k * sxy[p] + m * c10[p];
+      const a11 = k * (syy[p] - pr) + m * c11[p];
       let mvx = m * vx[p];
       const mvy = m * vy[p];
       const tg = tag[p];
-      if (tractionB !== 0 && li[p] < grip) mvx += dt * tractionB * this.gripWeight(li[p], 1) * Math.hypot(this.f01[p], this.f11[p]);
-      else if (tractionF !== 0 && li[p] >= NI - grip) mvx += dt * tractionF * this.gripWeight(li[p], 2) * Math.hypot(this.f01[p], this.f11[p]);
+      if (tractionB !== 0 && li[p] < grip) mvx += dt * tractionB * this.gripWeight(li[p], 1) * Math.hypot(F01, F11);
+      else if (tractionF !== 0 && li[p] >= NI - grip) mvx += dt * tractionF * this.gripWeight(li[p], 2) * Math.hypot(F01, F11);
 
-      // penetration of this point into each roll (its half size along the deformed y edge)
-      const rp = 0.5 * this.dp * Math.hypot(this.f01[p], this.f11[p]);
-      const d0 = Math.hypot(xp - r0.cx, yp - r0.cy);
-      const d1 = Math.hypot(xp - r1.cx, yp - r1.cy);
-      const pen0 = d0 - r0.R - rp;
-      const pen1 = d1 - r1.R - rp;
-      this.touch[p] = (pen0 < 0 ? 1 : 0) | (pen1 < 0 ? 2 : 0);
-      const n0x = (xp - r0.cx) / d0;
-      const n0y = (yp - r0.cy) / d0;
-      const n1x = (xp - r1.cx) / d1;
-      const n1y = (yp - r1.cy) / d1;
+      // penetration of this point into each roll (its half size along the deformed y edge). Only a
+      // penetration (pen < 0) is used: the nodes' gpen and the touch flags are read by their sign. A point
+      // whose squared distance to a roll centre is beyond (R + an upper bound of its half size)², with a
+      // relative margin far above rounding, cannot penetrate that roll: no square roots for it.
+      const e0x = xp - r0.cx;
+      const e0y = yp - r0.cy;
+      const e1x = xp - r1.cx;
+      const e1y = yp - r1.cy;
+      const rpMax = halfDp * (Math.abs(F01) + Math.abs(F11));
+      const reach0 = (r0.R + rpMax) * (r0.R + rpMax) * (1 + 1e-9);
+      const reach1 = (r1.R + rpMax) * (r1.R + rpMax) * (1 + 1e-9);
+      let pen0 = INF;
+      let pen1 = INF;
+      let n0x = 0;
+      let n0y = 0;
+      let n1x = 0;
+      let n1y = 0;
+      const near0 = e0x * e0x + e0y * e0y <= reach0;
+      const near1 = e1x * e1x + e1y * e1y <= reach1;
+      if (near0 || near1) {
+        const rp = halfDp * Math.hypot(F01, F11);
+        if (near0) {
+          const d0 = Math.hypot(e0x, e0y);
+          pen0 = d0 - r0.R - rp;
+          n0x = e0x / d0;
+          n0y = e0y / d0;
+        }
+        if (near1) {
+          const d1 = Math.hypot(e1x, e1y);
+          pen1 = d1 - r1.R - rp;
+          n1x = e1x / d1;
+          n1y = e1y / d1;
+        }
+      }
+      const in0 = pen0 < 0;
+      const in1 = pen1 < 0;
+      touch[p] = (in0 ? 1 : 0) | (in1 ? 2 : 0);
       const pushMark = pushing && tg === 1;
 
       for (let i = 0; i < 3; i++) {
@@ -599,11 +657,18 @@ export class Sim {
           gvx[idx] += w * (mvx + a00 * dx + a01 * dy);
           gvy[idx] += w * (mvy + a10 * dx + a11 * dy);
           // along the roll normal n (roll centre → point): the node lies toward the roll, or within h/2 beyond the point
-          if (pen0 < gpen0[idx] && (!rollSide || dx * n0x + dy * n0y <= hh)) gpen0[idx] = pen0;
-          if (pen1 < gpen1[idx] && (!rollSide || dx * n1x + dy * n1y <= hh)) gpen1[idx] = pen1;
+          if (in0 && pen0 < gpen0[idx] && (!rollSide || dx * n0x + dy * n0y <= hh)) gpen0[idx] = pen0;
+          if (in1 && pen1 < gpen1[idx] && (!rollSide || dx * n1x + dy * n1y <= hh)) gpen1[idx] = pen1;
           if (pushMark) gpush[idx] = 1;
         }
       }
+    }
+    if (loBase === INF) {
+      this.gLo = 0;
+      this.gHi = 0;
+    } else {
+      this.gLo = loBase;
+      this.gHi = hiBase + 2 * nyN + 3;
     }
   }
 
@@ -652,7 +717,7 @@ export class Sim {
   }
 
   private gridUpdate(): void {
-    const { gm, gvx, gvy, gpush, nxN, nyN, h, ox, oy, dt } = this;
+    const { gm, gvx, gvy, gpush, nyN, h, ox, oy, dt } = this;
     const mu = this.params.rolling.mu;
     const pushing = this.pusherActive;
     const vPush = this.vIn;
@@ -661,10 +726,10 @@ export class Sim {
     let pushImpulse = 0;
     const fyAcc = [0, 0];
     const tqAcc = [0, 0];
-    const nNodes = nxN * nyN;
+    const nNodes = this.nxN * nyN;
     const mMin = 1e-12 * this.mass[0];
     const proj = this.projBuf;
-    for (let idx = 0; idx < nNodes; idx++) {
+    for (let idx = this.gLo; idx < this.gHi; idx++) {
       const m = gm[idx];
       if (m <= mMin) {
         gvx[idx] = 0;
@@ -759,6 +824,7 @@ export class Sim {
    */
   private g2pVelocity(): void {
     const { n, active, px, py, vx, vy, gm, gvx, gvy, gJ, gJe, gB, gMv, mass, dt, h, invH, ox, oy, nyN } = this;
+    const { c00, c01, c10, c11, f00, f01, f10, f11, failed, pres, vr } = this;
     const k4 = 4 * invH * invH;
     const num = this.params.numerics;
     const jbar = num.jbar;
@@ -813,10 +879,10 @@ export class Sim {
       const l01 = k4 * b01;
       const l10 = k4 * b10;
       const l11 = k4 * b11;
-      this.c00[p] = l00;
-      this.c01[p] = l01;
-      this.c10[p] = l10;
-      this.c11[p] = l11;
+      c00[p] = l00;
+      c01[p] = l01;
+      c10[p] = l10;
+      c11[p] = l11;
       vx[p] = nvx;
       vy[p] = nvy;
       if (!jbar) continue;
@@ -826,14 +892,14 @@ export class Sim {
         this.dJ[p] = th;
         // failed and inverted points take no part in the averages (they keep their own rate):
         // a crack must not dilate its intact neighbours, and ln J needs J > 0
-        const Jo = this.f00[p] * this.f11[p] - this.f01[p] * this.f10[p];
-        if (this.failed[p] || !(Jo > 0)) continue;
+        const Jo = f00[p] * f11[p] - f01[p] * f10[p];
+        if (failed[p] || !(Jo > 0)) continue;
         const mth = m * th;
         // elastic log volume ln J − ev = −p/K for an intact point (p was set from this F last step)
-        const mfe = -m * this.pres[p] * invK;
+        const mfe = -m * pres[p] * invK;
         // relaxation fraction β = c · 3K Δεp / σeq, with the contact coefficient near a roll
         let mb = 0;
-        const v = this.vr[p];
+        const v = vr[p];
         if (v > 0) {
           const ax = px[p] - r0.cx;
           const ay = py[p] - r0.cy;
@@ -865,7 +931,7 @@ export class Sim {
         continue;
       }
       // trial total volume ratio of this step (averaging the total, not the increment, cannot drift)
-      const Jold = this.f00[p] * this.f11[p] - this.f01[p] * this.f10[p];
+      const Jold = f00[p] * f11[p] - f01[p] * f10[p];
       const dJ = ((1 + dt * l00) * (1 + dt * l11) - dt * dt * l01 * l10) * Jold;
       this.dJ[p] = dJ;
       const mdJ = mass[p] * dJ;
@@ -879,7 +945,7 @@ export class Sim {
     }
     if (!jbar) return;
     const gMa = rate ? gMv : gm;
-    for (let idx = 0; idx < gJ.length; idx++) {
+    for (let idx = this.gLo; idx < this.gHi; idx++) {
       const m = gMa[idx];
       if (m > 0) gJ[idx] /= m;
     }
@@ -887,7 +953,7 @@ export class Sim {
     // The point then relaxes by Δf_p = Σ_i w_ip β_i (f̄_i − f_p): symmetric in the mass-weighted sense,
     // so it conserves Σ m f (no volume leaks where β varies) and leaves a uniform field alone.
     if (rate) {
-      for (let idx = 0; idx < gB.length; idx++) {
+      for (let idx = this.gLo; idx < this.gHi; idx++) {
         const m = gMv[idx];
         if (m > 0) {
           const b = gB[idx] / m;
@@ -1039,6 +1105,7 @@ export class Sim {
   /** Grid → particles, pass 2: move, update F and the stress, accumulate damage. */
   private g2pUpdate(): void {
     const { n, active, px, py, vx, vy, gJ, gJe, gB, dt, h, invH, ox, oy, nxN, nyN } = this;
+    const { c00, c01, c10, c11, dJ, f00, f01, f10, f11, failed, pres, vr, sxx, syy, szz, sxy, temp, vol0, ev, por, drW, drE, dJC, dHM, dCL, duct, locHit, strengthEp, strength } = this;
     const P = this.params;
     const mat = P.material;
     const dmg = P.damage;
@@ -1058,10 +1125,10 @@ export class Sim {
       if (!active[p]) continue;
       const xp = px[p];
       const yp = py[p];
-      const l00 = this.c00[p];
-      const l01 = this.c01[p];
-      const l10 = this.c10[p];
-      const l11 = this.c11[p];
+      const l00 = c00[p];
+      const l01 = c01[p];
+      const l10 = c10[p];
+      const l11 = c11[p];
       // volumetric correction: det(c g F) = c² J_trial = the scheme's J
       let cor = 1;
       // 'rate': the scheme's volumetric rate, which replaces tr D in the deviatoric update too
@@ -1091,18 +1158,18 @@ export class Sim {
         if (rate) {
           // smoothed rate (Jbar holds it here) plus the relaxation of the elastic log volume toward
           // its grid mean; J advances exactly by exp(Δt θ), so the volume follows the smoothed rate
-          const Jold = this.f00[p] * this.f11[p] - this.f01[p] * this.f10[p];
-          if (this.failed[p] || !(Jold > 0)) {
+          const Jold = f00[p] * f11[p] - f01[p] * f10[p];
+          if (failed[p] || !(Jold > 0)) {
             // not in the averages: its own rate, F ← (I + ΔtL) F
             th = l00 + l11;
           } else {
-            th = Jbar + (rA + (rB * this.pres[p]) / K) / dt; // ln Jold − ev = −p/K
+            th = Jbar + (rA + (rB * pres[p]) / K) / dt; // ln Jold − ev = −p/K
             const Jtr = ((1 + dt * l00) * (1 + dt * l11) - dt * dt * l01 * l10) * Jold;
             const r = (Jold * Math.exp(dt * th)) / Jtr;
             cor = r > 0 ? Math.sqrt(r) : 1;
           }
         } else {
-          const r = Jbar / this.dJ[p];
+          const r = Jbar / dJ[p];
           cor = r > 0 ? Math.sqrt(r) : 1;
         }
       }
@@ -1116,10 +1183,10 @@ export class Sim {
       }
 
       // deformation gradient F ← c (I + dt L) F
-      const F00 = this.f00[p];
-      const F01 = this.f01[p];
-      const F10 = this.f10[p];
-      const F11 = this.f11[p];
+      const F00 = f00[p];
+      const F01 = f01[p];
+      const F10 = f10[p];
+      const F11 = f11[p];
       const g00 = cor * (1 + dt * l00);
       const g01 = cor * dt * l01;
       const g10 = cor * dt * l10;
@@ -1128,10 +1195,10 @@ export class Sim {
       const n01 = g00 * F01 + g01 * F11;
       const n10 = g10 * F00 + g11 * F10;
       const n11 = g10 * F01 + g11 * F11;
-      this.f00[p] = n00;
-      this.f01[p] = n01;
-      this.f10[p] = n10;
-      this.f11[p] = n11;
+      f00[p] = n00;
+      f01[p] = n01;
+      f10[p] = n10;
+      f11[p] = n11;
       const J = n00 * n11 - n01 * n10;
 
       // rate of deformation (deviatoric part — the volumetric part enters through J) and spin.
@@ -1154,10 +1221,10 @@ export class Sim {
       const epsDot = Math.sqrt((2 / 3) * (ex * ex + ey * ey + ez * ez + 2 * dxy * dxy)) * rateScale;
 
       // Jaumann rotation of the deviatoric stress, then the elastic trial
-      let sx = this.sxx[p];
-      let sy = this.syy[p];
-      let sh = this.sxy[p];
-      let sz = this.szz[p];
+      let sx = sxx[p];
+      let sy = syy[p];
+      let sh = sxy[p];
+      let sz = szz[p];
       const sz0 = sz;
       const rot = dt * w;
       const rx = sx + 2 * rot * sh;
@@ -1169,19 +1236,19 @@ export class Sim {
       sz = sz + g2 * ez;
       sh = rh + g2 * dxy;
       let pr = J > 0 ? -K * Math.log(J) : 0;
-      if (gtn) pr += K * this.ev[p]; // only the elastic part of the volume change is stressed
+      if (gtn) pr += K * ev[p]; // only the elastic part of the volume change is stressed
 
       let q = Math.sqrt(1.5 * (sx * sx + sy * sy + sz * sz + 2 * sh * sh));
       let dep = 0;
       let flowRate = -1;
-      const isFailed = this.failed[p] === 1;
-      this.vr[p] = 0;
+      const isFailed = failed[p] === 1;
+      vr[p] = 0;
       if (isFailed) {
         sx = sy = sz = sh = 0;
         q = 0;
         if (failMode === 'erode' || pr < 0) pr = 0;
       } else if (gtn) {
-        const r = gtnReturn(mat, gtn, K, G, q, -pr, this.ep[p], this.por[p], epsDot, this.temp[p]);
+        const r = gtnReturn(mat, gtn, K, G, q, -pr, this.ep[p], por[p], epsDot, temp[p]);
         if (r) {
           const s = q > 0 ? r.q / q : 0;
           sx *= s;
@@ -1192,15 +1259,25 @@ export class Sim {
           pr = -r.sm;
           dep = r.dEm;
           this.ep[p] += dep;
-          this.ev[p] += r.dEv;
-          const f = this.por[p] + r.df;
-          this.por[p] = f < 0 ? 0 : f < 1 ? f : 1;
+          ev[p] += r.dEv;
+          const f = por[p] + r.df;
+          por[p] = f < 0 ? 0 : f < 1 ? f : 1;
           const w = r.q * r.dEq + r.sm * r.dEv;
-          this.plasticWork += w * this.vol0[p] * J;
-          if (mat.chi > 0) this.temp[p] += adiabaticRise(mat.chi, w, J, mat.rho, mat.cp);
+          this.plasticWork += w * vol0[p] * J;
+          if (mat.chi > 0) temp[p] += adiabaticRise(mat.chi, w, J, mat.rho, mat.cp);
         }
       } else {
-        dep = plasticIncrement(mat, G, q, this.ep[p], epsDot, this.temp[p]);
+        // the elastic check of plasticIncrement with the point's kept strength: the same σy, no pow
+        const ep = this.ep[p];
+        if (strengthEp[p] !== ep) {
+          strength[p] = staticStrength(mat, ep);
+          strengthEp[p] = ep;
+        }
+        // At room temperature the temperature factor is exactly 1 and, with C ≥ 0, the rate factor is ≥ 1, so
+        // q ≤ the static strength already means q ≤ σy (rounding is monotonic): no log of the rate then
+        const s0 = strength[p];
+        const cool = temp[p] <= mat.tRoom && mat.jcC >= 0;
+        dep = (cool && q <= s0) || q <= s0 * strengthFactor(mat, epsDot, temp[p]) ? 0 : plasticIncrement(mat, G, q, ep, epsDot, temp[p]);
         if (dep > 0) {
           const s = 1 - (3 * G * dep) / q;
           sx *= s;
@@ -1209,19 +1286,19 @@ export class Sim {
           sh *= s;
           q -= 3 * G * dep;
           this.ep[p] += dep;
-          this.plasticWork += q * dep * this.vol0[p] * J;
-          if (mat.chi > 0) this.temp[p] += adiabaticRise(mat.chi, q * dep, J, mat.rho, mat.cp);
+          this.plasticWork += q * dep * vol0[p] * J;
+          if (mat.chi > 0) temp[p] += adiabaticRise(mat.chi, q * dep, J, mat.rho, mat.cp);
           flowRate = epsDot;
-          this.drW[p] = DRUCKER_DECAY * this.drW[p] + druckerWork(sx - rx, sy - ry, sh - rh, sz - sz0, sx, sy, sh, sz, q, dep);
-          this.drE[p] = DRUCKER_DECAY * this.drE[p] + dep * dep;
+          drW[p] = DRUCKER_DECAY * drW[p] + druckerWork(sx - rx, sy - ry, sh - rh, sz - sz0, sx, sy, sh, sz, q, dep);
+          drE[p] = DRUCKER_DECAY * drE[p] + dep * dep;
         }
       }
       this.flowRate[p] = flowRate;
-      this.sxx[p] = sx;
-      this.syy[p] = sy;
-      this.szz[p] = sz;
-      this.sxy[p] = sh;
-      this.pres[p] = pr;
+      sxx[p] = sx;
+      syy[p] = sy;
+      szz[p] = sz;
+      sxy[p] = sh;
+      pres[p] = pr;
 
       // stress state of the Cauchy stress σ = s − p I
       const cxx = sx - pr;
@@ -1238,10 +1315,10 @@ export class Sim {
       if (dep > 0) {
         // pressure-projection stabilisation: the unresolved elastic volume relaxes at the rate the
         // plastic secant viscosity σeq/(3ε̇p) allows, β = c · 3K Δεp / σeq per step (docs/model.md)
-        if (q > 0) this.vr[p] = (3 * K * dep) / q;
-        if (dmg.model === 'localization' && localization(this.el, this.hardening(p), sx, sy, sh, sz).ratio <= 0) this.locHit[p] = 1;
-        const du = 1 / this.duct[p];
-        const Ts = homologousTemperature(mat, this.temp[p]);
+        if (q > 0) vr[p] = (3 * K * dep) / q;
+        if (dmg.model === 'localization' && localization(this.el, this.hardening(p), sx, sy, sh, sz).ratio <= 0) locHit[p] = 1;
+        const du = 1 / duct[p];
+        const Ts = homologousTemperature(mat, temp[p]);
         const epsDotStar = epsDot / mat.epsDot0;
         if (nl) {
           // nonlocal: keep the increments; they are averaged and added after this pass
@@ -1253,10 +1330,10 @@ export class Sim {
           continue;
         }
         if (eta > dmg.etaCutoff) {
-          this.dJC[p] += (dep / jcFractureStrain(dmg, eta, epsDotStar, Ts)) * du;
-          this.dHM[p] += (dep / hmFractureStrain(eta)) * du;
+          dJC[p] += (dep / jcFractureStrain(dmg, eta, epsDotStar, Ts)) * du;
+          dHM[p] += (dep / hmFractureStrain(eta)) * du;
         }
-        if (s1 > 0) this.dCL[p] += ((s1 / q) * dep * du) / dmg.clCrit;
+        if (s1 > 0) dCL[p] += ((s1 / q) * dep * du) / dmg.clCrit;
         if (dmg.model !== 'none' && this.governingDamage(p) >= 1 && !this.inGrip(p)) this.fail(p);
       }
     }
