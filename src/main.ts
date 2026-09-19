@@ -351,7 +351,7 @@ function updateResults(d: Diagnostics, f: Frame) {
 
 /** a tandem: the stands' table (one stand: hidden) */
 function updateStandTable() {
-  standTable.update(runStands, standResults, last?.stand ?? 0, !!last?.passDone, geometry?.h0 ?? null);
+  standTable.update(runStands, standResults, last?.stand ?? 0, !!last?.passDone, geometry?.h0 ?? null, last?.stopped ?? null);
 }
 
 /** the shared clock, from the section model's last frame, while the section view is shown */
@@ -529,6 +529,10 @@ window.__mpm = {
   },
   get standResults() {
     return standResults.map((r) => ({ ...r }));
+  },
+  /** why the tandem stopped before its last stand ('stalled' | 'separated' | 'lost'), null otherwise */
+  get stopped() {
+    return last?.stopped ?? null;
   },
   /** the pictures side by side: each slot's stand, the field and step of the frame it holds (null: none yet), live or held */
   get standFrames() {

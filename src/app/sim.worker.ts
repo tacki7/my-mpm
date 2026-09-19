@@ -126,6 +126,7 @@ function restOf(s: Sim, tr: Tracker | null): Picture['rest'] {
     stepOffset: t.stepOffset,
     results: t.results.map((r) => ({ ...r })),
     passDone: s === sim && finished(),
+    stopped: t.stopped,
   };
 }
 

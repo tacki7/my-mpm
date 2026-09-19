@@ -2,7 +2,7 @@
 // underlined): entry and exit thickness, reduction, roll force, forward slip, damage and failed points of
 // each finished stand. The stand running now shows its entry thickness only; the ones to come, dashes.
 // One stand: the section stays hidden and the page is as before.
-import type { StandResult } from '../mpm/tandem.ts';
+import type { StandResult, TandemStop } from '../mpm/tandem.ts';
 import { standColor } from './explorer.ts';
 
 const ROWS: [string, (r: StandResult) => string, string][] = [
@@ -14,6 +14,16 @@ const ROWS: [string, (r: StandResult) => string, string][] = [
   ['最大損傷', (r) => r.maxDamage.toFixed(3), ''],
   ['亀裂になった点', (r) => String(r.nFailed), '個'],
 ];
+
+/** the share of a stand's mass on points that left the grid */
+const LOST: [string, (r: StandResult) => string, string] = ['失われた質量', (r) => (r.massLost * 100).toFixed(2), '%'];
+
+/** why the tandem stopped, after stand k (1 = the first) */
+const STOP_TEXT: Record<TandemStop, (k: number, r: StandResult | undefined) => string> = {
+  stalled: (k) => `#${k} で板が止まった（噛み込めない）`,
+  separated: (k) => `#${k} の後で止めた: 板が破断した（厚さを貫く亀裂。実機の板切れと同じく、次のスタンドへは送らない）`,
+  lost: (k, r) => `#${k} の後で止めた: 点が格子の外へ出た（失われた質量 ${r ? (r.massLost * 100).toFixed(2) : '—'} %）`,
+};
 
 function mm(v: number | null): string {
   return v != null ? (v * 1e3).toFixed(3) : '—';
@@ -37,9 +47,9 @@ export class StandTable {
     this.table = table;
   }
 
-  /** the run's stands, the finished ones' results, the stand running (0 first), whether the pass is over, and the running stand's entry thickness [m] */
-  update(stands: number, results: StandResult[], current: number, passDone: boolean, h0Now: number | null): void {
-    const key = `${stands}|${current}|${results.length}|${passDone}|${h0Now}`;
+  /** the run's stands, the finished ones' results, the stand running (0 first), whether the pass is over, the running stand's entry thickness [m], and why the tandem stopped early */
+  update(stands: number, results: StandResult[], current: number, passDone: boolean, h0Now: number | null, stopped: TandemStop | null): void {
+    const key = `${stands}|${current}|${results.length}|${passDone}|${h0Now}|${stopped}`;
     if (key === this.key) return;
     this.key = key;
     this.section.hidden = stands <= 1;
@@ -52,7 +62,9 @@ export class StandTable {
       head.append(th);
     }
     head.append(cell('th', ''));
-    const body = ROWS.map(([name, value, unit], i) => {
+    // points that left the grid: only when a stand lost any
+    const rows = results.some((r) => r.massLost > 0) ? [...ROWS, LOST] : ROWS;
+    const body = rows.map(([name, value, unit], i) => {
       const tr = document.createElement('tr');
       tr.append(cell('th', name));
       for (let k = 0; k < stands; k++) {
@@ -68,14 +80,11 @@ export class StandTable {
     thead.append(head);
     const tbody = document.createElement('tbody');
     tbody.append(...body);
-    // a stand that did not end 'done' stops the pass there
-    const stopped = results.find((r) => r.phase !== 'done');
+    // the tandem stopped before its last stand (src/mpm/tandem.ts, TandemStop)
     const caption = document.createElement('caption');
     caption.className = 'table-note';
-    if (stopped) {
-      const why = stopped.phase === 'stalled' ? '板が止まった（噛み込めない）' : `計算を止めた（${stopped.phase}）`;
-      caption.textContent = `#${stopped.stand + 1} で${why}。その先のスタンドは計算していない`;
-    }
+    const k = results.length; // the stand it stopped at (1 = the first)
+    if (stopped) caption.textContent = `${STOP_TEXT[stopped](k, results[k - 1])}。その先のスタンドは計算していない`;
     this.table.replaceChildren(...(stopped ? [caption] : []), thead, tbody);
   }
 }
