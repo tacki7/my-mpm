@@ -357,15 +357,21 @@ export class BiteView {
     const hy = 0.5 * g.dp * T.sy;
     const { pos, F } = f;
     const W = this.w;
-    const rect = (p: number) => {
+    const rect = (p: number, failedPoint = false) => {
       const cx = T.X(pos[2 * p]);
       const cy = T.Y(pos[2 * p + 1]);
       if (cx < -40 || cx > W + 40) return;
-      // images of the half edges (dp/2, 0) and (0, dp/2); screen y points down
-      let ax = F[4 * p] * hx;
-      let ay = -F[4 * p + 2] * hy;
-      let bx = F[4 * p + 1] * hx;
-      let by = -F[4 * p + 3] * hy;
+      // images of the half edges (dp/2, 0) and (0, dp/2); screen y points down. A failed point is drawn as its
+      // starting square: its F means nothing once it has failed, and a broken sheet's failed points are drawn out
+      // across the gap (their cells painted an ink band over the intact neighbours) or sheared flat (T56)
+      const f00 = failedPoint ? 1 : F[4 * p];
+      const f01 = failedPoint ? 0 : F[4 * p + 1];
+      const f10 = failedPoint ? 0 : F[4 * p + 2];
+      const f11 = failedPoint ? 1 : F[4 * p + 3];
+      let ax = f00 * hx;
+      let ay = -f10 * hy;
+      let bx = f01 * hx;
+      let by = -f11 * hy;
       const ka = 1 + PAD / (Math.hypot(ax, ay) || 1);
       const kb = 1 + PAD / (Math.hypot(bx, by) || 1);
       ax *= ka;
@@ -392,7 +398,7 @@ export class BiteView {
     if (failed.length) {
       ctx.fillStyle = '#1d2a3a';
       ctx.beginPath();
-      for (const p of failed) rect(p);
+      for (const p of failed) rect(p, true);
       ctx.fill();
     }
   }
