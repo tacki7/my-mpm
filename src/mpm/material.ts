@@ -1,6 +1,6 @@
 // Constitutive laws: flow stress, the J2 radial return, and the damage indicators.
 // Pure functions so the node checks can test them without a simulation.
-import type { DamageParams, MaterialParams } from './params.ts';
+import type { DamageParams, GtnParams, MaterialParams } from './params.ts';
 
 export interface Elastic {
   K: number; // bulk modulus [Pa]
@@ -75,6 +75,102 @@ export function plasticIncrement(
     x = nx;
   }
   return x;
+}
+
+/** Effective porosity f* of the GTN yield condition: f up to fc, accelerated by k beyond (coalescence). */
+export function gtnFstar(g: GtnParams, f: number): number {
+  return f <= g.fc ? f : g.fc + g.k * (f - g.fc);
+}
+
+/** Strain-controlled nucleation rate A = df/dεM: a normal distribution of nucleation strains (Chu & Needleman 1980). */
+export function gtnNucleation(g: GtnParams, epM: number): number {
+  const z = (epM - g.en) / g.sn;
+  return (g.fn / (g.sn * Math.sqrt(2 * Math.PI))) * Math.exp(-0.5 * z * z);
+}
+
+/** GTN yield function Φ(q, σm) at matrix flow stress sy and effective porosity fs (σm = tr σ / 3, tension positive). */
+export function gtnYield(g: GtnParams, q: number, sm: number, sy: number, fs: number): number {
+  const r = q / sy;
+  return r * r + 2 * g.q1 * fs * Math.cosh((1.5 * g.q2 * sm) / sy) - (1 + g.q3 * fs * fs);
+}
+
+export interface GtnStep {
+  q: number; // returned von Mises stress
+  sm: number; // returned mean stress σm (tension positive)
+  dEq: number; // equivalent deviatoric plastic strain increment
+  dEv: number; // plastic volume strain increment tr Δεp (dilation positive)
+  dEm: number; // equivalent plastic strain increment of the matrix
+  df: number; // porosity increment (growth + nucleation)
+}
+
+/**
+ * GTN return mapping from the elastic trial state (q_tr, σm_tr), after Aravas (1987): the plastic
+ * strain increment is Δεv I/3 + Δεq n along the trial deviator n, so q = q_tr − 3G Δεq and
+ * σm = σm_tr − K Δεv. Newton on Φ = 0 and the normality condition Δεv ∂Φ/∂q − Δεq ∂Φ/∂σm = 0.
+ * The porosity in Φ is the one at the start of the step; the matrix flow stress is taken at
+ * εM + ΔεM with (1 − f) σf ΔεM = q Δεq + σm Δεv (equal plastic work). With f = 0 this is the J2
+ * radial return. Null when the trial state is elastic.
+ */
+export function gtnReturn(
+  m: MaterialParams,
+  g: GtnParams,
+  K: number,
+  G: number,
+  qTr: number,
+  smTr: number,
+  epM: number,
+  f: number,
+  epsDot: number,
+  T: number,
+): GtnStep | null {
+  const fs = gtnFstar(g, f);
+  let sy = flowStress(m, epM, epsDot, T).sy;
+  if (gtnYield(g, qTr, smTr, sy, fs) <= 0) return null;
+  const c = 1.5 * g.q2;
+  const B = 1.5 * g.q1 * g.q2 * fs; // (σf/2) ∂Φ/∂σm = B sinh(c σm/σf)
+  const omf = 1 - f;
+  // start from the von Mises return on the trial mean stress
+  const t0 = 1 + g.q3 * fs * fs - 2 * g.q1 * fs * Math.cosh((c * smTr) / sy);
+  let x1 = t0 > 0 ? Math.max(0, (qTr - sy * Math.sqrt(t0)) / (3 * G)) : qTr / (6 * G);
+  let x2 = 0;
+  let q = qTr;
+  let sm = smTr;
+  let dEm = 0;
+  for (let it = 0; it < 50; it++) {
+    q = qTr - 3 * G * x1;
+    sm = smTr - K * x2;
+    const w = q * x1 + sm * x2;
+    dEm = w > 0 ? w / (omf * sy) : 0;
+    const fl = flowStress(m, epM + dEm, epsDot, T);
+    sy = fl.sy;
+    const u = (c * sm) / sy;
+    const ch = Math.cosh(u);
+    const sh = Math.sinh(u);
+    const r = q / sy;
+    const R1 = r * r + 2 * g.q1 * fs * ch - (1 + g.q3 * fs * fs);
+    const R2 = x2 * r - x1 * B * sh; // (σf/2) × normality
+    if (Math.abs(R1) < 1e-11 && Math.abs(R2) <= 1e-11 * (x1 + Math.abs(x2))) break;
+    // Jacobian; σf enters R1 through ΔεM
+    const dR1ds = (-2 * r * r - 2 * g.q1 * fs * sh * u) / sy;
+    const hs = w > 0 ? fl.H / (omf * sy) : 0;
+    const J11 = (-6 * G * r) / sy + dR1ds * hs * (q - 3 * G * x1);
+    const J12 = (-2 * g.q1 * fs * sh * c * K) / sy + dR1ds * hs * (sm - K * x2);
+    const J21 = (-3 * G * x2) / sy - B * sh;
+    const J22 = r + (x1 * B * ch * c * K) / sy;
+    const det = J11 * J22 - J12 * J21;
+    if (!(Math.abs(det) > 0)) break;
+    const d1 = (-R1 * J22 + R2 * J12) / det;
+    const d2 = (-R2 * J11 + R1 * J21) / det;
+    x1 = Math.min(qTr / (3 * G), Math.max(0, x1 + d1));
+    x2 += d2;
+  }
+  q = qTr - 3 * G * x1;
+  sm = smTr - K * x2;
+  const w = q * x1 + sm * x2;
+  dEm = w > 0 ? w / (omf * sy) : 0;
+  const A = g.nucleation === 'tension' && sm <= 0 ? 0 : gtnNucleation(g, epM);
+  const df = omf * x2 + A * dEm;
+  return { q, sm, dEq: x1, dEv: x2, dEm, df };
 }
 
 /** Johnson-Cook fracture strain εf(η, ε̇*, T*) with a small positive floor. */

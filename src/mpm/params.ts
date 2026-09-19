@@ -3,8 +3,14 @@
 
 export type HardeningModel = 'johnson-cook' | 'swift';
 
-/** Which damage indicator decides failure. All of them are always accumulated for display. */
-export type DamageModel = 'johnson-cook' | 'hancock-mackenzie' | 'cockcroft-latham' | 'none';
+/**
+ * Which damage indicator decides failure. All of them are always accumulated for display.
+ * 'gtn': the porosity reaches the critical porosity fc (it evolves only with the GTN yield condition).
+ */
+export type DamageModel = 'johnson-cook' | 'hancock-mackenzie' | 'cockcroft-latham' | 'gtn' | 'none';
+
+/** Yield condition: pressure-independent von Mises (J2), or Gurson-Tvergaard-Needleman with porosity. */
+export type YieldModel = 'von-mises' | 'gtn';
 
 /**
  * What a failed material point can still carry.
@@ -34,8 +40,33 @@ export interface MaterialParams {
   tMelt: number; // [K]
 }
 
+/**
+ * Gurson-Tvergaard-Needleman yield condition and porosity evolution (Banerjee 2012, eqs. 13–17):
+ * Φ = (σeq/σf)² + 2 q1 f* cosh(q2 tr σ / (2σf)) − (1 + q3 f*²),
+ * f* = f up to fc and fc + k (f − fc) beyond, ḟ = (1 − f) tr Dp + A(εM) ε̇M with
+ * A = fn / (sn √(2π)) exp(−½ ((εM − εn)/sn)²) (strain-controlled nucleation, Chu & Needleman 1980).
+ */
+export interface GtnParams {
+  q1: number;
+  q2: number;
+  q3: number;
+  k: number;
+  fc: number; // critical porosity
+  fn: number; // volume fraction of void-nucleating particles
+  en: number; // mean nucleation strain
+  sn: number; // its standard deviation
+  f0: number; // initial porosity
+  /**
+   * 'tension': voids nucleate only while the mean stress is tensile (the default: rolling is mostly
+   * compression, where decohesion does not open voids); 'always': the paper's law, whatever the stress
+   */
+  nucleation: 'always' | 'tension';
+}
+
 export interface DamageParams {
   model: DamageModel;
+  yield: YieldModel;
+  gtn: GtnParams;
   // Johnson-Cook fracture strain: εf = [D1 + D2 exp(D3 η)][1 + D4 ln ε̇*][1 + D5 T*]
   D1: number;
   D2: number;
@@ -165,9 +196,28 @@ export const MATERIALS: Record<string, MaterialParams> = {
   al6061: AL_6061,
 };
 
+/**
+ * GTN constants of 4340 steel (Banerjee 2012, Table 1; initial porosity: the mean they assign).
+ * Nucleation is restricted to tension here, unlike the paper (docs/model.md).
+ */
+export const GTN_4340: GtnParams = {
+  q1: 1.5,
+  q2: 1.0,
+  q3: 2.25,
+  k: 4.0,
+  fc: 0.05,
+  fn: 0.1,
+  en: 0.1,
+  sn: 0.3,
+  f0: 0.005,
+  nucleation: 'tension',
+};
+
 /** Johnson-Cook damage constants of 4340 steel (Banerjee 2012, from Johnson & Cook 1985). */
 export const DAMAGE_4340: DamageParams = {
   model: 'johnson-cook',
+  yield: 'von-mises',
+  gtn: GTN_4340,
   D1: 0.05,
   D2: 3.44,
   D3: -2.12,
@@ -192,7 +242,7 @@ export function defaultParams(): SimParams {
       frontTension: 0,
     },
     material: { ...STEEL_SPCC },
-    damage: { ...DAMAGE_4340 },
+    damage: { ...DAMAGE_4340, gtn: { ...GTN_4340 } },
     numerics: {
       cellsThrough: 10,
       ppc: 2,
@@ -208,7 +258,7 @@ export function cloneParams(p: SimParams): SimParams {
   return {
     rolling: { ...p.rolling },
     material: { ...p.material },
-    damage: { ...p.damage },
+    damage: { ...p.damage, gtn: { ...p.damage.gtn } },
     numerics: { ...p.numerics },
     defects: p.defects.map((d) => ({ ...d })),
   };

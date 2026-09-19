@@ -14,7 +14,7 @@ B. Banerjee, *Material Point Method Simulations of Fragmenting Cylinders*, arXiv
 | 亜弾性-塑性（偏差応力の速度形 + 状態方程式の圧力、半径方向リターン） | 偏差応力は Jaumann 回転 + 弾性試行 + J2 リターン、圧力は p = −K ln J |
 | Johnson-Cook 流動応力 σy = (A + Bεpⁿ)(1 + C ln ε̇*)(1 − T*ᵐ) | 同じ（4340 鋼の定数も論文の値）。冷延材向けに Swift 則も |
 | MTS 流動応力 | 未実装 |
-| von Mises / GTN 降伏条件（空孔率 f） | von Mises のみ。GTN は未実装 |
+| von Mises / GTN 降伏条件（空孔率 f） | 両方（`damage.yield`、既定 von Mises）。論文との違いは下の「GTN」 |
 | Johnson-Cook 損傷 εf = [D1 + D2 exp(D3 σ*)][1 + D4 ln ε̇*][1 + D5 T*] | 同じ（σ* = η = σm/σeq） |
 | Hancock-MacKenzie εf = 1.65 exp(−1.5 σ*) | 同じ |
 | 分岐（Drucker の安定条件・音響テンソルの特異）による破壊 | 未実装 |
@@ -40,9 +40,37 @@ B. Banerjee, *Material Point Method Simulations of Fragmenting Cylinders*, arXiv
 - J2: q = √(3/2 s:s) > σy なら q − 3GΔεp = σy(εp + Δεp) を安全化 Newton で解き、s を (1 − 3GΔεp/q) 倍
 - ひずみ速度は計算上の値に `millSpeed / rollSpeed` を掛けた実機換算で速度依存則に入れる
 
+## GTN（空孔率）
+
+`damage.yield = 'gtn'` のとき、J2 の代わりに Gurson-Tvergaard-Needleman の降伏条件（論文の式 13〜17、定数は Table 1）:
+
+- Φ = (q/σf)² + 2 q1 f* cosh(3 q2 σm / (2σf)) − (1 + q3 f*²)、f* = f（f ≤ fc）、fc + k(f − fc)（f > fc）。
+  q1 1.5、q2 1.0、q3 2.25、k 4、fc 0.05
+- 空孔率 ḟ = (1 − f) tr Dp + A ε̇M、A = fn/(sn√(2π)) exp(−½((εM − εn)/sn)²)。fn 0.1、εn 0.1、sn 0.3。初期空孔率 f0 0.005
+- 返り写像（`gtnReturn`、Aravas 1987 の形）: 塑性ひずみ増分を Δεv I/3 + Δεq n（n は試行の偏差の向き）とし、
+  q = q_tr − 3GΔεq、σm = σm_tr − KΔεv。Φ = 0 と関連流れ Δεv ∂Φ/∂q = Δεq ∂Φ/∂σm を (Δεq, Δεv) の Newton で解く。
+  Φ の f は刻みの初めの値、σf は母材ひずみ εM + ΔεM（(1 − f)σf ΔεM = qΔεq + σmΔεv）で陰的。f = 0 なら J2 の返り写像と一致
+  （`tools/checks/gtn.mjs`）
+- 圧力: 粒子ごとに塑性体積ひずみ ev = Σ Δεv を持ち、p = −K (ln J − ev)。J は J-bar の全体積比のまま
+- 判定を「空孔率が fc に達する」（`damage.model = 'gtn'`）にすると f/fc が損傷の指標。空孔率は GTN の降伏条件のときだけ進む
+- 母材の相当塑性ひずみ εM を `ep` として持ち、流動応力と JC・HM・CL の積算に使う
+
+**論文との違い:**
+- **核生成は既定で「平均応力が引張のときだけ」**（`gtn.nucleation = 'tension'`、論文の式は `'always'`）。
+  論文の対象（爆発で膨らむ円筒）はほぼ全域が引張で差が出にくいが、圧縮が主の圧延では大きく違う:
+  標準条件（6 セル・板長 8 mm）で `'always'` だと f が 0.045（fc の手前）まで増えて荷重が 4.30 → 2.75 kN/mm（−36 %）になる。
+  粒子の剥離・割れで空孔が開くには界面の引張が要るので、圧延では引張のときだけにする
+- 初期空孔率は一様（論文は平均 0.005・標準偏差 0.001 の正規分布）。冷延材なら f0 = 0 も選べる
+- 論文の返り写像は偏差応力の半径方向の戻しと空孔率の陽的な更新。ここでは (Δεq, Δεv) を連立で解く
+
+**f0 = 0.005 でも荷重が約 9 % 下がる**（引張のときだけ核生成でも。標準条件で 4.30 → 3.92 kN/mm）: cosh 項は σm の符号に
+よらないので、降伏面は**圧縮側でも**縮む。f = 0.005 で q/σf = √(1 + q3 f² − 2 q1 f cosh(1.5 σm/σf)) は σm = −σf で 0.98、
+−2σf で 0.92。ロールバイトの静水圧は σf の 1〜2 倍なので、そこで流動応力が数 % 下がり、空孔が潰れる（f 0.005 → 0.001〜0.002）
+分の塑性仕事も加わる。f0 = 0 なら荷重は 4.31 kN/mm で von Mises（4.30）とほぼ同じ。数値は `docs/validation.md`「GTN」
+
 ## 損傷と亀裂
 
-塑性ひずみ増分 Δεp があるたびに 3 つの指標を積算する（表示用に全部、判定は選んだ 1 つ）:
+塑性ひずみ増分 Δεp があるたびに 3 つの指標を積算する（表示用に全部、判定は選んだ 1 つ。GTN の空孔率 f/fc も判定に選べる）:
 
 - Johnson-Cook: D += Δεp / εf(η, ε̇*, T*)
 - Hancock-MacKenzie: D += Δεp / (1.65 exp(−1.5η))
@@ -64,3 +92,6 @@ B. Banerjee, *Material Point Method Simulations of Fragmenting Cylinders*, arXiv
   きれいな亀裂面の開口には複数速度場（論文の「別の材料に移す」）が要る
 - **2D**: 板幅方向が無いので、耳割れ（エッジクラック）は扱えない
 - **剛体ロール**: ロール偏平（Hitchcock）は無い
+- **GTN の圧力のむら**: J̄ は格子で平均した全体積比、ev は粒子ごとなので、隣の粒子で ev が違うと圧力に K Δev のむらが出る。
+  バイト内の隣の粒子との圧力差の最大は von Mises 24 MPa、GTN（引張のときだけ核生成）77 MPa、（常に）341 MPa（6 セル・標準条件）。
+  偽の引張（η > 1）は出ない

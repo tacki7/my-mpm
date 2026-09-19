@@ -1,13 +1,15 @@
 // Run one rolling simulation headless and print its diagnostics.
 //
 //   node tools/run.mjs [--h0 1] [--r 0.25] [--R 100] [--L 16] [--mu 0.08] [--cells 10]
-//                      [--mat spcc|s4340|al6061] [--damage johnson-cook|hancock-mackenzie|cockcroft-latham|none]
+//                      [--mat spcc|s4340|al6061] [--damage johnson-cook|hancock-mackenzie|cockcroft-latham|gtn|none]
+//                      [--yield von-mises|gtn] [--preset <id>]
 //                      [--tb 0] [--tf 0] [--every 2000] [--max 400000] [--json]
 //
 // Lengths in mm, tensions in MPa. Prints a line every --every steps and a summary
 // at the end (or one JSON object with --json).
 import { Sim } from '../src/mpm/solver.ts';
 import { defaultParams, MATERIALS } from '../src/mpm/params.ts';
+import { presetById } from '../src/mpm/presets.ts';
 
 const args = process.argv.slice(2);
 const opt = (name, def) => {
@@ -16,7 +18,8 @@ const opt = (name, def) => {
 };
 const flag = (name) => args.includes(`--${name}`);
 
-const P = defaultParams();
+const preset = opt('preset', null);
+const P = preset ? presetById(preset).build() : defaultParams();
 const r = P.rolling;
 r.h0 = +opt('h0', r.h0 * 1e3) * 1e-3;
 r.reduction = +opt('r', r.reduction);
@@ -31,6 +34,8 @@ if (flag('nojbar')) P.numerics.jbar = false;
 const mat = opt('mat', null);
 if (mat) P.material = { ...MATERIALS[mat] };
 P.damage.model = opt('damage', P.damage.model);
+P.damage.yield = opt('yield', P.damage.yield);
+P.damage.gtn.nucleation = opt('nucleation', P.damage.gtn.nucleation);
 const every = +opt('every', 2000);
 const maxSteps = +opt('max', 400000);
 const json = flag('json');
@@ -63,7 +68,19 @@ const summary = {
   forwardSlip: mean(steady.filter((h) => h.forwardSlip != null).map((h) => h.forwardSlip)),
   maxDamage: d.maxDamage,
   failed: d.nFailed,
+  ...porosity(),
   cracks: sim.cracks,
 };
 if (json) console.log(JSON.stringify(summary));
 else console.log(summary);
+
+// the largest porosity and where that point sat in the undeformed sheet (GTN)
+function porosity() {
+  let k = -1;
+  for (let p = 0; p < sim.n; p++) if (sim.active[p] && (k < 0 || sim.por[p] > sim.por[k])) k = p;
+  if (k < 0 || !(sim.por[k] > 0)) return {};
+  return {
+    maxPorosity: sim.por[k],
+    maxPorosityAt_mm: { fromHead: (sim.xHead0 - sim.x0[k]) * 1e3, fromMidPlane: sim.y0[k] * 1e3 },
+  };
+}

@@ -6,9 +6,12 @@
 // - hypoelastic-plastic material: Jaumann-rotated deviatoric stress, pressure
 //   from the logarithmic volume change, J2 radial return with Johnson-Cook or
 //   Swift hardening
+// - or the Gurson-Tvergaard-Needleman yield condition with porosity growth and
+//   nucleation; the plastic volume change is kept per point and taken out of the
+//   pressure
 // - damage indicators accumulated on the plastic strain increment (Johnson-Cook,
-//   Hancock-MacKenzie, Cockcroft-Latham); a particle whose governing indicator
-//   reaches 1 fails and carries no deviatoric stress from then on
+//   Hancock-MacKenzie, Cockcroft-Latham, porosity / fc); a particle whose governing
+//   indicator reaches 1 fails and carries no deviatoric stress from then on
 // - the rolls are analytic rigid cylinders; contact is a Coulomb-friction
 //   velocity projection on the grid nodes that see a penetrating particle
 //
@@ -17,6 +20,7 @@
 import { biteGeometry, cloneParams, type DamageModel, type SimParams } from './params.ts';
 import {
   elasticConstants,
+  gtnReturn,
   hmFractureStrain,
   homologousTemperature,
   jcFractureStrain,
@@ -98,6 +102,7 @@ export type FieldName =
   | 'dJC'
   | 'dHM'
   | 'dCL'
+  | 'porosity'
   | 'sxx'
   | 'syy'
   | 'sxy'
@@ -170,6 +175,8 @@ export class Sim {
   readonly dJC: Float64Array;
   readonly dHM: Float64Array;
   readonly dCL: Float64Array;
+  readonly por: Float64Array; // porosity f (GTN)
+  readonly ev: Float64Array; // plastic volume strain Σ tr Δεp (GTN): p = −K (ln J − ev)
   readonly duct: Float64Array; // ductility multiplier (defects)
   readonly dJ: Float64Array; // trial volume ratio J of the current step (J-bar)
   readonly active: Uint8Array;
@@ -309,6 +316,8 @@ export class Sim {
     this.dJC = F();
     this.dHM = F();
     this.dCL = F();
+    this.por = F();
+    this.ev = F();
     this.duct = F();
     this.dJ = F();
     this.active = new Uint8Array(n);
@@ -338,6 +347,7 @@ export class Sim {
       this.mass[k] = rho * dp * dp;
       this.temp[k] = P.material.tRoom;
       this.duct[k] = ductOf[k];
+      if (P.damage.yield === 'gtn') this.por[k] = P.damage.gtn.f0;
       this.active[k] = 1;
       this.tag[k] = i === 0 ? 1 : i === NI - 1 ? 2 : 0;
     }
@@ -614,6 +624,7 @@ export class Sim {
     const { K, G } = this.el;
     const rateScale = P.rolling.millSpeed / P.rolling.rollSpeed;
     const failMode = dmg.failure;
+    const gtn = dmg.yield === 'gtn' ? dmg.gtn : null;
     const xMax = (nxN - 3) * h + ox;
     const yMax = (nyN - 3) * h + oy;
     const xMin = ox + 2 * h;
@@ -702,6 +713,7 @@ export class Sim {
       sz = sz + g2 * ez;
       sh = rh + g2 * dxy;
       let pr = J > 0 ? -K * Math.log(J) : 0;
+      if (gtn) pr += K * this.ev[p]; // only the elastic part of the volume change is stressed
 
       let q = Math.sqrt(1.5 * (sx * sx + sy * sy + sz * sz + 2 * sh * sh));
       let dep = 0;
@@ -710,6 +722,23 @@ export class Sim {
         sx = sy = sz = sh = 0;
         q = 0;
         if (failMode === 'erode' || pr < 0) pr = 0;
+      } else if (gtn) {
+        const r = gtnReturn(mat, gtn, K, G, q, -pr, this.ep[p], this.por[p], epsDot, this.temp[p]);
+        if (r) {
+          const s = q > 0 ? r.q / q : 0;
+          sx *= s;
+          sy *= s;
+          sz *= s;
+          sh *= s;
+          q = r.q;
+          pr = -r.sm;
+          dep = r.dEm;
+          this.ep[p] += dep;
+          this.ev[p] += r.dEv;
+          const f = this.por[p] + r.df;
+          this.por[p] = f < 0 ? 0 : f < 1 ? f : 1;
+          this.plasticWork += (r.q * r.dEq + r.sm * r.dEv) * this.vol0[p] * J;
+        }
       } else {
         dep = plasticIncrement(mat, G, q, this.ep[p], epsDot, this.temp[p]);
         if (dep > 0) {
@@ -763,6 +792,8 @@ export class Sim {
         return this.dHM[p];
       case 'cockcroft-latham':
         return this.dCL[p];
+      case 'gtn':
+        return this.por[p] / this.params.damage.gtn.fc;
       default:
         return 0;
     }
@@ -974,6 +1005,9 @@ export class Sim {
           break;
         case 'dCL':
           v = this.dCL[p];
+          break;
+        case 'porosity':
+          v = this.por[p];
           break;
         case 'sxx':
           v = (this.sxx[p] - this.pres[p]) * MPa;

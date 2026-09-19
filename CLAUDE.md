@@ -74,8 +74,9 @@ tools/browser/browser.sh stop <cdp>; tools/browser/browser.sh stop <dev>
 ## クエリパラメータ
 
 `?preset=standard|front-tension|central-burst|void|high-friction&h0=1&r=25&R=100&L=16&mu=0.08&tb=0&tf=0`
-`&mat=spcc|s4340|al6061&damage=johnson-cook|hancock-mackenzie|cockcroft-latham|none&cells=10&ms=10000`
-`&field=seq|eta|s1|pres|ep|damage|sxx|syy|sxy|lagrange&autorun=1&stopafter=<step>`
+`&mat=spcc|s4340|al6061&damage=johnson-cook|hancock-mackenzie|cockcroft-latham|gtn|none&cells=10&ms=10000`
+`&yield=von-mises|gtn&nucleation=tension|always&f0=0.005&fc=0.05`
+`&field=seq|eta|s1|pres|ep|damage|sxx|syy|sxy|lagrange|porosity&autorun=1&stopafter=<step>`
 — 長さは mm、張力は MPa、`r` は %。不正な値は黙って無視される（`h0`・`r`・`R` はロールが噛めない組み合わせなら 3 つとも）。
 効いたかは `__mpm.params` で確かめる。`stopafter` はそのステップで 1 回止まり、「続ける」で先へ進む。
 
