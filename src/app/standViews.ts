@@ -96,7 +96,7 @@ export class StandViews {
     this.place();
   }
 
-  /** the pass is over: no stand is running any more */
+  /** the pass is over: no stand is running any more (a tandem that stopped early leaves the stands after it uncomputed) */
   finish(): void {
     this.over = true;
     this.place();
@@ -107,7 +107,8 @@ export class StandViews {
       s.el.classList.toggle('current', k === this.current);
       s.el.classList.toggle('done', k < this.current);
       s.canvas.hidden = k === this.current;
-      s.label.textContent = k < this.current || this.over ? `#${k + 1}` : k === this.current ? `#${k + 1}（計算中）` : `#${k + 1}（まだ）`;
+      s.label.textContent =
+        k < this.current || (this.over && k === this.current) ? `#${k + 1}` : k === this.current ? `#${k + 1}（計算中）` : this.over ? `#${k + 1}（計算しない）` : `#${k + 1}（まだ）`;
     });
     const slot = this.slots[this.current];
     if (slot) slot.el.prepend(this.liveCanvas);

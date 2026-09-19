@@ -6,7 +6,8 @@
 // colour each, in the legend); the force chart has a slab level per stand; the table has a column per
 // stand; the CSV files are downloaded with a stand column on the whole pass's clock, and the PNG holds
 // the three pictures; moving a boundary between the panes resizes the slots with the roll bite; a narrow
-// screen (700 px) stacks the pictures without a sideways scroll; and back
+// screen (700 px) stacks the pictures without a sideways scroll; a strip broken through the thickness
+// stops the tandem with the reason in the table; and back
 // to one stand, the page is as before (no slots, no table). Not a `@check` (it needs the dev server and
 // Chrome).
 //
@@ -30,6 +31,7 @@ import { existsSync, mkdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { connect } from './cdp.mjs';
 import { ok, near, done } from '../checks/lib.mjs';
+import { DAMAGE_4340 } from '../../src/mpm/params.ts';
 
 const [target, dir] = process.argv.slice(2);
 if (!target || !dir || !process.env.CDP_PORT) {
@@ -205,6 +207,20 @@ try {
   await c.screenshot(join(dir, 'tandem-narrow.png'));
   console.log(`shot  ${join(dir, 'tandem-narrow.png')}`);
   await c.setViewport(1600, 1000);
+
+  // ── a crack through the thickness in stand 1 (4340's damage, a weak spot at the mid-plane): the tandem stops
+  //    there, as a mill does at a strip break, and says so; the second slot is left uncomputed (ductility 0.01, the
+  //    panel's lowest; 0.02 does not break)
+  const cond = Buffer.from(JSON.stringify({ damage: { ...DAMAGE_4340, etaCutoff: -2 }, defects: [{ kind: 'weak', x: 2e-3, y: 0, ax: 0.15e-3, ay: 0.6e-3, ductility: 0.01 }] })).toString('base64url');
+  await c.navigate(page(`?stands=2&cells=4&L=4&autorun=1&cond=${cond}`));
+  await c.waitFor('__mpm.done', 120000);
+  await painted();
+  const broke = await c.evaluate(`({ stopped: __mpm.stopped, results: __mpm.standResults.map((r) => r.separated), note: document.querySelector('#stand-results caption')?.textContent ?? '', labels: [...document.querySelectorAll('.stand-label')].map((e) => e.textContent) })`);
+  ok(
+    broke.stopped === 'separated' && broke.results.join() === 'true' && broke.note.includes('#1 の後で止めた: 板が破断した') && broke.labels.join('|') === '#1|#2（計算しない）',
+    'a break through the thickness in stand 1: the tandem stops there, the table says why, the second slot stays uncomputed',
+    `${broke.stopped}; ${broke.note.slice(0, 40)}; ${broke.labels.join(' ')}`,
+  );
 
   // ── one stand again: nothing of the tandem left on the page
   await c.navigate(page('?cells=6&L=8'));

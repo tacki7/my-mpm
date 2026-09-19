@@ -1,7 +1,7 @@
 // Messages between the page and the simulation worker.
 import type { SimParams } from '../mpm/params.ts';
 import type { Crack, Diagnostics, FieldName } from '../mpm/solver.ts';
-import type { StandResult } from '../mpm/tandem.ts';
+import type { StandResult, TandemStop } from '../mpm/tandem.ts';
 
 export type ToWorker =
   /** stands: a tandem of that many stands (1: the single stand as before) */
@@ -116,6 +116,8 @@ export interface Frame {
   results: StandResult[];
   /** the whole pass is over (one stand: its phase is done or stalled; a tandem: the last stand is closed) */
   passDone: boolean;
+  /** a tandem stopped before its last stand, and why (null while it runs and after a normal end) */
+  stopped: TandemStop | null;
 }
 
 /** A stand finished: its last frame and geometry (the page keeps them), its result, and the next stand's geometry. */
