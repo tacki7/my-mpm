@@ -1,7 +1,9 @@
 // Whether the pass's shape puts the middle of the thickness into hydrostatic tension, from the condition alone:
-// Δ = mean thickness / contact length against the central-burst map (docs/validation.md「中心割れの地図」, T53):
-// the mid-plane η in the bite turns positive at Δ 2.2–2.9 for 4340 and 2.6–4.0 for SPCC (grids of 8 to 16 cells,
-// R 15 mm, μ 0.2, no tension; the reductions of 5 and 10 % gave nearly the same). A material is read against the map
+// Δ = mean thickness / contact length against the central-burst map (docs/validation.md「中心割れの地図」, T53 and
+// T65): the mid-plane η in the bite turns positive at Δ 2.1–2.9 for 4340 and 2.2–3.7 for SPCC (grids of 8 to 20
+// cells, R 15 mm, μ 0.2, no tension; the reductions of 5 and 10 % gave nearly the same). A finer grid turns the
+// middle tensile at a smaller Δ and the sequence has not settled by 20 cells, so the band's low end is the finest
+// grid measured, not a converged value. A material is read against the map
 // of the one it hardens like: the flow stress at εp 0.5 over the one at 0 (4340 1.5, SPCC 2.4; AL6061 1.3 goes with
 // 4340). With it, once the stand is steady, the mid-plane η measured the map's way (src/mpm/midplane.ts).
 // Δ here is the page's (thicknessRatio: the contact length on the arc); the map wrote it (1 − r/2) √(h0 / (r R)),
@@ -10,10 +12,10 @@ import type { SimParams } from '../mpm/params.ts';
 import { flowStress } from '../mpm/material.ts';
 import { thicknessRatio } from './slabOverlay.ts';
 
-/** where the mid-plane η turns positive, over the grids of the map (Δ from lo to hi) */
+/** where the mid-plane η turns positive, over the grids of the map (Δ from lo to hi; 8 to 20 cells) */
 export const BURST_DELTA = {
-  weak: { lo: 2.2, hi: 2.9, name: '4340 系（加工硬化が弱い）' },
-  strong: { lo: 2.6, hi: 4.0, name: 'SPCC 系（加工硬化が強い）' },
+  weak: { lo: 2.1, hi: 2.9, name: '4340 系（加工硬化が弱い）' },
+  strong: { lo: 2.2, hi: 3.7, name: 'SPCC 系（加工硬化が強い）' },
 } as const;
 
 export type BurstKind = 'compressive' | 'near' | 'tensile';
@@ -70,7 +72,7 @@ export class BurstHint {
     note.className = 'burst-note';
     note.textContent =
       `Δ = 平均板厚 / 接触長。${band.name}の地図では Δ ${band.lo}〜${band.hi} で板厚中心の η が正に変わる` +
-      '（張力なし・μ 0.2、格子 8〜16 セルの幅。張力・摩擦・格子で変わる）';
+      '（張力なし・μ 0.2、格子 8〜20 セルの幅。細かい格子ほど小さい Δ で変わる。張力・摩擦・格子で変わる）';
     el.replaceChildren(head, measured, note);
   }
 }
