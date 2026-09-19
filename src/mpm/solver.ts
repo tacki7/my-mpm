@@ -339,7 +339,10 @@ export class Sim {
       { cx: 0, cy, R, omega }, // top: counter-clockwise → bottom surface moves +x
       { cx: 0, cy: -cy, R, omega: -omega },
     ];
-    this.xExitProbe = Math.max(3 * r.h0, 6 * h);
+    // 3 h0 past the exit, but not more than 2 contact lengths: on a thick plate (h0 10 mm, Lc 2.7 mm) 3 h0 is
+    // 30 mm and the head never got there before the tail entered the bite (no steady phase, no exit gauge).
+    // Thin sheets are unchanged (3 h0 < 2 Lc)
+    this.xExitProbe = Math.max(6 * h, Math.min(3 * r.h0, 2 * this.contactLength));
 
     // Material points on a regular lattice.
     const NI = Math.round(r.sheetLength / dp);
