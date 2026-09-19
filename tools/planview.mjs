@@ -7,12 +7,13 @@
 //   node tools/planview.mjs [--W 20] [--cells 20] [--L 28] [--gap 8] [--h0 1] [--r 0.25] [--R 100]
 //                           [--mu 0.08] [--ms 10000] [--cfl 0.4] [--tb 0] [--tf 0]
 //                           [--damage none|johnson-cook|hancock-mackenzie|cockcroft-latham] [--cl 0.6]
-//                           [--notch <radius mm>] [--crack none|dfg] [--max 4000000] [--json]
+//                           [--notch <radius mm>] [--crack none|dfg] [--nojbar] [--max 4000000] [--json]
 //
 // Lengths in mm, tensions in MPa; --W is the full width, --cells the grid cells across the
 // half width. --notch cuts a semicircular notch of that radius into the edge half-way along
 // the strip. --crack dfg splits the points near a crack into two velocity fields (docs/model.md
-// 「亀裂の面」). Steady values are means over the samples (every 250 steps) in the steady phase while
+// 「亀裂の面」). --nojbar turns the volume averaging off and runs the volumes point by point, as the plan view did
+// before T63 (docs/model.md「体積の平均化」). Steady values are means over the samples (every 250 steps) in the steady phase while
 // the head is at least a gap past the exit and the tail at least a gap before the entry: the gap is
 // 8 mm or the half width, whichever is more (--gap sets it): the middle's load settles only a half
 // width past the exit and falls again within about a half width of the entry. A strip too short for
@@ -46,6 +47,7 @@ base.numerics.massScale = +opt('ms', base.numerics.massScale);
 base.numerics.cfl = +opt('cfl', base.numerics.cfl);
 base.damage.model = opt('damage', 'none');
 base.damage.clCrit = +opt('cl', base.damage.clCrit);
+if (args.includes('--nojbar')) base.numerics.jbar = false;
 const crack = opt('crack', 'none');
 if (crack !== 'none' && crack !== 'dfg') throw new Error(`--crack ${crack}: none or dfg`);
 base.numerics.crackFields = crack;
@@ -53,6 +55,7 @@ const W = +opt('W', 20) * 1e-3;
 const notch = +opt('notch', 0) * 1e-3;
 const P = planCondition(base, { width: W, cells: +opt('cells', 20), notch });
 const sim = new PlanSim(P);
+say(`volumes ${sim.averaged ? "smoothed over the grid ('rate')" : 'point by point (J-bar off)'}`);
 say(`plan view: W ${(W * 1e3).toFixed(1)} mm (W/h0 ${(W / r.h0).toFixed(0)}), ${sim.n} points, h ${(sim.h * 1e3).toFixed(3)} mm, dt ${sim.dt.toExponential(3)} s`);
 
 // Wusatowski (1955): W1/W0 = (h1/h0)^(−w), w = 10^(−1.269 (W0/h0) (h0/D)^0.556), D the roll diameter

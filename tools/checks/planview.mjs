@@ -2,8 +2,8 @@
 // rules (plane stress off the rolls, the gap in contact), the mid-width symmetry plane
 // (v_z = 0, v_x free), the width effects that make edge cracks (spread; in the bite the edge
 // is pulled in tension by the middle), the roll force against the slab method, and an edge
-// that fails when the material is brittle and not when it is ductile. docs/validation.md
-// has the finer and wider runs.
+// that fails when the material is brittle and not when it is ductile, and the volume averaging against the
+// pressure scatter of point-by-point volumes. docs/validation.md has the finer and wider runs.
 // @check
 import { ok, near, between, done } from './lib.mjs';
 import { PlanSim, planParams } from '../../src/mpm/planview/sim.ts';
@@ -242,6 +242,9 @@ ok(fr.sumWorst < 1e-9, "the points' friction adds up to the nodes'", `worst ${fr
 
 // ── the edge: brittle → it fails from the edge (the tensile band); less brittle → nothing
 //    fails, unless a notch in the edge concentrates the tension: then it fails at its root.
+//    (The limits moved with the volume averaging, T63: point by point the grid's pressure scatter pushed the edge's
+//    triaxiality into tension and the edge cracked up to C 0.1 with or without a notch, from a point 0.87 mm in;
+//    smoothed, it cracks up to C 0.07 from the outermost column, and at C 0.1 only with the notch.)
 //    (The failed band runs along the edge, not across, with the faces split ('dfg') or not: the
 //    edge is under an even tension along the bite and fails all at once, and the inside is in
 //    compression, so no tip runs inwards — docs/model.md「平面図モデル」, T50.)
@@ -254,15 +257,51 @@ function crackRun(cl, notch = 0) {
   while (s.phase() !== 'done' && s.step < 20000 && s.cracks.length === 0) advance(s);
   return s;
 }
-const brittle = crackRun(0.1);
+const brittle = crackRun(0.05);
 const first = brittle.cracks[0];
-ok(!!first && first.sheetZ > W / 2 - 1.5e-3, 'brittle (Cockcroft-Latham 0.1): the first crack is at the edge', first ? `${((W / 2 - first.sheetZ) * 1e3).toFixed(2)} mm in from the edge, η ${first.eta.toFixed(2)}` : 'no crack');
-const plain = crackRun(0.2);
-ok(plain.cracks.length === 0, 'Cockcroft-Latham 0.2, straight edge: no crack', `${plain.cracks.length} cracks by step ${plain.step}`);
+ok(!!first && first.sheetZ > W / 2 - 1.5e-3, 'brittle (Cockcroft-Latham 0.05): the first crack is at the edge', first ? `${((W / 2 - first.sheetZ) * 1e3).toFixed(2)} mm in from the edge, η ${first.eta.toFixed(2)}` : 'no crack');
+const plain = crackRun(0.1);
+ok(plain.cracks.length === 0, 'Cockcroft-Latham 0.1, straight edge: no crack', `${plain.cracks.length} cracks by step ${plain.step}`);
 const notch = 0.5e-3;
-const notched = crackRun(0.2, notch);
+const notched = crackRun(0.1, notch);
 const c = notched.cracks[0];
 const L = notched.params.rolling.sheetLength;
-ok(!!c && Math.abs(c.sheetX - L / 2) < notch + 0.5e-3 && c.sheetZ > W / 2 - notch - 0.75e-3, 'Cockcroft-Latham 0.2, notched edge: it cracks at the notch root', c ? `${(c.sheetX * 1e3).toFixed(2)} mm from the head (notch at ${(L / 2 * 1e3).toFixed(2)}), ${((W / 2 - c.sheetZ) * 1e3).toFixed(2)} mm in from the edge (root at ${(notch * 1e3).toFixed(2)})` : 'no crack');
+ok(!!c && Math.abs(c.sheetX - L / 2) < notch + 0.5e-3 && c.sheetZ > W / 2 - notch - 0.75e-3, 'Cockcroft-Latham 0.1, notched edge: it cracks at the notch root', c ? `${(c.sheetX * 1e3).toFixed(2)} mm from the head (notch at ${(L / 2 * 1e3).toFixed(2)}), ${((W / 2 - c.sheetZ) * 1e3).toFixed(2)} mm in from the edge (root at ${(notch * 1e3).toFixed(2)})` : 'no crack');
+// ── the volume averaging (T63): the pressure of neighbouring points in the bite. Plastic flow is isochoric and the
+//    thickness fixes the in-plane divergence in the bite, so point by point the grid locks and the pressure of
+//    neighbours scatters (the jump's p95 is about half the mean pressure); smoothing the in-plane volumetric rate over
+//    the grid ('rate', the default, as in the section model) brings it under a quarter. The means are unchanged (the
+//    load and the exit thickness above hold for both).
+{
+  const jumps = (jbar) => {
+    const s = new PlanSim(condition((b) => {
+      b.rolling.sheetLength = 12e-3;
+      if (!jbar) b.numerics.jbar = false;
+    }));
+    while ((s.phase() !== 'steady' || s.headX() < s.xExitProbe + 2e-3) && s.step < 20000) s.advance();
+    const d = [];
+    let sum = 0;
+    let n = 0;
+    for (let i = 0; i < s.NI; i++) {
+      for (let k = 0; k < s.NK; k++) {
+        const q = s.lattice[i * s.NK + k];
+        if (q < 0 || !s.active[q] || !(s.px[q] > -s.contactLength && s.px[q] < 0)) continue;
+        sum += s.pres[q];
+        n++;
+        for (const r of [i + 1 < s.NI ? s.lattice[(i + 1) * s.NK + k] : -1, k + 1 < s.NK ? s.lattice[i * s.NK + k + 1] : -1]) {
+          if (r >= 0 && s.active[r] && s.px[r] > -s.contactLength && s.px[r] < 0) d.push(Math.abs(s.pres[q] - s.pres[r]));
+        }
+      }
+    }
+    d.sort((a, b) => a - b);
+    return { mean: sum / n, p95: d[Math.floor(0.95 * (d.length - 1))], pairs: d.length, averaged: s.averaged };
+  };
+  const rate = jumps(true);
+  const point = jumps(false);
+  ok(rate.averaged && !point.averaged && rate.pairs > 100, "the default smooths the in-plane volumetric rate ('rate'); J-bar off runs point by point", `${rate.pairs} neighbour pairs in the bite`);
+  between(point.p95 / point.mean, 0.35, 1, 'point by point: the pressure jump between neighbours in the bite, over the mean pressure (volumetric locking)');
+  between(rate.p95 / rate.mean, 0, 0.25, "'rate': the same jump, smoothed");
+}
+
 ok(ps.looks > 0 && ps.worst <= 1e4, 'off the rolls: plane stress, |σ_yy| ≤ 0.01 MPa after every step of every run', `max ${(ps.worst * 1e-6).toExponential(2)} MPa (${ps.where}) over ${ps.looks} looks`);
 done();

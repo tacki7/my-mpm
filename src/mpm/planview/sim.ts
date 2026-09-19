@@ -88,6 +88,13 @@ export class PlanSim {
   /** friction the node got this step over its capacity (a vector of length ≤ 1; 1 = sliding) */
   readonly gfx: Float64Array;
   readonly gfz: Float64Array;
+  // the volume averaging ('rate'): per node Σ w m θ, Σ w m f, Σ w m β and Σ w m of the points in the averages, then the means
+  readonly gTh: Float64Array;
+  readonly gFe: Float64Array;
+  readonly gB: Float64Array;
+  readonly gMv: Float64Array;
+  /** the in-plane volumetric rate is smoothed over the grid ('rate'); false: point by point, as before T63 */
+  readonly averaged: boolean;
   private readonly gpush: Uint8Array;
   /** length of the node arrays: the nodes, and with crackFields 'dfg' the second field's nodes after them */
   readonly NN: number;
@@ -153,6 +160,7 @@ export class PlanSim {
   readonly fricX: Float64Array; // friction the rolls put on the point this step (both faces) [N]
   readonly fricZ: Float64Array;
   readonly dyy: Float64Array; // thickness strain rate of the last step [1/s]
+  readonly vr: Float64Array; // 'rate': 3K Δεp / σeq of the last update (the relaxation fraction per unit coefficient)
   readonly rate: Float64Array; // equivalent strain rate of the last update, mill-speed scaled as the flow stress sees it [1/s]
   readonly ep: Float64Array;
   readonly seq: Float64Array;
@@ -225,6 +233,10 @@ export class PlanSim {
     this.gcap = new Float64Array(NN);
     this.gfx = new Float64Array(NN);
     this.gfz = new Float64Array(NN);
+    this.gTh = new Float64Array(NN);
+    this.gFe = new Float64Array(NN);
+    this.gB = new Float64Array(NN);
+    this.gMv = new Float64Array(NN);
     this.gpush = new Uint8Array(NN);
     const nG = NN > nNodes ? nNodes : 0;
     this.gGx = new Float64Array(nG);
@@ -293,6 +305,10 @@ export class PlanSim {
     this.fricZ = F();
     this.dyy = F();
     this.rate = F();
+    this.vr = F();
+    // the same switch as the section model: 'rate' unless J-bar is off (or 'total', the old whole-J J-bar, which the
+    // plan view does not have — it then runs point by point, as it did before the averaging)
+    this.averaged = (num.jbar ?? true) && (num.volumetric ?? 'rate') !== 'total';
     this.ep = F();
     this.seq = F();
     this.eta = F();
@@ -764,6 +780,7 @@ export class PlanSim {
   }
 
   private g2p(): void {
+    if (this.averaged) return this.g2pRate();
     const { n, active, px, pz, gvx, gvz, gfx, gfz, dt, h, invH, ox, oz, nzN, nxN, pf } = this;
     const nNodes = nxN * nzN;
     const k4 = 4 * invH * invH;
@@ -855,6 +872,210 @@ export class PlanSim {
   }
 
   /**
+   * G2P with the section model's 'rate' volume averaging (solver.ts g2pVelocity / g2pUpdate) in the x–z plane. Pass 1: velocity, L and the friction share, and each point in the averages adds m θ (θ = the in-plane
+   * divergence l00 + l11), m f (f = ln J = −p/K, J = det F h / h0: the thickness is in it) and m β (β = c · 3K Δεp /
+   * σeq, capped at 1) to the nodes of the field it is on. The ghost nodes fold onto their mirrors (scalars: no sign),
+   * the real nodes divide, the ghosts take the means back. Pass 2: θ = Σ w θ̄ + Σ w β̄ (f̄ − f_p)/Δt, det F advances by
+   * exp(Δt θ) (a factor on (I + ΔtL)), and the deviatoric update sees θ as the in-plane trace. D_yy stays the
+   * point's (the gap or plane stress). Not in the averages, with their own rate: failed points in tension, det F ≤ 0.
+   */
+  private g2pRate(): void {
+    const { n, active, px, pz, gvx, gvz, gfx, gfz, dt, h, invH, ox, oz, nzN, nxN, pf, gTh, gFe, gB, gMv, mass } = this;
+    const nNodes = nxN * nzN;
+    const NN = this.NN;
+    const k4 = 4 * invH * invH;
+    const xMax = (nxN - 3) * h + ox;
+    const zMax = (nzN - 3) * h + oz;
+    const xMin = ox + 2 * h;
+    const K = this.el.K;
+    const invK = 1 / K;
+    const cRel = this.params.numerics.volRelax ?? 1;
+    const end = pf !== null ? NN : nNodes;
+    gTh.fill(0, 0, end);
+    gFe.fill(0, 0, end);
+    gB.fill(0, 0, end);
+    gMv.fill(0, 0, end);
+    const inAvg = (p: number): boolean => {
+      const J = this.f00[p] * this.f11[p] - this.f01[p] * this.f10[p];
+      return J > 0 && !(this.failed[p] && !(this.pres[p] > 0));
+    };
+    // pass 1
+    for (let p = 0; p < n; p++) {
+      if (!active[p]) continue;
+      const gx = (px[p] - ox) * invH;
+      const gz = (pz[p] - oz) * invH;
+      const bx = Math.floor(gx - 0.5);
+      const bz = Math.floor(gz - 0.5);
+      const fx = gx - bx;
+      const fz = gz - bz;
+      const wx0 = 0.5 * (1.5 - fx) * (1.5 - fx);
+      const wx1 = 0.75 - (fx - 1) * (fx - 1);
+      const wx2 = 0.5 * (fx - 0.5) * (fx - 0.5);
+      const wz0 = 0.5 * (1.5 - fz) * (1.5 - fz);
+      const wz1 = 0.75 - (fz - 1) * (fz - 1);
+      const wz2 = 0.5 * (fz - 0.5) * (fz - 0.5);
+      let vx = 0;
+      let vz = 0;
+      let b00 = 0;
+      let b01 = 0;
+      let b10 = 0;
+      let b11 = 0;
+      let rx = 0;
+      let rz = 0;
+      const cap = this.fcap[p];
+      const fb = pf !== null && this.pfAny[p] ? 9 * p : -1;
+      for (let ii = 0; ii < 3; ii++) {
+        const wx = ii === 0 ? wx0 : ii === 1 ? wx1 : wx2;
+        const dx = (ii - fx) * h;
+        const col = (bx + ii) * nzN + bz;
+        for (let jj = 0; jj < 3; jj++) {
+          const w = wx * (jj === 0 ? wz0 : jj === 1 ? wz1 : wz2);
+          const dz = (jj - fz) * h;
+          const idx = fb >= 0 && pf![fb + 3 * ii + jj] ? col + jj + nNodes : col + jj;
+          const ux = gvx[idx];
+          const uz = gvz[idx];
+          vx += w * ux;
+          vz += w * uz;
+          b00 += w * ux * dx;
+          b01 += w * ux * dz;
+          b10 += w * uz * dx;
+          b11 += w * uz * dz;
+          if (cap > 0) {
+            rx += w * gfx[idx];
+            rz += w * gfz[idx];
+          }
+        }
+      }
+      this.fricX[p] = cap * rx;
+      this.fricZ[p] = cap * rz;
+      const l00 = k4 * b00;
+      const l11 = k4 * b11;
+      this.c00[p] = l00;
+      this.c01[p] = k4 * b01;
+      this.c10[p] = k4 * b10;
+      this.c11[p] = l11;
+      this.vx[p] = vx;
+      this.vz[p] = vz;
+      if (!inAvg(p)) continue;
+      const m = mass[p];
+      const mth = m * (l00 + l11);
+      const mfe = -m * this.pres[p] * invK;
+      const b = cRel * this.vr[p];
+      const mb = m * (b < 1 ? b : 1);
+      for (let ii = 0; ii < 3; ii++) {
+        const wx = ii === 0 ? wx0 : ii === 1 ? wx1 : wx2;
+        const col = (bx + ii) * nzN + bz;
+        for (let jj = 0; jj < 3; jj++) {
+          const w = wx * (jj === 0 ? wz0 : jj === 1 ? wz1 : wz2);
+          const idx = fb >= 0 && pf![fb + 3 * ii + jj] ? col + jj + nNodes : col + jj;
+          gTh[idx] += w * mth;
+          gFe[idx] += w * mfe;
+          gB[idx] += w * mb;
+          gMv[idx] += w * m;
+        }
+      }
+    }
+    // fold the ghosts onto their mirrors, divide on the real nodes, mirror back (per field)
+    const kSym = Math.round((0 - oz) / h);
+    const halves = pf !== null ? 2 : 1;
+    for (let half = 0; half < halves; half++) {
+      for (let i = 0; i < nxN; i++) {
+        const col = i * nzN + half * nNodes;
+        for (let k = 0; k < kSym; k++) {
+          const g = col + k;
+          const q = col + 2 * kSym - k;
+          gTh[q] += gTh[g];
+          gFe[q] += gFe[g];
+          gB[q] += gB[g];
+          gMv[q] += gMv[g];
+        }
+        for (let k = kSym; k < nzN; k++) {
+          const idx = col + k;
+          const m = gMv[idx];
+          if (!(m > 0)) continue;
+          gTh[idx] /= m;
+          const b = gB[idx] / m;
+          gB[idx] = b;
+          gFe[idx] = (b * gFe[idx]) / m;
+        }
+        for (let k = 0; k < kSym; k++) {
+          const g = col + k;
+          const q = col + 2 * kSym - k;
+          gTh[g] = gTh[q];
+          gFe[g] = gFe[q];
+          gB[g] = gB[q];
+          gMv[g] = gMv[q];
+        }
+      }
+    }
+    // pass 2
+    for (let p = 0; p < n; p++) {
+      if (!active[p]) continue;
+      const xp = px[p];
+      const zp = pz[p];
+      const l00 = this.c00[p];
+      const l01 = this.c01[p];
+      const l10 = this.c10[p];
+      const l11 = this.c11[p];
+      let th = l00 + l11;
+      let cor = 1;
+      if (inAvg(p)) {
+        const gx = (xp - ox) * invH;
+        const gz = (zp - oz) * invH;
+        const bx = Math.floor(gx - 0.5);
+        const bz = Math.floor(gz - 0.5);
+        const fx = gx - bx;
+        const fz = gz - bz;
+        const wxs = [0.5 * (1.5 - fx) * (1.5 - fx), 0.75 - (fx - 1) * (fx - 1), 0.5 * (fx - 0.5) * (fx - 0.5)];
+        const wzs = [0.5 * (1.5 - fz) * (1.5 - fz), 0.75 - (fz - 1) * (fz - 1), 0.5 * (fz - 0.5) * (fz - 0.5)];
+        const fb = pf !== null && this.pfAny[p] ? 9 * p : -1;
+        let tbar = 0;
+        let rA = 0;
+        let rB = 0;
+        for (let ii = 0; ii < 3; ii++) {
+          const col = (bx + ii) * nzN + bz;
+          for (let jj = 0; jj < 3; jj++) {
+            const w = wxs[ii] * wzs[jj];
+            const idx = fb >= 0 && pf![fb + 3 * ii + jj] ? col + jj + nNodes : col + jj;
+            tbar += w * gTh[idx];
+            rA += w * gFe[idx];
+            rB += w * gB[idx];
+          }
+        }
+        th = tbar + (rA + (rB * this.pres[p]) * invK) / dt;
+        const Jold = this.f00[p] * this.f11[p] - this.f01[p] * this.f10[p];
+        const Jtr = ((1 + dt * l00) * (1 + dt * l11) - dt * dt * l01 * l10) * Jold;
+        const r = (Jold * Math.exp(dt * th)) / Jtr;
+        cor = r > 0 ? Math.sqrt(r) : 1;
+      }
+      const nx = xp + dt * this.vx[p];
+      let nz = zp + dt * this.vz[p];
+      if (nz < 0) nz = 0;
+      px[p] = nx;
+      pz[p] = nz;
+      if (nx < xMin || nx > xMax || nz > zMax) {
+        active[p] = 0;
+        continue;
+      }
+      const F00 = this.f00[p];
+      const F01 = this.f01[p];
+      const F10 = this.f10[p];
+      const F11 = this.f11[p];
+      const g00 = cor * (1 + dt * l00);
+      const g01 = cor * dt * l01;
+      const g10 = cor * dt * l10;
+      const g11 = cor * (1 + dt * l11);
+      this.f00[p] = g00 * F00 + g01 * F10;
+      this.f01[p] = g00 * F01 + g01 * F11;
+      this.f10[p] = g10 * F00 + g11 * F10;
+      this.f11[p] = g10 * F01 + g11 * F11;
+      // the deviatoric update sees θ as the in-plane trace
+      const shift = 0.5 * (th - l00 - l11);
+      this.constitutive(p, l00 + shift, l01, l10, l11 + shift, nx);
+    }
+  }
+
+  /**
    * One constitutive step of point p: the thickness (contact with the rolls or plane stress),
    * the 3D deviatoric stress with the J2 return, the pressure, the damage indicators.
    */
@@ -889,6 +1110,7 @@ export class PlanSim {
       const pr = this.pressureOf(J);
       this.pres[p] = P.damage.failure === 'erode' || pr < 0 ? 0 : pr;
       this.pc[p] = 0;
+      this.vr[p] = 0;
       return;
     }
 
@@ -958,6 +1180,7 @@ export class PlanSim {
     const q = out.q;
     const dep = out.dep;
     this.ep[p] += dep;
+    this.vr[p] = dep > 0 && q > 0 ? (3 * this.el.K * dep) / q : 0;
 
     // stress state of σ = s − p I
     const cxx = out.sx - out.pr;

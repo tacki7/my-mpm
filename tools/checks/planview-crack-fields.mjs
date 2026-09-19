@@ -7,18 +7,19 @@
 //   the points next to its faces unload (with one field the grid joins the faces: a cut narrower than the
 //   stencil carries the tension across; a cut through the bite opens by itself, the exit being faster, so the
 //   check is on the entry side)
-// - the same from the mid-width plane: the rows next to the symmetry plane unload too (the failed points' mirror
-//   images count in G and C)
+// - the same from the mid-width plane (point by point, J-bar off: see cut): the rows next to the symmetry plane
+//   unload too (the failed points' mirror images count in G and C)
 // - the contact between the fields keeps the momentum at every node
 // - the 'dfg' runs are looked at and stay finite; run on through the bite, the second field is handled as the first:
 //   the grid friction adds up (points to nodes, capacity to points), the second field's nodes take a capacity, the
 //   grid's mass after the fold is the points', the fields do not approach again where neither friction nor the pusher
 //   acts; and a cut next to the pusher's column keeps the tail at the entry speed while it pushes
 // Calibrated on copies: the contact normal alone reversed (the faces held together when they separate) fails three
-// items (edge ratio 0.93, 171 MPa by the plane, the fields approaching again); the single field ('dfg' taken as
+// items (edge ratio 0.92, 171 MPa by the plane, the fields approaching again); the single field ('dfg' taken as
 // 'none') fails eight; G and C not folded across the symmetry plane fails two (105 MPa by the plane); the copies of
-// the second review each fail their items (at the end). The bounds sit between the working values (edge ratio 0.36,
-// 10 MPa by the plane) and those copies
+// the second review each fail their items (at the end). The bounds sit between the working values (edge ratio 0.46,
+// 10 MPa by the plane) and those copies. All of them were run again with the volume averaging on (T63), which is now
+// the plan view's default: each still fails its own items
 // @check
 import { ok, between, done } from './lib.mjs';
 import { PlanSim, planParams } from '../../src/mpm/planview/sim.ts';
@@ -58,9 +59,12 @@ const W = 10e-3;
 // tension (the pusher off, the tension on) and the cut is still 1 mm before the entry. `through` runs on to the end of
 // the pass for the watch; `finite`: every point's position and velocity finite and under ten times the roll speed
 const TB = 100e6;
-function cut(mode, where, { through = false, watch } = {}) {
+function cut(mode, where, { through = false, watch, point = false } = {}) {
   const b = defaultParams();
   b.rolling.sheetLength = 12e-3;
+  // the mid-width cut runs point by point (J-bar off): the volume averaging smooths the pressure so far that the fold
+  // of G_z and C_z across the plane can no longer be told from its wrong sign (22 against 24 MPa; 10 against 17 here)
+  if (point) b.numerics.jbar = false;
   b.rolling.backTension = TB;
   b.damage.model = 'none';
   b.numerics.crackFields = mode;
@@ -187,6 +191,7 @@ const realNodes = (s) => {
   const g = { massSteps: 0, mass: 0, again: 0, both: 0, m0: 0, n0: 0 };
   let grid;
   const mid = cut('dfg', 'mid', {
+    point: true,
     through: true,
     watch: {
       start(s) {
