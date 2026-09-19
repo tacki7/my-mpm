@@ -1,6 +1,6 @@
 // A tandem on the page, in a headless Chrome: `?stands=3` rolls the sheet through three stands with a
 // real click on the run button, to the end; the page's per-stand results equal `node tools/tandem.mjs`
-// for the same condition (the steps and points exactly, the values to 1e-5); the three pictures sit side
+// for the same condition (below: the first stand closely, the later ones within the spread); the three pictures sit side
 // by side, each showing its own stand in the steady phase, and a field tab or the principal directions
 // redraw the finished ones too; the stress explorer's loading path runs through the three stands (numbered, a
 // colour each, in the legend); the force chart has a slab level per stand; the table has a column per
@@ -14,8 +14,16 @@
 // <out-dir> (a new, empty directory) gets the downloads and tandem.png, tandem-eta.png, tandem-narrow.png;
 // look at the pictures. About a minute.
 //
-// The page and the tool agree to about 1e-6, not bit for bit (Chrome's and Node's V8 round exp, log and
-// atan2 differently in the last bit; tools/browser/planview.mjs).
+// The page and the tool do not agree bit for bit: Chrome's and Node's V8 round exp, log and atan2 differently
+// in the last bit (tools/browser/planview.mjs). Over the first stand that grows to about 1e-7 in its results,
+// and the second stand starts from states that differ by that much. The pass magnifies such a difference a
+// great deal: in Node alone, h0 × (1 + 1e-7) moves the results of the three stands (standard, 6 cells, L 8 mm;
+// Node 24, 2026-09-19) by up to 1.1e-3 in the steady force, 1.3e-4 in the exit thickness, 1.9e-5 in the
+// thickness let out and 2.6e-2 in the forward slip of stands 2 and 3 (5.5e-4, 5.6e-5, 6.8e-6 and 0.13 in the
+// first), with the same steps. Stepping the tandem as the worker does (its reads every 20 to 60 steps, the
+// tracker, the page's params) gives the tool's results bit for bit, so the spread is not the page's doing.
+// So the first stand must agree to 1e-5 (its steps and points exactly), and the later ones within twice that
+// spread (their steps within one reading, 2000 steps: where the tail crosses between two readings may move).
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
@@ -82,14 +90,24 @@ try {
 
   // ── the tool, same condition
   const tool = JSON.parse(execFileSync('node', ['tools/tandem.mjs', '--stands', String(STANDS), ...COND, '--json'], { encoding: 'utf8' })).stand;
-  ok(tool.length === page3.length && tool.every((r, k) => r.steps === page3[k].steps && r.particles === page3[k].particles), 'page = tool: the same stands, steps and points', page3.map((r, k) => `#${k + 1} ${r.steps}/${tool[k]?.steps} steps`).join(', '));
+  ok(
+    tool.length === page3.length && tool.every((r, k) => r.particles === page3[k].particles && Math.abs(r.steps - page3[k].steps) <= (k === 0 ? 0 : 2000)),
+    'page = tool: the same stands and points; the steps the same in the first stand, within one reading after',
+    page3.map((r, k) => `#${k + 1} ${r.steps}/${tool[k]?.steps} steps`).join(', '),
+  );
+  // tolerances: the first stand, and twice the spread from h0 × (1 + 1e-7) in the stands after (above)
+  const TOL = [
+    { force: 1e-5, exit: 1e-5, out: 1e-5, slip: 1e-4 },
+    { force: 2e-3, exit: 3e-4, out: 5e-5, slip: 5e-2 },
+  ];
   for (let k = 0; k < Math.min(tool.length, page3.length); k++) {
     const p = page3[k];
     const t = tool[k];
-    near(p.steadyForce, t.steadyForce, 1e-5, `page = tool: #${k + 1} steady force (${(t.steadyForce * 1e-6).toFixed(3)} kN/mm)`);
-    near(p.exitThickness, t.exitThickness, 1e-5, `page = tool: #${k + 1} exit thickness`);
-    near(p.thicknessOut, t.thicknessOut, 1e-5, `page = tool: #${k + 1} thickness let out`);
-    near(p.forwardSlip, t.forwardSlip, 1e-4, `page = tool: #${k + 1} forward slip`);
+    const tol = TOL[Math.min(k, 1)];
+    near(p.steadyForce, t.steadyForce, tol.force, `page = tool: #${k + 1} steady force (${(t.steadyForce * 1e-6).toFixed(3)} kN/mm)`);
+    near(p.exitThickness, t.exitThickness, tol.exit, `page = tool: #${k + 1} exit thickness`);
+    near(p.thicknessOut, t.thicknessOut, tol.out, `page = tool: #${k + 1} thickness let out`);
+    near(p.forwardSlip, t.forwardSlip, tol.slip, `page = tool: #${k + 1} forward slip`);
   }
 
   // ── the table: a column per stand, its force
