@@ -163,6 +163,9 @@ export class Sim {
   readonly gJe: Float64Array; // 'rate': β_i × mass-weighted mean of the elastic log volume ln J − ev
   readonly gB: Float64Array; // 'rate': mass-weighted relaxation fraction β_i
   readonly gMv: Float64Array; // 'rate': nodal mass of the points in the averages (intact, J > 0)
+  readonly gcon: Uint8Array; // this step: bit k set when roll k constrains the node
+  private readonly gfolN: Float64Array; // 'roll-side-fix': Σ w m (requested normal velocity change) per node
+  private readonly gfolD: Float64Array; // Σ w m
 
   // particles (lattice order: index = i * NJ + j, i from the tail)
   readonly n: number;
@@ -222,6 +225,7 @@ export class Sim {
   readonly active: Uint8Array;
   readonly failed: Uint8Array;
   readonly tag: Uint8Array; // 1 tail column, 2 head column
+  readonly touch: Uint8Array; // this step: bit k set when the point's edge is inside roll k (P2G)
   readonly crackId: Int32Array;
 
   t = 0;
@@ -303,6 +307,9 @@ export class Sim {
     this.gvy = new Float64Array(nNodes);
     this.gpen = [new Float64Array(nNodes), new Float64Array(nNodes)];
     this.gpush = new Uint8Array(nNodes);
+    this.gcon = new Uint8Array(nNodes);
+    this.gfolN = new Float64Array(nNodes);
+    this.gfolD = new Float64Array(nNodes);
     this.gJ = new Float64Array(nNodes);
     this.gJe = new Float64Array(nNodes);
     this.gB = new Float64Array(nNodes);
@@ -395,6 +402,7 @@ export class Sim {
     this.active = new Uint8Array(n);
     this.failed = new Uint8Array(n);
     this.tag = new Uint8Array(n);
+    this.touch = new Uint8Array(n);
     this.crackId = new Int32Array(n).fill(-1);
 
     // Entry speed from mass flow, a little under the roll speed.
@@ -459,6 +467,7 @@ export class Sim {
     gpen0.fill(INF);
     gpen1.fill(INF);
     gpush.fill(0);
+    this.gcon.fill(0);
     this.updatePusher();
     if (!this.pusherActive && !this.stalled && this.step % 50 === 0) this.checkStall();
     this.p2g();
@@ -490,6 +499,9 @@ export class Sim {
     const tractionF = this.frontNow * this.dp * this.frontScale;
     const { li, NI } = this;
     const pushing = this.pusherActive;
+    // 'roll-side': a penetrating point marks only the nodes on the roll side of it (the top roll is roll 0)
+    const rollSide = this.params.numerics.contact.startsWith('roll-side');
+    const hh = 0.5 * h;
     for (let p = 0; p < n; p++) {
       if (!active[p]) continue;
       const xp = px[p];
@@ -524,8 +536,15 @@ export class Sim {
 
       // penetration of this point into each roll (its half size along the deformed y edge)
       const rp = 0.5 * this.dp * Math.hypot(this.f01[p], this.f11[p]);
-      const pen0 = Math.hypot(xp - r0.cx, yp - r0.cy) - r0.R - rp;
-      const pen1 = Math.hypot(xp - r1.cx, yp - r1.cy) - r1.R - rp;
+      const d0 = Math.hypot(xp - r0.cx, yp - r0.cy);
+      const d1 = Math.hypot(xp - r1.cx, yp - r1.cy);
+      const pen0 = d0 - r0.R - rp;
+      const pen1 = d1 - r1.R - rp;
+      this.touch[p] = (pen0 < 0 ? 1 : 0) | (pen1 < 0 ? 2 : 0);
+      const n0x = (xp - r0.cx) / d0;
+      const n0y = (yp - r0.cy) / d0;
+      const n1x = (xp - r1.cx) / d1;
+      const n1y = (yp - r1.cy) / d1;
       const pushMark = pushing && tg === 1;
 
       for (let i = 0; i < 3; i++) {
@@ -539,8 +558,9 @@ export class Sim {
           gm[idx] += w * m;
           gvx[idx] += w * (mvx + a00 * dx + a01 * dy);
           gvy[idx] += w * (mvy + a10 * dx + a11 * dy);
-          if (pen0 < gpen0[idx]) gpen0[idx] = pen0;
-          if (pen1 < gpen1[idx]) gpen1[idx] = pen1;
+          // along the roll normal n (roll centre → point): the node lies toward the roll, or within h/2 beyond the point
+          if (pen0 < gpen0[idx] && (!rollSide || dx * n0x + dy * n0y <= hh)) gpen0[idx] = pen0;
+          if (pen1 < gpen1[idx] && (!rollSide || dx * n1x + dy * n1y <= hh)) gpen1[idx] = pen1;
           if (pushMark) gpush[idx] = 1;
         }
       }
@@ -559,6 +579,9 @@ export class Sim {
     const tqAcc = [0, 0];
     const nNodes = nxN * nyN;
     const mMin = 1e-12 * this.mass[0];
+    // 'node' / 'node-half': a marked node is constrained only inside the roll (or within h/2 of its surface)
+    const contact = this.params.numerics.contact;
+    const reach = contact === 'node' ? 0 : contact === 'node-half' ? 0.5 * h : Infinity;
     for (let idx = 0; idx < nNodes; idx++) {
       const m = gm[idx];
       if (m <= mMin) {
@@ -577,6 +600,7 @@ export class Sim {
         const rx = xi - roll.cx;
         const ry = yi - roll.cy;
         const d = Math.hypot(rx, ry);
+        if (d - roll.R > reach) continue;
         const nx = rx / d;
         const ny = ry / d;
         // roll surface velocity at the foot of the node
@@ -586,6 +610,7 @@ export class Sim {
         const rely = vy - uy;
         const vn = relx * nx + rely * ny;
         if (vn >= 0) continue; // separating
+        this.gcon[idx] |= 1 << k;
         const tx = relx - vn * nx;
         const ty = rely - vn * ny;
         const vt = Math.hypot(tx, ty);
@@ -627,6 +652,7 @@ export class Sim {
       gvx[idx] = vx;
       gvy[idx] = vy;
     }
+    if (this.params.numerics.contact === 'roll-side-fix') this.followRoll(fyAcc, tqAcc);
     this.accSteps++;
     this.binSteps++;
     this.accFy[0] += fyAcc[0];
@@ -657,6 +683,7 @@ export class Sim {
     const b0 = (r0.R + 2 * h) * (r0.R + 2 * h);
     const b1 = (r1.R + 2 * h) * (r1.R + 2 * h);
     const invK = 1 / this.el.K;
+    const stop = this.params.numerics.contact === 'roll-side-stop';
     for (let p = 0; p < n; p++) {
       if (!active[p]) continue;
       const gx = (px[p] - ox) * invH;
@@ -706,6 +733,7 @@ export class Sim {
       this.c11[p] = l11;
       vx[p] = nvx;
       vy[p] = nvy;
+      if (stop && this.touch[p]) this.stopAtRoll(p);
       if (!jbar) continue;
       if (rate) {
         const m = mass[p];
@@ -782,6 +810,119 @@ export class Sim {
           gJe[idx] = (b * gJe[idx]) / m;
         }
       }
+    }
+  }
+
+  /**
+   * 'roll-side-fix': a point whose edge is inside a roll must not move further into it. Its velocity
+   * interpolates the constrained nodes on its roll side and free nodes deeper in the sheet, which move
+   * toward the mid-plane more slowly than the roll surface (the flow converges less at depth), so it
+   * would lag behind the surface and sink into the roll. The deficit of its normal velocity, over the
+   * weight it puts on its constrained nodes, is asked of those nodes (mass-weighted mean of the requests
+   * per node) — the constrained nodes then carry the velocity the field has there, not the surface's.
+   * The impulse goes to the roll force, torque and profile like the contact's.
+   */
+  private followRoll(fyAcc: number[], tqAcc: number[]): void {
+    const { n, active, touch, px, py, gvx, gvy, gm, gcon, gfolN, gfolD, mass, h, invH, ox, oy, nyN, dt } = this;
+    const w = [0, 0, 0, 0, 0, 0, 0, 0, 0];
+    const touched: number[] = [];
+    for (let p = 0; p < n; p++) {
+      if (!active[p] || !touch[p]) continue;
+      const gx = (px[p] - ox) * invH;
+      const gy = (py[p] - oy) * invH;
+      const bx = Math.floor(gx - 0.5);
+      const by = Math.floor(gy - 0.5);
+      const fx = gx - bx;
+      const fy = gy - by;
+      const wx = [0.5 * (1.5 - fx) * (1.5 - fx), 0.75 - (fx - 1) * (fx - 1), 0.5 * (fx - 0.5) * (fx - 0.5)];
+      const wy = [0.5 * (1.5 - fy) * (1.5 - fy), 0.75 - (fy - 1) * (fy - 1), 0.5 * (fy - 0.5) * (fy - 0.5)];
+      for (let a = 0; a < 3; a++) for (let c = 0; c < 3; c++) w[a * 3 + c] = wx[a] * wy[c];
+      for (let k = 0; k < 2; k++) {
+        if (!(touch[p] & (1 << k))) continue;
+        const roll = this.rolls[k];
+        const rx = px[p] - roll.cx;
+        const ry = py[p] - roll.cy;
+        const d = Math.hypot(rx, ry);
+        const nx = rx / d;
+        const ny = ry / d;
+        const ux = -roll.omega * roll.R * ny;
+        const uy = roll.omega * roll.R * nx;
+        let e = 0;
+        let W = 0;
+        for (let a = 0; a < 3; a++) {
+          for (let c = 0; c < 3; c++) {
+            const idx = (bx + a) * nyN + by + c;
+            const wi = w[a * 3 + c];
+            e += wi * ((gvx[idx] - ux) * nx + (gvy[idx] - uy) * ny);
+            if (gcon[idx] & (1 << k)) W += wi;
+          }
+        }
+        if (e >= 0 || W <= 0) continue;
+        const want = -e / W;
+        for (let a = 0; a < 3; a++) {
+          for (let c = 0; c < 3; c++) {
+            const idx = (bx + a) * nyN + by + c;
+            if (!(gcon[idx] & (1 << k))) continue;
+            const wm = w[a * 3 + c] * mass[p];
+            if (gfolD[idx] === 0) touched.push(idx);
+            gfolN[idx] += wm * want;
+            gfolD[idx] += wm;
+          }
+        }
+      }
+    }
+    const invDt = 1 / dt;
+    for (const idx of touched) {
+      const dv = gfolN[idx] / gfolD[idx];
+      gfolN[idx] = 0;
+      gfolD[idx] = 0;
+      const k = gcon[idx] & 1 ? 0 : 1;
+      const roll = this.rolls[k];
+      const col = Math.floor(idx / nyN);
+      const rx = ox + col * h - roll.cx;
+      const ry = oy + (idx % nyN) * h - roll.cy;
+      const d = Math.hypot(rx, ry);
+      const nx = rx / d;
+      const ny = ry / d;
+      gvx[idx] += dv * nx;
+      gvy[idx] += dv * ny;
+      const f = gm[idx] * dv * invDt; // on the sheet, along n
+      fyAcc[k] += -f * ny;
+      tqAcc[k] += -(rx * f * ny - ry * f * nx);
+      const b = col - this.binCol0;
+      if (b >= 0 && b < this.nBins) this.binN[b] += f;
+    }
+  }
+
+  /**
+   * A point whose edge is inside a roll does not move further into it: its velocity
+   * relative to the roll surface loses the part toward the roll. The impulse is a
+   * contact force on the sheet, added to the roll force, torque and profile.
+   */
+  private stopAtRoll(p: number): void {
+    const { px, py, vx, vy } = this;
+    for (let k = 0; k < 2; k++) {
+      if (!(this.touch[p] & (1 << k))) continue;
+      const roll = this.rolls[k];
+      const rx = px[p] - roll.cx;
+      const ry = py[p] - roll.cy;
+      const d = Math.hypot(rx, ry);
+      const nx = rx / d;
+      const ny = ry / d;
+      const ux = -roll.omega * roll.R * ny;
+      const uy = roll.omega * roll.R * nx;
+      const vn = (vx[p] - ux) * nx + (vy[p] - uy) * ny;
+      if (vn >= 0) continue;
+      vx[p] -= vn * nx;
+      vy[p] -= vn * ny;
+      const f = (-this.mass[p] * vn) / this.dt; // on the sheet, along n
+      const fx = f * nx;
+      const fy = f * ny;
+      this.accFy[k] += -fy;
+      this.accTorque[k] += -(rx * fy - ry * fx);
+      // normal only: nothing for the friction profile
+      const b = Math.floor((px[p] - this.binX0) / this.binW);
+      if (b >= 0 && b < this.nBins) this.binN[b] += f;
     }
   }
 

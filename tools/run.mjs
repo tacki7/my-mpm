@@ -3,7 +3,7 @@
 //   node tools/run.mjs [--h0 1] [--r 0.25] [--R 100] [--L 16] [--mu 0.08] [--cells 10]
 //                      [--mat spcc|s4340|al6061] [--damage johnson-cook|hancock-mackenzie|cockcroft-latham|gtn|localization|none]
 //                      [--yield von-mises|gtn] [--preset <id>] [--chi 0.9] [--nonlocal <ℓ mm>]
-//                      [--tb 0] [--tf 0] [--every 2000] [--max 400000] [--json]
+//                      [--tb 0] [--tf 0] [--every 2000] [--max 400000] [--contact surface|stencil] [--json]
 //
 // Lengths in mm, tensions in MPa. Prints a line every --every steps and a summary
 // at the end (or one JSON object with --json).
@@ -31,6 +31,7 @@ r.frontTension = +opt('tf', 0) * 1e6;
 P.numerics.cellsThrough = +opt('cells', P.numerics.cellsThrough);
 P.numerics.massScale = +opt('ms', P.numerics.massScale);
 if (flag('nojbar')) P.numerics.jbar = false;
+P.numerics.contact = opt('contact', P.numerics.contact); // 'stencil': the contact of before (a band 1.5 cells deep)
 const mat = opt('mat', null);
 if (mat) P.material = { ...MATERIALS[mat] };
 P.damage.model = opt('damage', P.damage.model);

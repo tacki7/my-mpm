@@ -121,6 +121,16 @@ export interface RollingParams {
  */
 export type VolumetricScheme = 'rate' | 'total';
 
+/**
+ * Which grid nodes the roll contact constrains. A node is constrained only if a particle it takes
+ * mass from penetrates the roll; then:
+ * - 'stencil': every node of that particle's 3 × 3 stencil (3 node rows along each surface, ~1.5 cells)
+ * - 'roll-side': only the nodes on the roll side of the particle (within h/2 of it on the far side)
+ * - 'node': only the nodes inside the roll
+ * - 'node-half': only the nodes inside the roll or within h/2 of its surface
+ */
+export type ContactMarking = 'stencil' | 'roll-side' | 'roll-side-stop' | 'roll-side-fix' | 'node' | 'node-half';
+
 export interface NumericsParams {
   cellsThrough: number; // grid cells through the entry thickness
   ppc: number; // particles per cell per direction
@@ -140,6 +150,8 @@ export interface NumericsParams {
    * velocity of a ~1.5-cell band and the discrete flow cannot stay isochoric. Default 5
    */
   volRelaxContact?: number;
+  /** which nodes the roll contact constrains */
+  contact: ContactMarking;
 }
 
 /**
@@ -299,6 +311,7 @@ export function defaultParams(): SimParams {
       volumetric: 'rate',
       volRelax: 1,
       volRelaxContact: 5,
+      contact: 'roll-side-fix',
     },
     defects: [],
   };

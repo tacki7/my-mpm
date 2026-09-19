@@ -3,7 +3,7 @@
 // cells about 12 min (with other jobs running, 233 s and 32 min were measured).
 //
 //   node tools/slab-compare.mjs [--cells 10] [--L 16] [--mu 0.08] [--ms 10000] [--r 0.25]
-//                               [--R 100] [--h0 1] [--tb 0] [--tf 0] [--every 2000]
+//                               [--R 100] [--h0 1] [--tb 0] [--tf 0] [--every 2000] [--contact surface|stencil]
 //                               [--slab-only] [--profile [--merge 3]] [--json]
 //
 // Lengths in mm, tensions in MPa. The steady values are the plain mean of the
@@ -37,6 +37,7 @@ r.backTension = +opt('tb', 0) * 1e6;
 r.frontTension = +opt('tf', 0) * 1e6;
 P.numerics.cellsThrough = +opt('cells', P.numerics.cellsThrough);
 P.numerics.massScale = +opt('ms', P.numerics.massScale);
+P.numerics.contact = opt('contact', P.numerics.contact); // 'stencil': the contact of before (a band 1.5 cells deep)
 P.damage.model = 'none';
 const every = +opt('every', 2000);
 const json = flag('json');
