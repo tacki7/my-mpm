@@ -24,11 +24,15 @@ export const PRESETS: Preset[] = [
   {
     id: 'front-tension',
     label: '前方張力が過大',
-    note: '出側の張力が加工硬化後の降伏応力に近い。出口の先で板が伸び、くびれて破断する。',
+    note: '前方張力 580 MPa が出側の板の平面ひずみ降伏（約 557 MPa）を超える。出口の先で板が伸び、くびれて破断する（ロールに対して滑りはしないが先進率は約 30 %）。',
     build: () => {
       const p = defaultParams();
       p.material = { ...STEEL_SPCC };
-      p.rolling.frontTension = 480 * MPa;
+      // 35 % and μ 0.15: the rolls can hold more front tension (about 598 MPa by the slab method) than
+      // the rolled strip can carry (2k ≈ 557 MPa), so the strip yields past the exit without skidding
+      p.rolling.reduction = 0.35;
+      p.rolling.mu = 0.15;
+      p.rolling.frontTension = 580 * MPa;
       p.damage = { ...DAMAGE_4340, model: 'cockcroft-latham', clCrit: 0.35 };
       return p;
     },
@@ -70,7 +74,7 @@ export const PRESETS: Preset[] = [
   {
     id: 'high-friction',
     label: '高摩擦・低延性',
-    note: '潤滑切れ（μ = 0.25）の低延性アルミ。表層のせん断と入口の引張で表面から割れる。',
+    note: '潤滑切れ（μ = 0.25）の低延性アルミ。表層の三軸度はこのモデルでは負のままで、表面からは割れない（docs/presets.md）。',
     build: () => {
       const p = defaultParams();
       p.rolling.mu = 0.25;
