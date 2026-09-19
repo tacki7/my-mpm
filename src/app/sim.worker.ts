@@ -1,8 +1,11 @@
 // Runs the MPM in its own thread and streams frames to the page (~30 per second).
 import { Sim, type FieldName } from '../mpm/solver.ts';
 import type { FromWorker, ToWorker, Frame } from './protocol.ts';
+import { Tracker } from './tracker.ts';
 
 let sim: Sim | null = null;
+let tracker: Tracker | null = null;
+let selected: number | null = null;
 let field: FieldName = 'seq';
 let running = false;
 let stopAfter: number | null = null;
@@ -44,6 +47,7 @@ function frame(): void {
     diag,
     profile: { x: Array.from(prof.x), p: Array.from(prof.p), tau: Array.from(prof.tau) },
     cracks: s.cracks.map((c, i) => ({ ...c, cx: cent[i].x, cy: cent[i].y })),
+    tracks: tracker ? tracker.tracks(selected) : [],
     running,
     msPerStep,
   };
@@ -58,6 +62,7 @@ function loop(): void {
   while (performance.now() - t0 < FRAME_MS - 6) {
     const chunk = stopAfter === null ? 20 : Math.min(20, stopAfter - sim.step);
     for (let k = 0; k < chunk; k++) sim.advance();
+    tracker?.record();
     steps += Math.max(0, chunk);
     if (stopAfter !== null && sim.step >= stopAfter) break;
   }
@@ -82,6 +87,10 @@ self.onmessage = (e: MessageEvent<ToWorker>) => {
         field = m.field;
         stopAfter = m.stopAfter;
         sim = new Sim(m.params);
+        tracker = new Tracker(sim);
+        selected = null;
+        // headless checks read the simulation itself through the worker target (tools/browser/explorer.mjs)
+        (self as unknown as { __sim: Sim }).__sim = sim;
         post({
           type: 'ready',
           geometry: {
@@ -112,6 +121,10 @@ self.onmessage = (e: MessageEvent<ToWorker>) => {
         break;
       case 'field':
         field = m.field;
+        if (!running) frame();
+        break;
+      case 'select':
+        selected = m.particle;
         if (!running) frame();
         break;
     }

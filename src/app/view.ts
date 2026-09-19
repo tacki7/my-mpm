@@ -20,6 +20,8 @@ export class BiteView {
   private dpr = 1;
   geometry: Geometry | null = null;
   frame: Frame | null = null;
+  /** points followed by the stress explorer, ringed on top of the sheet */
+  marks: { id: number; kind: 'selected' | 'first-crack' | 'max-damage' }[] = [];
   state: ViewState = { exaggeration: 1, range: [0, 1] };
   private readonly canvas: HTMLCanvasElement;
 
@@ -68,7 +70,57 @@ export class BiteView {
     if (f) {
       this.drawParticles(T, f);
       this.drawStamps(T, f);
+      this.drawMarks(T, f);
     }
+  }
+
+  /** The active point nearest to a click (client coordinates) within `radius` px, or −1. */
+  pick(clientX: number, clientY: number, radius = 12): number {
+    const f = this.frame;
+    if (!f || !this.geometry) return -1;
+    const r = this.canvas.getBoundingClientRect();
+    const x = clientX - r.left;
+    const y = clientY - r.top;
+    const T = this.transform();
+    let best = -1;
+    let bd = radius * radius;
+    for (let p = 0; p < f.flags.length; p++) {
+      if (!(f.flags[p] & 1)) continue;
+      const dx = T.X(f.pos[2 * p]) - x;
+      const dy = T.Y(f.pos[2 * p + 1]) - y;
+      const d = dx * dx + dy * dy;
+      if (d < bd) {
+        bd = d;
+        best = p;
+      }
+    }
+    return best;
+  }
+
+  /** Client coordinates of a point (headless checks click it), or null when nothing is drawn. */
+  screenOf(p: number): { x: number; y: number } | null {
+    const f = this.frame;
+    if (!f || !this.geometry || p < 0 || p >= f.flags.length) return null;
+    const r = this.canvas.getBoundingClientRect();
+    const T = this.transform();
+    return { x: r.left + T.X(f.pos[2 * p]), y: r.top + T.Y(f.pos[2 * p + 1]) };
+  }
+
+  private drawMarks(T: ReturnType<BiteView['transform']>, f: Frame): void {
+    const ctx = this.ctx;
+    ctx.save();
+    for (const m of this.marks) {
+      if (m.id < 0 || m.id >= f.flags.length || !(f.flags[m.id] & 1)) continue;
+      const x = T.X(f.pos[2 * m.id]);
+      const y = T.Y(f.pos[2 * m.id + 1]);
+      ctx.beginPath();
+      ctx.arc(x, y, m.kind === 'selected' ? 8 : 6, 0, Math.PI * 2);
+      ctx.setLineDash(m.kind === 'max-damage' ? [3, 2] : []);
+      ctx.lineWidth = 2;
+      ctx.strokeStyle = m.kind === 'first-crack' ? '#c23b22' : m.kind === 'max-damage' ? '#8d5a33' : '#1d2a3a';
+      ctx.stroke();
+    }
+    ctx.restore();
   }
 
   private drawRolls(T: ReturnType<BiteView['transform']>, t: number): void {
