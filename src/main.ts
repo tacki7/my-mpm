@@ -10,6 +10,7 @@ import { buildPanel } from './app/panel.ts';
 import type { CrackView, Frame, FromWorker, Geometry, ToWorker } from './app/protocol.ts';
 import { applyQuery, stopAfterOf } from './app/query.ts';
 import { Overview } from './app/overview.ts';
+import { PlanMode } from './app/planMode.ts';
 import { BiteView } from './app/view.ts';
 import { attachViewControls } from './app/viewControls.ts';
 import { drawForceChart, drawHillChart, slabReference, type ForceChartData } from './app/slabOverlay.ts';
@@ -79,12 +80,40 @@ panel.show(params);
 const showNote = () => ($('preset-note').textContent = presetById(presetId)?.note ?? '');
 showNote();
 
+// the plan view (板幅方向): its own worker and picture; the shared buttons go to it while it is shown
+const plan = new PlanMode(
+  {
+    query,
+    panelRoot: $('panel'),
+    conditions: () => {
+      readConditions();
+      return params;
+    },
+    presetId: () => presetId,
+    preset: () => presetById(presetId)!.build(),
+    onEdit: () => {
+      edited = true;
+      $('reset').classList.add('pending');
+    },
+    onMode: (mode) => {
+      if (mode === 'plan' && running) {
+        running = false;
+        send({ type: 'pause' });
+      }
+      updateButtons();
+      dirty = true;
+    },
+  },
+  stopAfter,
+);
+
 presetSel.addEventListener('change', () => {
   presetId = presetSel.value;
   params = presetById(presetId)!.build();
   panel.show(params);
   showNote();
   restart();
+  if (plan.active) plan.restart(params);
 });
 
 // ── field tabs ──────────────────────────────────────────────────────────────
@@ -120,7 +149,7 @@ function startWorker() {
       if (!geometry || geometry.h0 !== m.geometry.h0 || geometry.contactLength !== m.geometry.contactLength) view.resetView();
       geometry = m.geometry;
       view.geometry = geometry;
-      if (query.get('autorun') === '1' && frames === 0) run();
+      if (query.get('autorun') === '1' && frames === 0 && !plan.active) run();
     } else if (m.type === 'frame') {
       if (!awaitingReady) onFrame(m);
     }
@@ -129,13 +158,18 @@ function startWorker() {
   worker.onerror = (e) => showError(e.message);
 }
 
-function restart() {
+/** the panel's edits into params (what runs, after clamping) */
+function readConditions() {
   if (edited) {
     params = panel.read(params);
-    panel.show(params); // what runs, after clamping
+    panel.show(params);
   }
   edited = false;
   $('reset').classList.remove('pending');
+}
+
+function restart() {
+  readConditions();
   history.t.length = 0;
   kineticSum = 0;
   kineticN = 0;
@@ -160,15 +194,21 @@ function run() {
   updateButtons();
 }
 
-$('run').addEventListener('click', run);
+$('run').addEventListener('click', () => (plan.active ? plan.run() : run()));
 $('pause').addEventListener('click', () => {
+  if (plan.active) return plan.pause();
   running = false;
   send({ type: 'pause' });
   updateButtons();
 });
-$('reset').addEventListener('click', restart);
+$('reset').addEventListener('click', () => {
+  // the new conditions go to both models; only the one shown runs
+  restart();
+  if (plan.active) plan.restart(params);
+});
 
 function updateButtons() {
+  if (plan.active) return plan.updateButtons();
   const done = last?.diag.phase === 'done' || last?.diag.phase === 'stalled';
   ($('run') as HTMLButtonElement).disabled = running || done;
   ($('pause') as HTMLButtonElement).disabled = !running;
@@ -408,9 +448,12 @@ window.__mpm = {
   run,
   restart,
   setField,
+  /** the plan view (板幅方向; tools/browser/planview.mjs) */
+  plan: plan.hook(),
 };
 
 startWorker();
 setField(field);
 restart();
 requestAnimationFrame(frameLoop);
+if (query.get('view') === 'plan') plan.setMode('plan');
