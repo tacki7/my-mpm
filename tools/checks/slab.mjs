@@ -1,7 +1,8 @@
 // The slab method (src/mpm/slab.ts) against answers worked out independently:
-// closed forms for a constant flow stress, the textbook Bland-Ford solution, and
-// the directions in which friction and tensions must move the load and the
-// neutral point. The comparison with the MPM is in docs/validation.md.
+// closed forms for a constant flow stress, a quadrature for the real flow stress
+// without friction, the textbook Bland-Ford solution, the returned pressure and
+// friction arrays, and the directions in which friction and tensions must move the
+// load and the neutral point. The comparison with the MPM is in docs/validation.md.
 // @check
 import { ok, near, between, done } from './lib.mjs';
 import { karman } from '../../src/mpm/slab.ts';
@@ -27,6 +28,44 @@ const maxRel = (a, b) => a.reduce((m, v, i) => Math.max(m, Math.abs(v - b[i]) / 
   ok(maxRel(s.pEntry, eIn) < 1e-7, 'μ = 0: entry branch p = 2k(1 − ln(h0/h))', `max rel. error ${maxRel(s.pEntry, eIn).toExponential(2)}`);
   ok(maxRel(s.pExit, eOut) < 1e-7, 'μ = 0: exit branch p = 2k(1 + ln(h/hf))', `max rel. error ${maxRel(s.pExit, eOut).toExponential(2)}`);
   ok(!s.crossed, 'μ = 0: no neutral point (friction cannot draw the strip in)');
+}
+
+// ── 1b. no friction, the real SPCC (hardening and rate factor): h dσx = −2k dh still holds, so
+//       σx = ∫ 2k dh/h from the entry (and from the exit). 2k(h) written out here from the Swift law,
+//       εp = (2/√3) ln(h0/h) and the rate (2/√3) v |dh/dx| / h with v = v_mill hf/h (no slip without
+//       friction), and integrated in h by the midpoint rule
+{
+  const r = with_({ mu: 0 });
+  const m = P.material;
+  const s = karman(r, m);
+  const { gap: hf } = biteGeometry(r);
+  const R = r.rollRadius;
+  const c = 2 / Math.sqrt(3);
+  const twoKh = (h) => {
+    const x = -Math.sqrt(R * R - (R - (h - hf) / 2) ** 2);
+    const rate = (c * ((r.millSpeed * hf) / h) * ((-2 * x) / Math.sqrt(R * R - x * x))) / h;
+    const rf = rate > m.epsDot0 ? 1 + m.jcC * Math.log(rate / m.epsDot0) : 1;
+    return c * m.swK * Math.pow(m.swE0 + c * Math.log(r.h0 / h), m.swN) * rf;
+  };
+  const integral = (a, b) => {
+    const N = 4000;
+    let I = 0;
+    for (let j = 0; j < N; j++) {
+      const mid = a + ((b - a) * (j + 0.5)) / N;
+      I += (twoKh(mid) * (b - a)) / N / mid;
+    }
+    return I;
+  };
+  let eIn = 0;
+  let eOut = 0;
+  for (let i = 0; i < s.x.length; i += 50) {
+    const h = s.h[i];
+    const k2 = twoKh(h);
+    eIn = Math.max(eIn, Math.abs(s.pEntry[i] - (k2 - integral(h, r.h0))) / k2);
+    eOut = Math.max(eOut, Math.abs(s.pExit[i] - (k2 + integral(hf, h))) / k2);
+  }
+  ok(eIn < 1e-5, 'μ = 0, SPCC with hardening and rate: entry branch = quadrature of h dσx = −2k dh', `max |Δp| / 2k ${eIn.toExponential(2)}`);
+  ok(eOut < 1e-5, 'μ = 0, SPCC with hardening and rate: exit branch = quadrature', `max |Δp| / 2k ${eOut.toExponential(2)}`);
 }
 
 // ── 2. friction, constant k: the equation is linear, h dp/dx = 2sμp − 4k tan φ.
@@ -126,6 +165,39 @@ for (const [r, tolP, tolN] of [
   near(s.xNeutral, bf.xN, tolN, `Bland-Ford neutral point, r = ${r.reduction * 100} %, μ = ${r.mu}`);
 }
 
+// ── 3b. the returned pressure and friction: p is the lower branch, τ = μp pointing to the neutral
+//       point, and they integrate to the roll force
+for (const r of [std, with_({ mu: 0.15, backTension: 60e6, frontTension: 120e6 })]) {
+  const s = karman(r, P.material);
+  const R = r.rollRadius;
+  let eP = 0;
+  let eT = 0;
+  let F = 0;
+  for (let i = 0; i < s.x.length; i++) {
+    eP = Math.max(eP, Math.abs(s.p[i] - Math.min(s.pEntry[i], s.pExit[i])) / s.twoK[i]);
+    const sgn = s.x[i] < s.xNeutral ? 1 : -1;
+    eT = Math.max(eT, Math.abs(s.tau[i] - sgn * r.mu * s.p[i]) / s.twoK[i]);
+    if (i > 0) {
+      const t = (x) => -x / Math.sqrt(R * R - x * x);
+      const fa = s.p[i - 1] + s.tau[i - 1] * t(s.x[i - 1]);
+      const fb = s.p[i] + s.tau[i] * t(s.x[i]);
+      F += 0.5 * (s.x[i] - s.x[i - 1]) * (fa + fb);
+    }
+  }
+  const tag = `μ ${r.mu}, tensions ${r.backTension * 1e-6}/${r.frontTension * 1e-6} MPa`;
+  ok(eP < 1e-12, `${tag}: p = min(entry branch, exit branch)`, `max ${eP.toExponential(2)}`);
+  ok(eT < 1e-12, `${tag}: τ = +μp before the neutral point, −μp after`, `max ${eT.toExponential(2)}`);
+  near(F, s.force, 1e-3, `${tag}: ∫ (p + τ tan φ) dx over the returned arrays = roll force`);
+}
+
+// ── 3c. the model's own limits are flagged
+{
+  const m = P.material;
+  ok(!karman(std, m).sticking && !karman(std, m).tensionAtYield, 'standard condition: no sticking, tensions below yield');
+  ok(karman(with_({ mu: 0.6 }), rigid).sticking, 'μ = 0.6: μp > k somewhere → sticking flagged');
+  ok(karman(with_({ frontTension: 600e6 }), m).tensionAtYield, 'front tension 600 MPa ≥ 2k at the exit → flagged');
+}
+
 // ── 4. light pass, little friction: p ≈ 2k all along the bite
 {
   const s = karman(with_({ reduction: 0.01, mu: 0.02 }), rigid);
@@ -149,6 +221,6 @@ for (const [r, tolP, tolN] of [
     `${(b.forwardSlip * 100).toFixed(2)} % → ${(f.forwardSlip * 100).toFixed(2)} %`);
   // standard condition (SPCC, rate factor): docs/validation.md compares this with the MPM
   ok(b.crossed, 'standard condition: the branches cross (the strip is drawn in)');
-  between(b.force * 1e-6, 2.5, 3.5, 'standard condition roll force [kN/mm] (hand estimate ≈ 2.9)');
+  between(b.force * 1e-6, 2.5, 3.5, 'standard condition roll force [kN/mm] (hand estimate ≈ 2.9, the slab method 3.03)');
 }
 done();

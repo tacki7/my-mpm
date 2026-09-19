@@ -44,10 +44,15 @@ export interface SlabResult {
   forwardSlip: number;
   /** false when the branches do not cross: friction cannot draw the strip in (it would skid) */
   crossed: boolean;
+  /** somewhere μp > k: Coulomb friction asks for more than the shear yield stress (the strip would stick; the result is not valid) */
+  sticking: boolean;
+  /** a tension reaches the plane-strain flow stress 2k where it acts (the strip would yield outside the bite) */
+  tensionAtYield: boolean;
   contactLength: number;
   biteAngle: number;
-  /** mean pressure over the projected contact length, and mean 2k [Pa] */
+  /** roll force / projected contact length (the vertical force includes the friction's share) [Pa] */
   pMean: number;
+  /** mean 2k over the projected contact length [Pa] */
   twoKMean: number;
 }
 
@@ -135,10 +140,12 @@ export function karman(r: RollingParams, m: MaterialParams, n = 2000): SlabResul
 
     const p = new Float64Array(n + 1);
     const tau = new Float64Array(n + 1);
+    let sticking = false;
     for (let i = 0; i <= n; i++) {
       const s = x[i] < xN ? 1 : -1;
       p[i] = x[i] < xN ? pEntry[i] : pExit[i];
       tau[i] = s * mu * p[i];
+      if (Math.abs(tau[i]) > 0.5 * twoK[i]) sticking = true;
     }
     // On the roll: the normal force p ds has the vertical part p dx, the friction
     // s μ p ds adds s μ p tan φ dx; the friction resists the roll where it drags the
@@ -183,6 +190,8 @@ export function karman(r: RollingParams, m: MaterialParams, n = 2000): SlabResul
       phiNeutral: phiN,
       forwardSlip: slip,
       crossed,
+      sticking,
+      tensionAtYield: r.backTension >= twoK[0] || r.frontTension >= twoK[n],
       contactLength: L,
       biteAngle,
       pMean: force / L,

@@ -1,5 +1,6 @@
 // The MPM's steady rolling against the slab method (src/mpm/slab.ts) for the same
-// condition. Not a gate check: a 10-cell run takes about 90 s, 20 cells about 12 min.
+// condition. Not a gate check: on an idle Apple M2 a 10-cell run takes about 90 s and 20
+// cells about 12 min (with other jobs running, 233 s and 32 min were measured).
 //
 //   node tools/slab-compare.mjs [--cells 10] [--L 16] [--mu 0.08] [--ms 10000] [--r 0.25]
 //                               [--R 100] [--h0 1] [--tb 0] [--tf 0] [--every 2000]
@@ -52,8 +53,12 @@ const out = {
     crossed: slab.crossed,
     pMean_MPa: slab.pMean * 1e-6,
     twoKMean_MPa: slab.twoKMean * 1e-6,
+    sticking: slab.sticking,
+    tensionAtYield: slab.tensionAtYield,
   },
 };
+if (slab.sticking) say('warning: μp > k somewhere in the bite, the slab method does not hold (sticking friction)');
+if (slab.tensionAtYield) say('warning: a tension reaches 2k, the strip would yield outside the bite');
 say(`slab: F ${out.slab.force_kN_per_mm.toFixed(4)} kN/mm  T ${slab.torque.toFixed(1)} N  slip ${(slab.forwardSlip * 100).toFixed(2)} %  xn ${out.slab.xNeutral_mm.toFixed(3)} mm  p̄ ${out.slab.pMean_MPa.toFixed(1)} MPa  2k̄ ${out.slab.twoKMean_MPa.toFixed(1)} MPa${slab.crossed ? '' : '  (no neutral point)'}`);
 
 if (!flag('slab-only')) {
@@ -100,13 +105,19 @@ if (!flag('slab-only')) {
     forwardSlipMax: Math.max(...slips),
     xNeutral_mm: xns.length ? mean(xns) * 1e3 : null,
   };
+  // Mass scaling makes the rolls accelerate a heavier strip: the extra forward friction
+  // ṁ (v1 − v0), ṁ = ms ρ h0 v0, costs each roll about ṁ (v1 − v0) R / 2 of torque.
+  const v1 = r.rollSpeed * (1 + out.mpm.forwardSlip);
+  const v0 = (v1 * out.mpm.exitThickness_mm * 1e-3) / r.h0;
+  out.mpm.inertiaTorque_N = (P.numerics.massScale * P.material.rho * r.h0 * v0 * (v1 - v0) * r.rollRadius) / 2;
   out.ratio = {
     force: out.mpm.force_kN_per_mm / out.slab.force_kN_per_mm,
     torque: out.mpm.torque_N / out.slab.torque_N,
+    torqueLessInertia: (out.mpm.torque_N - out.mpm.inertiaTorque_N) / out.slab.torque_N,
   };
   const m = out.mpm;
   say(`mpm:  F ${m.force_kN_per_mm.toFixed(4)} ± ${m.forceSd_kN_per_mm.toFixed(4)} kN/mm  T ${m.torque_N.toFixed(1)} N  slip ${(m.forwardSlip * 100).toFixed(2)} % (${(m.forwardSlipMin * 100).toFixed(2)}〜${(m.forwardSlipMax * 100).toFixed(2)})  h1 ${m.exitThickness_mm.toFixed(4)} mm${m.xNeutral_mm != null ? `  xn ${m.xNeutral_mm.toFixed(3)} mm` : ''}  — ${m.steadySamples} steady samples × ${every} steps, ${m.steps} steps, ${secs.toFixed(1)} s, phase ${m.phase}`);
-  say(`mpm / slab: force ${out.ratio.force.toFixed(3)}, torque ${out.ratio.torque.toFixed(3)}`);
+  say(`mpm / slab: force ${out.ratio.force.toFixed(3)}, torque ${out.ratio.torque.toFixed(3)} (${out.ratio.torqueLessInertia.toFixed(3)} without the inertia of the mass scaling, ${m.inertiaTorque_N.toFixed(0)} N)`);
   if (flag('profile') && prof) {
     // Print means over `--merge` bins: in solvers whose bins have the grid nodes on
     // their edges, single bins alternate between empty and double.
