@@ -32,7 +32,8 @@ const surface = () => {
       const rx = sim.px[q] - roll.cx;
       const ry = sim.py[q] - roll.cy;
       const d = Math.hypot(rx, ry);
-      const sink = (roll.R + 0.5 * dp * Math.hypot(sim.f01[q], sim.f11[q]) - d) / dp;
+      // the edge along the roll normal: half the deformed y edge projected on n (|F e_y| itself grows with shear)
+      const sink = (roll.R + 0.5 * dp * Math.abs((rx * sim.f01[q] + ry * sim.f11[q]) / d) - d) / dp;
       if (sink > sinkMax) sinkMax = sink;
       const b = Math.floor((sim.px[q] - sim.binX0) / sim.binW);
       if (b < 0 || b >= sim.nBins) continue;
@@ -126,6 +127,6 @@ between(mean(hill.map((h) => h.xn / h.ford)), 0.75, 1.25, "neutral point / Ford'
 ok(last.nFailed === 0, 'ductile SPCC at 25 % does not crack', `${last.nFailed} failed, max D ${last.maxDamage.toFixed(3)}`);
 // the contact acts at the surface (marking the whole 3 × 3 stencil pinned a band 1.5 cells deep: 0.57, rows −0.02 / 0.68)
 between(mean(layer), 0.75, 1.25, 'outermost particles carry the roll pressure (−n·σ·n / p, middle half of the bite)');
-between(sinkMax, 0, 0.02, 'no particle edge sinks into a roll (deepest edge, in dp; 0.071 with the roll-side nodes held to the roll surface velocity alone)');
+between(sinkMax, 0, 0.02, 'no particle edge sinks into a roll (deepest edge along the roll normal, in dp; 0.07 with the roll-side nodes held to the roll surface velocity alone)');
 between(thin(0) / thin(Math.floor(NJ / 2) - 1), 0.8, 1.2, 'surface rows get about as much thinner as the centre rows (ln of the spacing ratio)');
 done();

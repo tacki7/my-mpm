@@ -177,7 +177,16 @@ export class Sim {
   readonly gB: Float64Array; // 'rate': mass-weighted relaxation fraction β_i
   readonly gMv: Float64Array; // 'rate': nodal mass of the points in the averages (intact, J > 0)
   readonly gcon: Uint8Array; // this step: bit k set when roll k constrains the node
-  private readonly projBuf = new Float64Array(16); // gridUpdate: each roll's projection of a node
+  private readonly projBuf = new Float64Array(20); // gridUpdate: each roll's projection of a node
+  // per roll and node (roll k at k · nodes + node): the slip velocity left after the contact (weighted), which
+  // followRoll's extra normal impulse may still reduce by Coulomb
+  private readonly gslipX: Float64Array;
+  private readonly gslipY: Float64Array;
+  /** this step, per node, both rolls: the contact's normal and tangential impulse on the sheet [kg·m/s per m], and
+   *  whether the node still slides on a roll after it (1) — the effective friction is Jt / Jn on sliding nodes */
+  readonly contactJn: Float64Array;
+  readonly contactJt: Float64Array;
+  readonly contactSlip: Uint8Array;
   // 'surface': per roll and node (roll k at k · nodes + node), Σ w m (requested normal velocity change) and Σ w m
   private readonly gfolN: Float64Array;
   private readonly gfolD: Float64Array;
@@ -325,6 +334,11 @@ export class Sim {
     this.gpen = [new Float64Array(nNodes), new Float64Array(nNodes)];
     this.gpush = new Uint8Array(nNodes);
     this.gcon = new Uint8Array(nNodes);
+    this.gslipX = new Float64Array(2 * nNodes);
+    this.gslipY = new Float64Array(2 * nNodes);
+    this.contactJn = new Float64Array(nNodes);
+    this.contactJt = new Float64Array(nNodes);
+    this.contactSlip = new Uint8Array(nNodes);
     this.gfolN = new Float64Array(2 * nNodes);
     this.gfolD = new Float64Array(2 * nNodes);
     this.gJ = new Float64Array(nNodes);
@@ -491,6 +505,9 @@ export class Sim {
     gpen1.fill(INF);
     gpush.fill(0);
     this.gcon.fill(0);
+    this.contactJn.fill(0);
+    this.contactJt.fill(0);
+    this.contactSlip.fill(0);
     this.updatePusher();
     if (!this.pusherActive && !this.stalled && this.step % 50 === 0) this.checkStall();
     this.p2g();
@@ -593,8 +610,9 @@ export class Sim {
   /**
    * Roll k's contact on a node with velocity (vx, vy) at (xi, yi): the approaching normal velocity
    * relative to the roll surface is removed and the tangential one limited by Coulomb friction.
-   * Writes the new velocity, the node relative to the roll centre, the unit normal and the gap to the
-   * surface at out[o8..o8+6] (o8 = 8 k); false when the node separates (no contact).
+   * Writes the new velocity, the node relative to the roll centre, the unit normal, the gap to the
+   * surface and the slip velocity left (relative to the surface) at out[o..o+8] (o = 10 slot); false when
+   * the node separates (no contact).
    */
   private projectRoll(k: number, vx: number, vy: number, xi: number, yi: number, mu: number, out: Float64Array, slot: number): boolean {
     const roll = this.rolls[k];
@@ -620,7 +638,7 @@ export class Sim {
       sx = tx * s;
       sy = ty * s;
     }
-    const o = 8 * slot;
+    const o = 10 * slot;
     out[o] = ux + sx;
     out[o + 1] = uy + sy;
     out[o + 2] = rx;
@@ -628,6 +646,8 @@ export class Sim {
     out[o + 4] = nx;
     out[o + 5] = ny;
     out[o + 6] = d - roll.R;
+    out[o + 7] = sx;
+    out[o + 8] = sy;
     return true;
   }
 
@@ -664,7 +684,7 @@ export class Sim {
       let w0 = on0 ? 1 : 0;
       let w1 = on1 ? 1 : 0;
       if (on0 && on1) {
-        const g = proj[6] - proj[14]; // distances to the two surfaces
+        const g = proj[6] - proj[16]; // distances to the two surfaces
         w0 = Math.abs(g) <= 1e-12 * h ? 0.5 : g < 0 ? 1 : 0;
         w1 = 1 - w0;
       }
@@ -674,7 +694,7 @@ export class Sim {
         for (let k = 0; k < 2; k++) {
           const wk = k === 0 ? w0 : w1;
           if (!(wk > 0)) continue;
-          const o = 8 * k;
+          const o = 10 * k;
           const [kvx, kvy, rx, ry, nx, ny] = [proj[o], proj[o + 1], proj[o + 2], proj[o + 3], proj[o + 4], proj[o + 5]];
           this.gcon[idx] |= 1 << k;
           nvx += wk * kvx;
@@ -684,6 +704,14 @@ export class Sim {
           const fy = wk * m * (kvy - vy) * invDt;
           fyAcc[k] += -fy;
           tqAcc[k] += -(rx * fy - ry * fx);
+          // the impulse on the sheet, and the slip left for followRoll's Coulomb bound
+          const jn = (fx * nx + fy * ny) * dt;
+          this.contactJn[idx] += jn;
+          this.contactJt[idx] += Math.hypot(fx * dt - jn * nx, fy * dt - jn * ny);
+          const kIdx = k * nNodes + idx;
+          this.gslipX[kIdx] = wk * proj[o + 7];
+          this.gslipY[kIdx] = wk * proj[o + 8];
+          if (proj[o + 7] !== 0 || proj[o + 8] !== 0) this.contactSlip[idx] = 1;
           const b = col - binCol0;
           if (b >= 0 && b < nBins) {
             const fn = fx * nx + fy * ny;
@@ -883,6 +911,7 @@ export class Sim {
   private followRoll(fyAcc: number[], tqAcc: number[]): void {
     const { n, active, touch, px, py, gvx, gvy, gm, gcon, gfolN, gfolD, mass, h, invH, ox, oy, nyN, dt } = this;
     const nNodes = this.nxN * nyN;
+    const mu = this.params.rolling.mu;
     const k4 = 4 * invH * invH;
     const w = [0, 0, 0, 0, 0, 0, 0, 0, 0];
     const touched: number[] = [];
@@ -956,14 +985,52 @@ export class Sim {
       const ny = ry / d;
       gvx[idx] += dv * nx;
       gvy[idx] += dv * ny;
-      const f = gm[idx] * dv * invDt; // on the sheet, along n
-      fyAcc[k] += -f * ny;
-      tqAcc[k] += -(rx * f * ny - ry * f * nx);
+      const mi = gm[idx];
+      this.contactJn[idx] += mi * dv;
+      // Coulomb counts this normal impulse too: a sliding node's slip shrinks by μ dv more (down to sticking)
+      const sx = this.gslipX[kIdx];
+      const sy = this.gslipY[kIdx];
+      const sl = Math.hypot(sx, sy);
+      let tx = 0;
+      let ty = 0;
+      if (sl > 0) {
+        const ds = Math.min(sl, mu * dv);
+        tx = (-ds * sx) / sl;
+        ty = (-ds * sy) / sl;
+        gvx[idx] += tx;
+        gvy[idx] += ty;
+        this.gslipX[kIdx] = sx + tx;
+        this.gslipY[kIdx] = sy + ty;
+        this.contactJt[idx] += mi * ds;
+      }
+      const f = mi * dv * invDt; // on the sheet, along n
+      const fx = f * nx + mi * tx * invDt;
+      const fy = f * ny + mi * ty * invDt;
+      fyAcc[k] += -fy;
+      tqAcc[k] += -(rx * fy - ry * fx);
       const b = col - this.binCol0;
       if (b >= 0 && b < this.nBins) {
         this.binN[b] += f;
         this.accN[b] += f;
+        if (sl > 0) {
+          // tangent with +x orientation
+          const tnx = ny < 0 ? -ny : ny;
+          const tny = ny < 0 ? nx : -nx;
+          const ft = mi * (tx * tnx + ty * tny) * invDt;
+          this.binT[b] += ft;
+          this.accTau[b] += ft;
+        }
       }
+    }
+    // a node still slides if some roll that holds it left it a slip
+    for (const kIdx of touched) {
+      const idx = kIdx < nNodes ? kIdx : kIdx - nNodes;
+      let slides = 0;
+      for (let k = 0; k < 2; k++) {
+        const j = k * nNodes + idx;
+        if (gcon[idx] & (1 << k) && (this.gslipX[j] !== 0 || this.gslipY[j] !== 0)) slides = 1;
+      }
+      this.contactSlip[idx] = slides;
     }
   }
 

@@ -66,8 +66,8 @@ function run(contact, cells, jbar, vol) {
           const ry = sim.py[q] - roll.cy;
           const d = Math.hypot(rx, ry);
           if (l === 0) {
-            // the particle's edge toward the roll: half its deformed height
-            const rp = 0.5 * dp * Math.hypot(sim.f01[q], sim.f11[q]);
+            // along the roll normal: half the deformed y edge projected on n (|F e_y| grows with shear)
+            const rp = 0.5 * dp * Math.abs((rx * sim.f01[q] + ry * sim.f11[q]) / d);
             const pen = (roll.R + rp - d) / dp;
             if (pen > penWin) penWin = pen;
             if (sim.px[q] > -Lc && sim.px[q] < 0) etaWin.push(sim.eta[q]);
