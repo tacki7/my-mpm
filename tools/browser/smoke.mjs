@@ -7,7 +7,7 @@
 //
 // <url> is the page, e.g. http://localhost:<dev>/ . autorun=1, cells=6, L=8 and
 // stopafter=12000 are added unless the URL sets them. The bands are for the
-// standard preset on that coarse mesh (docs/validation.md: 3.25 kN/mm, 0.7534 mm).
+// standard preset on that coarse mesh (docs/validation.md: 3.20 kN/mm, 0.7509 mm).
 // Prints one PASS / FAIL line per item and exits 1 if any failed.
 import { connect } from './cdp.mjs';
 import { ok, between, done } from '../checks/lib.mjs';
@@ -74,7 +74,7 @@ try {
   ok(finished, 'the run finishes (__mpm.done)', `${last?.phase ?? 'no frame'} at step ${last?.step ?? 0}, ${secs()} s`);
   ok(last?.phase !== 'stalled', 'the sheet is bitten (not stalled)', last?.phase ?? 'no frame');
   ok(steady.length >= 2, 'steady frames are sampled', `${steady.length} frames`);
-  between(mean(steady.map((d) => d.rollForce)) * 1e-6, 2.8, 4.0, 'steady roll force [kN/mm] (6 cells: 3.25; 4.30 with the contact band of before)');
+  between(mean(steady.map((d) => d.rollForce)) * 1e-6, 2.8, 4.0, 'steady roll force [kN/mm] (6 cells: 3.20; 4.31 with the contact band of before)');
   between(mean(steady.map((d) => d.exitThickness ?? NaN)) * 1e3, 0.745, 0.765, 'exit thickness [mm] (gap 0.75 + springback)');
   between(mean(steady.map((d) => d.forwardSlip ?? NaN)) * 100, 0, 6, 'forward slip [%]');
   const hist = await c.evaluate('__mpm.history.F');
