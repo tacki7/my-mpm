@@ -3,20 +3,25 @@
 // cannot have edge cracks — it has no width; this one resolves the width and averages
 // through the thickness.
 //
-// - Half the width is solved: the mid-width plane z = 0 is a symmetry plane (grid nodes at
-//   z ≤ 0 get v_z = 0, v_x stays free); the edge z = W/2 is free.
-// - Thickness: where a point is thicker than the roll gap h_gap(x) it is in contact and its
-//   thickness follows the gap (D_yy = ln(h_gap/h)/Δt, imposed); the through-thickness stress
-//   σ_yy that comes out is minus the contact pressure. Elsewhere σ_yy = 0 (plane stress):
-//   D_yy is found by a secant iteration on σ_yy. If the imposed D_yy would pull (σ_yy > 0)
-//   the point is let go and treated as free.
+// - Half the width is solved: the mid-width plane z = 0 is a symmetry plane. The ghost nodes
+//   below it are folded onto their mirror images (z-momentum negated) and take the mirrored
+//   velocity back; the plane's own nodes get v_z = 0 with v_x free. The edge z = W/2 is free.
+// - Thickness, contact by complementarity: a point at least 0.99 of the roll gap h_gap(x) thick
+//   is tried at the gap (D_yy = ln(h_gap/h)/Δt, imposed) and stays in contact if that needs
+//   compression; the through-thickness stress σ_yy that comes out is minus the contact pressure.
+//   If it would pull (σ_yy > 0) the point is let go. Off the rolls σ_yy = 0 (plane stress): the
+//   root of σ_yy(D_yy) is bracketed and closed by secant steps with bisection, to 1 kPa.
 // - The stress is a 3D deviator (s_xx, s_zz, s_xz, s_yy) updated as in the section model
 //   (Jaumann rotation by the in-plane spin, elastic trial, J2 radial return of material.ts)
 //   with the pressure from the volume ratio (one place: volumeRatio / pressureOf).
 // - In-plane equilibrium through the thickness: ∂(h σ_ij)/∂x_j + 2τ_i + 2 p_c (−tan φ, 0) = 0.
 //   The MPM stress term carries V σ = A h σ; the rolls act on a point in contact as a body
-//   force: Coulomb friction μ p_c on both faces towards the roll's surface speed (regularised
-//   over 1 % of it), and the pressure's component along x on the sloping roll surfaces.
+//   force: the pressure's component along x on the sloping roll surfaces (explicit, on the
+//   point), and Coulomb friction on both faces towards the roll's surface speed. Friction is
+//   solved on the grid after the internal forces, like a contact return: each node gets the
+//   Coulomb capacity Σ w 2 min(μ p_c, k) A of its points in contact, and its trial velocity is
+//   brought towards the roll speed by at most capacity · Δt / m — sticking when that removes
+//   the slip, sliding at the full capacity otherwise. No regularisation, no dependence on Δt.
 // - Pusher, tensions, mass scaling and the mill-speed scaling of the strain rate mean the
 //   same as in the section model and use the same parameters.
 import { biteGeometry, type DamageModel, type Defect, type SimParams } from '../params.ts';
@@ -78,6 +83,11 @@ export class PlanSim {
   readonly gm: Float64Array;
   readonly gvx: Float64Array;
   readonly gvz: Float64Array;
+  /** Coulomb capacity of the node: Σ w · 2 min(μ p_c, k) A over its points in contact [N] */
+  readonly gcap: Float64Array;
+  /** friction the node got this step over its capacity (a vector of length ≤ 1; 1 = sliding) */
+  readonly gfx: Float64Array;
+  readonly gfz: Float64Array;
   private readonly gpush: Uint8Array;
 
   // particles (lattice order: index = i * NK + k, i from the tail, k from the mid-width)
@@ -109,7 +119,11 @@ export class PlanSim {
   readonly syy: Float64Array;
   readonly pres: Float64Array; // compression positive
   readonly pc: Float64Array; // contact pressure of the last step (0 when free) [Pa]
+  readonly fcap: Float64Array; // Coulomb capacity of the point this step, both faces: 2 min(μ p_c, k) A [N]
+  readonly fricX: Float64Array; // friction the rolls put on the point this step (both faces) [N]
+  readonly fricZ: Float64Array;
   readonly dyy: Float64Array; // thickness strain rate of the last step [1/s]
+  readonly rate: Float64Array; // equivalent strain rate of the last update, mill-speed scaled as the flow stress sees it [1/s]
   readonly ep: Float64Array;
   readonly seq: Float64Array;
   readonly eta: Float64Array;
@@ -136,6 +150,8 @@ export class PlanSim {
   // roll force accumulated since the last diagnostics read (per roll) [N]
   private accForce = 0;
   private accSteps = 0;
+  /** friction on the half strip this step, along x (Σ over the nodes; per roll pair, both faces) [N] */
+  frictionNow = 0;
 
   constructor(input: PlanSimParams) {
     const P: PlanSimParams = {
@@ -174,6 +190,9 @@ export class PlanSim {
     this.gm = new Float64Array(nNodes);
     this.gvx = new Float64Array(nNodes);
     this.gvz = new Float64Array(nNodes);
+    this.gcap = new Float64Array(nNodes);
+    this.gfx = new Float64Array(nNodes);
+    this.gfz = new Float64Array(nNodes);
     this.gpush = new Uint8Array(nNodes);
     this.xExitProbe = Math.max(3 * r.h0, 6 * h);
 
@@ -231,7 +250,11 @@ export class PlanSim {
     this.syy = F();
     this.pres = F();
     this.pc = F();
+    this.fcap = F();
+    this.fricX = F();
+    this.fricZ = F();
     this.dyy = F();
+    this.rate = F();
     this.ep = F();
     this.seq = F();
     this.eta = F();
@@ -298,13 +321,15 @@ export class PlanSim {
   }
 
   private p2g(): void {
-    const { n, active, px, pz, dt, h, invH, ox, oz, nzN, gm, gvx, gvz, gpush } = this;
+    const { n, active, px, pz, dt, h, invH, ox, oz, nzN, gm, gvx, gvz, gcap, gpush } = this;
     const r = this.params.rolling;
     const R = r.rollRadius;
-    const vRoll = r.rollSpeed;
     gm.fill(0);
     gvx.fill(0);
     gvz.fill(0);
+    gcap.fill(0);
+    this.gfx.fill(0);
+    this.gfz.fill(0);
     gpush.fill(0);
     const k4 = 4 * invH * invH;
     const grip = this.gripCols;
@@ -343,19 +368,19 @@ export class PlanSim {
       const a10 = k * this.sxz[p] + m * this.c10[p];
       const a11 = k * (this.szz[p] - pr) + m * this.c11[p];
       let mvx = m * this.vx[p];
-      let mvz = m * this.vz[p];
-      // the rolls on a point in contact: friction on both faces and the x-component of the pressure
+      const mvz = m * this.vz[p];
+      // the rolls on a point in contact: the x-component of the pressure here, the friction's
+      // capacity to the grid (the friction itself is solved on the nodes, gridUpdate)
       const pcp = this.pc[p];
+      let cap = 0;
       if (pcp > 0) {
-        const dvx = vRoll - this.vx[p];
-        const dvz = -this.vz[p];
-        const s = this.frictionFactor(p, area, dvx, dvz);
+        cap = this.frictionCapacity(p, area);
         const a = Math.min(Math.abs(xp), 0.999 * R);
         const tanPhi = -xp / Math.sqrt(R * R - a * a);
-        mvx += dt * (s * dvx - 2 * pcp * tanPhi * area);
-        mvz += dt * s * dvz;
+        mvx -= dt * 2 * pcp * tanPhi * area;
         force += pcp * area;
       }
+      this.fcap[p] = cap;
       const i = this.li[p];
       if (backForce !== 0 && i < grip) mvx -= dt * backForce * this.gripWeight(i, 1) * this.section(p);
       else if (frontForce !== 0 && i >= NI - grip) mvx += dt * frontForce * this.gripWeight(i, 2) * this.section(p);
@@ -372,6 +397,7 @@ export class PlanSim {
           gm[idx] += w * m;
           gvx[idx] += w * (mvx + a00 * dx + a01 * dz);
           gvz[idx] += w * (mvz + a10 * dx + a11 * dz);
+          if (cap > 0) gcap[idx] += w * cap;
           if (pushMark) gpush[idx] = 1;
         }
       }
@@ -381,10 +407,12 @@ export class PlanSim {
   }
 
   private gridUpdate(): void {
-    const { gm, gvx, gvz, gpush, nxN, nzN, oz, h } = this;
+    const { gm, gvx, gvz, gcap, gfx, gfz, gpush, nxN, nzN, oz, h, dt } = this;
     const mMin = 1e-12 * this.mass[0];
     const vPush = this.vIn;
+    const vRoll = this.params.rolling.rollSpeed;
     const pushing = this.pusherActive;
+    let friction = 0;
     // the mid-width plane z = 0 (node row kSym) is a symmetry plane: the ghost nodes below it are
     // folded onto their mirror images (z-momentum negated), the plane's own nodes get v_z = 0 (v_x
     // free), and the ghosts take the mirrored velocity back for the transfer to the points
@@ -397,6 +425,7 @@ export class PlanSim {
         gm[q] += gm[g];
         gvx[q] += gvx[g];
         gvz[q] -= gvz[g];
+        gcap[q] += gcap[g];
       }
       for (let k = kSym; k < nzN; k++) {
         const idx = col + k;
@@ -406,9 +435,28 @@ export class PlanSim {
           gvz[idx] = 0;
           continue;
         }
+        // trial velocity: the internal and the other external forces
         let vx = gvx[idx] / m;
         let vz = gvz[idx] / m;
         if (k === kSym) vz = 0;
+        // Coulomb friction with the rolls: bring the trial velocity towards the roll speed (vRoll, 0)
+        // by at most capacity · Δt / m — stick if that is enough, slide at the capacity if not
+        const c = gcap[idx];
+        if (c > 0) {
+          const sx = vRoll - vx;
+          const sz = -vz;
+          const slip = Math.sqrt(sx * sx + sz * sz);
+          if (slip > 0) {
+            const dv = Math.min((c * dt) / m, slip);
+            const f = dv / slip;
+            vx += f * sx;
+            vz += f * sz;
+            const fx = (m * f * sx) / dt; // the friction force on the node [N]
+            gfx[idx] = fx / c;
+            gfz[idx] = (m * f * sz) / dt / c;
+            friction += fx;
+          }
+        }
         if (pushing && gpush[idx] && vx < vPush) vx = vPush;
         gvx[idx] = vx;
         gvz[idx] = vz;
@@ -418,12 +466,15 @@ export class PlanSim {
         const q = col + 2 * kSym - k;
         gvx[g] = gvx[q];
         gvz[g] = -gvz[q];
+        gfx[g] = gfx[q];
+        gfz[g] = -gfz[q];
       }
     }
+    this.frictionNow = friction;
   }
 
   private g2p(): void {
-    const { n, active, px, pz, gvx, gvz, dt, h, invH, ox, oz, nzN, nxN } = this;
+    const { n, active, px, pz, gvx, gvz, gfx, gfz, dt, h, invH, ox, oz, nzN, nxN } = this;
     const k4 = 4 * invH * invH;
     const xMax = (nxN - 3) * h + ox;
     const zMax = (nzN - 3) * h + oz;
@@ -450,6 +501,9 @@ export class PlanSim {
       let b01 = 0;
       let b10 = 0;
       let b11 = 0;
+      let rx = 0;
+      let rz = 0;
+      const cap = this.fcap[p];
       for (let ii = 0; ii < 3; ii++) {
         const wx = ii === 0 ? wx0 : ii === 1 ? wx1 : wx2;
         const dx = (ii - fx) * h;
@@ -466,8 +520,16 @@ export class PlanSim {
           b01 += w * ux * dz;
           b10 += w * uz * dx;
           b11 += w * uz * dz;
+          if (cap > 0) {
+            rx += w * gfx[idx];
+            rz += w * gfz[idx];
+          }
         }
       }
+      // the friction the point got: its capacity times the mobilised share of its nodes (the
+      // shares are c_p w / c_i of each node's friction, so the points' friction sums to the nodes')
+      this.fricX[p] = cap * rx;
+      this.fricZ[p] = cap * rz;
       // APIC affine velocity = velocity gradient L (L_ij = ∂v_i/∂x_j)
       const l00 = k4 * b00;
       const l01 = k4 * b01;
@@ -598,6 +660,7 @@ export class PlanSim {
     this.pres[p] = out.pr;
     this.thick[p] = out.thick;
     this.dyy[p] = Dyy;
+    this.rate[p] = out.epsDot;
     const syyC = out.sy - out.pr;
     this.pc[p] = contact && syyC < 0 ? -syyC : 0;
     const q = out.q;
@@ -631,24 +694,23 @@ export class PlanSim {
   }
 
   /**
-   * Friction on point p in contact as s · Δv (Δv = roll surface speed − point speed) [N per m/s]:
-   * Coulomb on both faces, μ p_c each but at most the shear flow stress k (sticking), directed along
-   * Δv regularised over 1 % of the roll speed, and never more than the impulse that would bring the
-   * point to the roll speed in one step (explicit friction would ring).
+   * Most friction the rolls can put on point p in contact [N]: Coulomb on both faces, μ p_c each but
+   * at most the shear flow stress k. The grid (gridUpdate) uses what it takes to bring the nodes to
+   * the roll speed, up to this.
    */
-  frictionFactor(p: number, area: number, dvx: number, dvz: number): number {
-    const r = this.params.rolling;
-    const vEps = 0.01 * r.rollSpeed;
-    const tau = Math.min(r.mu * this.pc[p], this.shearFlow(p));
-    const s = (2 * tau * area) / Math.sqrt(dvx * dvx + dvz * dvz + vEps * vEps);
-    const cap = this.mass[p] / this.dt;
-    return s < cap ? s : cap;
+  frictionCapacity(p: number, area: number): number {
+    const tau = Math.min(this.params.rolling.mu * this.pc[p], this.shearFlow(p));
+    return 2 * tau * area;
   }
 
-  /** Shear flow stress k = σy/√3 of point p (static, at its plastic strain) [Pa]: the most friction can pass. */
+  /**
+   * Shear flow stress k = σy/√3 of point p [Pa]: the most friction can pass. At its plastic strain and
+   * the strain rate of its last update, as the constitutive update sees them (the static value is
+   * about 10 % lower).
+   */
   shearFlow(p: number): number {
     const m = this.params.material;
-    return flowStress(m, this.ep[p], 0, m.tRoom).sy / Math.sqrt(3);
+    return flowStress(m, this.ep[p], this.rate[p], m.tRoom).sy / Math.sqrt(3);
   }
 
   /**

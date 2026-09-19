@@ -2,16 +2,19 @@
 // width: the roll force per unit width in the middle and at the edge, the spread against
 // Wusatowski's formula, σxx across the width in the bite and in the rolled strip, the
 // pressure differences between neighbouring points in the bite, and the cracks. Not a
-// gate check (a 60 mm wide strip takes about a minute).
+// gate check (a 100 mm wide strip takes a few minutes).
 //
-//   node tools/planview.mjs [--W 20] [--cells 20] [--L 16] [--h0 1] [--r 0.25] [--R 100]
+//   node tools/planview.mjs [--W 20] [--cells 20] [--L 28] [--tailgap 8] [--h0 1] [--r 0.25] [--R 100]
 //                           [--mu 0.08] [--ms 10000] [--tb 0] [--tf 0]
 //                           [--damage none|johnson-cook|hancock-mackenzie|cockcroft-latham] [--cl 0.6]
 //                           [--notch <radius mm>] [--json]
 //
 // Lengths in mm, tensions in MPa; --W is the full width, --cells the grid cells across the
 // half width. --notch cuts a semicircular notch of that radius into the edge half-way along
-// the strip. Steady values are means over the samples (every 250 steps) in the steady phase.
+// the strip. Steady values are means over the samples (every 250 steps) in the steady phase while
+// the tail is still at least --tailgap mm before the entry: as the tail comes within about 8 mm of
+// the entry the stresses in the bite fall (by up to 40 % in a narrow strip), and that transient is
+// not the steady state. A strip too short for the window has no samples (lengthen it with --L).
 import { PlanSim, planParams } from '../src/mpm/planview/sim.ts';
 import { defaultParams } from '../src/mpm/params.ts';
 
@@ -28,7 +31,8 @@ const r = base.rolling;
 r.h0 = +opt('h0', 1) * 1e-3;
 r.reduction = +opt('r', r.reduction);
 r.rollRadius = +opt('R', 100) * 1e-3;
-r.sheetLength = +opt('L', 16) * 1e-3;
+r.sheetLength = +opt('L', 28) * 1e-3;
+const tailGap = +opt('tailgap', 8) * 1e-3;
 r.mu = +opt('mu', r.mu);
 r.backTension = +opt('tb', 0) * 1e6;
 r.frontTension = +opt('tf', 0) * 1e6;
@@ -47,12 +51,15 @@ const wus = Math.pow(1 - r.reduction, -Math.pow(10, -1.269 * (W / r.h0) * Math.p
 
 const t0 = performance.now();
 const samples = [];
+let steadyLooks = 0;
 let phase = '';
 while (sim.step < 400000) {
   for (let k = 0; k < 250; k++) sim.advance();
   phase = sim.phase();
   const F = sim.readForce();
-  if (phase === 'steady') samples.push({ F, snap: snapshot() });
+  if (phase !== 'steady') continue;
+  steadyLooks++;
+  if (sim.tailX() <= -sim.contactLength - tailGap) samples.push({ F, snap: snapshot() });
   if (phase === 'done') break;
 }
 const secs = (performance.now() - t0) / 1000;
@@ -119,6 +126,8 @@ const out = {
   points: sim.n,
   secs,
   steadySamples: samples.length,
+  steadyLooks,
+  tailGap_mm: tailGap * 1e3,
   forceHalfWidth_kN: mean(samples.map((s) => s.F)) * 1e-3,
   forcePerWidthMid_kN_per_mm: samples.length ? meanVec((s) => s.forcePerWidth)[0] * 1e-6 : NaN,
   forcePerWidthByZ_kN_per_mm: samples.length ? meanVec((s) => s.forcePerWidth).map((v) => v * 1e-6) : [],
@@ -144,9 +153,11 @@ const out = {
 if (json) console.log(JSON.stringify(out));
 else {
   const f = (a, d = 0) => a.map((v) => v.toFixed(d).padStart(6)).join('');
-  say(`${samples.length} steady samples, ${sim.step} steps, ${secs.toFixed(1)} s`);
+  say(`${samples.length} of ${steadyLooks} steady samples (the tail ≥ ${(tailGap * 1e3).toFixed(0)} mm before the entry), ${sim.step} steps, ${secs.toFixed(1)} s`);
+  if (!samples.length) say('no steady sample with the tail that far before the entry: lengthen the strip (--L)');
   say(`force per unit width, mid → edge [kN/mm]: ${f(out.forcePerWidthByZ_kN_per_mm, 2)}   (whole half width ${out.forceHalfWidth_kN.toFixed(2)} kN per roll)`);
-  say(`spread W1/W0 − 1: ${(out.spread * 100).toFixed(2)} %   (Wusatowski ${(wus * 100).toFixed(2)} %)`);
+  // Wusatowski's fit is for narrow strips; past W/h0 ≈ 20 it gives no spread at all
+  say(`spread W1/W0 − 1: ${(out.spread * 100).toFixed(2)} %${W / r.h0 < 20 ? `   (Wusatowski ${(wus * 100).toFixed(2)} %)` : ''}`);
   say(`centre exit thickness ${out.centreExitThickness_mm.toFixed(4)} mm`);
   say(`σxx [MPa] mid → edge, bite x ∈ (−1, 0) mm: ${f(out.sxxBite_MPa)}`);
   say(`σxx [MPa] mid → edge, rolled strip 1–5 mm past the probe: ${f(out.sxxPast_MPa)}`);
