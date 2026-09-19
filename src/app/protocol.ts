@@ -49,6 +49,9 @@ export interface PointState {
   dCL: number;
   /** porosity (GTN; 0 with von Mises) */
   por: number;
+  /** min det of the acoustic tensor / elastic (1 when the point is not flowing) and whether it has reached 0 (damage model 'localization') */
+  loc: number;
+  locHit: boolean;
   /** the indicator that decides failure */
   damage: number;
   failed: boolean;

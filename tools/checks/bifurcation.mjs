@@ -178,6 +178,9 @@ function run(mod) {
 }
 {
   const { sim, d } = run((p) => (p.damage.model = 'localization'));
+  // "flowing" judged independently of the solver's own record: εp grew over one more step
+  const ep0 = Float64Array.from(sim.ep);
+  sim.advance();
   const loc = new Float32Array(sim.n);
   const dr = new Float32Array(sim.n);
   sim.readField('loc', loc);
@@ -186,19 +189,25 @@ function run(mod) {
   let still = 0;
   let bad = 0;
   let minLoc = Infinity;
+  const ratio = []; // drucker / H (without the rate factor) over the first half of the bite
+  const Lc = sim.contactLength;
   for (let p = 0; p < sim.n; p++) {
     if (!sim.active[p]) continue;
     if (!Number.isFinite(loc[p]) || !Number.isFinite(dr[p])) bad++;
-    if (sim.hardening(p) < Infinity) {
+    if (sim.ep[p] > ep0[p]) {
       flowing++;
+      if (!(loc[p] < 1)) bad++;
       minLoc = Math.min(minLoc, loc[p]);
+      if (sim.px[p] > -Lc && sim.px[p] < -Lc / 2) ratio.push(dr[p] / (flowStress(sim.params.material, sim.ep[p], 0, sim.temp[p]).H * 1e-6));
     } else {
       still++;
       if (loc[p] !== 1 || dr[p] !== 0) bad++;
     }
   }
-  ok((d.phase === 'steady' || d.phase === 'tail-out') && flowing > 0 && still > 0 && bad === 0, 'solver: loc = 1 and drucker = 0 where the point does not flow, finite elsewhere', `${flowing} flowing, ${still} not, ${bad} bad`);
+  ok((d.phase === 'steady' || d.phase === 'tail-out') && flowing > 0 && still > 0 && bad === 0, 'solver: loc < 1 where εp grew this step, loc = 1 and drucker = 0 where it did not', `${flowing} flowing, ${still} not, ${bad} bad`);
   between(minLoc, 1e-5, 0.05, 'solver: hardening SPCC in the bite, min det A / det Aₑ (≈ H/3G)');
+  ratio.sort((a, b) => a - b);
+  between(ratio[Math.floor(ratio.length / 2)], 0.3, 3, `solver: first half of the bite, median drucker / H (${ratio.length} points; about 1.4 on 6 cells)`);
   ok(d.nFailed === 0, 'solver: hardening material, damage model "localization" → no failure', `${d.nFailed} failed`);
   // strain softening from the start: σy = K (ε0 + εp)^n with n < 0
   const soft = run((p) => {

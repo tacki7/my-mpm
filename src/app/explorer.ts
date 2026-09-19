@@ -153,6 +153,12 @@ export class Explorer {
       ...(this.params?.damage.yield === 'gtn' || model === 'gtn'
         ? ([['por', '空孔率 f', s.por, s.por.toFixed(4), model === 'gtn' ? '判定' : '']] as [string, string, number, string, string][])
         : []),
+      ...(model === 'localization'
+        ? ([
+            ['loc', '局所化 det A / 弾性の値', s.loc, s.loc === 1 ? '1（流れていない）' : s.loc.toExponential(2), '判定'],
+            ['locHit', 'せん断帯', s.locHit ? 1 : 0, s.locHit ? '生じうる（det A ≤ 0 になった）' : 'まだ', ''],
+          ] as [string, string, number, string, string][])
+        : []),
       ['failed', '状態', s.failed ? 1 : 0, s.failed ? '亀裂' : '健全', ''],
     ];
     if (s.failed) {
@@ -268,13 +274,14 @@ export class Explorer {
     const item = (color: string, text: string, dotted = false) =>
       `<span class="item"><span class="swatch${dotted ? ' dotted' : ''}" style="--c:${color}"></span>${text}</span>`;
     const items = [
-      item('#2c4a8c', `εf(η) ${gov ? gov.label : d.model === 'gtn' ? '（判定は空孔率）' : '（判定しない）'}`),
+      item('#2c4a8c', `εf(η) ${gov ? gov.label : d.model === 'gtn' ? '（判定は空孔率）' : d.model === 'localization' ? '（判定は音響テンソル）' : '（判定しない）'}`),
       ...this.tracks.map((t) => item(colorOf(t.role), `${ROLES.find((r) => r.role === t.role)!.label}（D ${t.state.damage.toFixed(2)}）`)),
       ...(shown && gov ? [item(colorOf(shown.role), 'D·εf(η)（D = 1 で曲線に届く）', true)] : []),
     ];
     this.legend.innerHTML = items.join('');
     const parts = [];
     if (d.model === 'gtn') parts.push(`判定は空孔率（f ≥ fc ${d.gtn.fc}）なので εf(η) の曲線は無い。D = f/fc。`);
+    if (d.model === 'localization') parts.push('判定は音響テンソルの特異（det A / 弾性の値 ≤ 0 でせん断帯が生じうる）なので εf(η) の曲線は無い。硬化する材料では起きない。');
     if (d.model === 'johnson-cook') parts.push(`JC の曲線は表示中の点のひずみ速度 ε̇* ${rate.toPrecision(3)}・温度 T* ${Ts.toFixed(2)} で描く。`);
     if (duct !== 1) parts.push(`弱い部分の点なので延性 ${duct} 倍。`);
     if (gov)

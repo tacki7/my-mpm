@@ -188,7 +188,7 @@ export class Sim {
   readonly por: Float64Array; // porosity f (GTN)
   readonly ev: Float64Array; // plastic volume strain Σ tr Δεp (GTN): p = −K (ln J − ev)
   readonly flowRate: Float64Array; // equivalent strain rate [1/s] of the last step if the point flowed (J2), −1 if not
-  // Drucker's σ̇ : Dp / ε̇p² = Σ Δσ:Δεp / Σ Δεp² over the recent plastic steps (weight 1 − 1/DRUCKER_STEPS per step):
+  // Drucker's σ̇ : Dp / ε̇p² = Σ Δσ:Δεp / Σ Δεp² over the recent plastic steps (weight DRUCKER_DECAY = 1 − 1/64 per step):
   // one step alone is dominated by the noise of the elastic trial
   readonly drW: Float64Array;
   readonly drE: Float64Array;
