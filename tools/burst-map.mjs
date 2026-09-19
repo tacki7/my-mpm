@@ -7,7 +7,7 @@
 // roll radius stays (15 mm, the central-burst preset's) and the sheet takes the thickness that gives Δ at that
 // reduction, h0 = Δ² R r / (1 − r/2)², its length max(3.2 h0, 8 Lc) so that the steady phase is long enough.
 // While the phase is steady, every 50 steps, the mid-plane's two lattice rows inside the bite (−Lc < x < 0) give their
-// η weighted by each point's plastic strain since the look before (docs/presets.md「中心割れ」: 8 cells +0.06, 12 cells
+// η weighted by each point's plastic strain since the look before (src/mpm/midplane.ts, which the page shows too; docs/presets.md「中心割れ」: 8 cells +0.06, 12 cells
 // +0.15 at the preset's point, Δ 3.6 and 5 %); the top and bottom rows give the surface's. With it: the steady roll
 // force (diagnostics every 250 steps) over the slab method's (karman), and whether the rolls drew the sheet in.
 // The window is the steady phase only: docs/presets.md's table (T04) weighted the whole pass, bite and tail-out
