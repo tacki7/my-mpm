@@ -788,7 +788,8 @@ export class Sim {
    * gradient G_i = Σ V_p φ_p ∇w(x_i − x_p) points toward the failed points, and C_i is their centre (weights w m).
    * A node splits where |G_i| > 0; there a point is on the far side of the crack (the second field) when it lies
    * beyond C_i along G_i ('centroid'), or when its own interpolated gradient opposes G_i ('gradient'). Only the
-   * nodes the failed points' stencils cover, and the points whose stencils reach them, are visited.
+   * interval of node numbers [lo, hi + span) from the lowest to the highest failed point's stencil (every column in
+   * between, whole), and the points whose stencils reach into it, are visited.
    */
   private assignFields(): Uint8Array | null {
     const { n, active, failed, px, py, mass, vol0, f00, f01, f10, f11, invH, ox, oy, nyN, gGx, gGy, gCx, gCy, gCw } = this;
@@ -911,8 +912,6 @@ export class Sim {
   private fieldContact(mMin: number): void {
     const { gm, gvx, gvy, gGx, gGy } = this;
     const N = this.nxN * this.nyN;
-    this.fieldContacts = 0;
-    this.fieldApart = 0;
     for (let node = this.gLo; node < this.gHi; node++) {
       const i2 = node + N;
       const m1 = gm[node];
@@ -957,6 +956,9 @@ export class Sim {
     const proj = this.projBuf;
     const NN = this.NN;
     const two = this.pf !== null;
+    // every step, so a step with no second field reads 0 (not the last step that had one)
+    this.fieldContacts = 0;
+    this.fieldApart = 0;
     if (two) this.fieldContact(mMin);
     for (let half = 0; half < (two ? 2 : 1); half++) {
     const off = half * nNodes;
