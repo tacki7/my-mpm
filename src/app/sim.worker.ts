@@ -89,7 +89,8 @@ function loop(): void {
   // stop there once; "続ける" runs on from it
   const reached = stopAfter !== null && sim.step >= stopAfter;
   if (reached) stopAfter = null;
-  const done = sim.phase() === 'done' || reached;
+  const ph = sim.phase();
+  const done = ph === 'done' || ph === 'stalled' || reached;
   if (done) running = false;
   frame();
   if (running) timer = setTimeout(loop, 0);

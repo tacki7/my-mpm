@@ -53,7 +53,7 @@ while (sim.step < maxSteps) {
   d = sim.diagnostics();
   hist.push(d);
   log(`step ${d.step} t ${(d.t * 1e3).toFixed(3)} ms ${d.phase.padEnd(8)} head ${(d.headX * 1e3).toFixed(2)} tail ${(d.tailX * 1e3).toFixed(2)} F ${(d.rollForce * 1e-6).toFixed(4)} kN/mm T ${(d.rollTorque).toFixed(1)} N  push ${(d.pusherForce * 1e-6).toFixed(4)} h1 ${d.exitThickness ? (d.exitThickness * 1e3).toFixed(4) : '-'} fs ${d.forwardSlip != null ? (d.forwardSlip * 100).toFixed(2) + '%' : '-'} xn ${d.neutralX != null ? (d.neutralX * 1e3).toFixed(3) : '-'} Dmax ${d.maxDamage.toFixed(3)} failed ${d.nFailed} cracks ${d.cracks}`);
-  if (d.phase === 'done') break;
+  if (d.phase === 'done' || d.phase === 'stalled') break;
 }
 const secs = (performance.now() - t0) / 1000;
 const steady = hist.filter((h) => h.phase === 'steady');
@@ -69,6 +69,8 @@ const summary = {
   exitThickness_mm: mean(steady.filter((h) => h.exitThickness).map((h) => h.exitThickness)) * 1e3,
   forwardSlip: mean(steady.filter((h) => h.forwardSlip != null).map((h) => h.forwardSlip)),
   neutralX_mm: mean(steady.filter((h) => h.neutralX != null).map((h) => h.neutralX)) * 1e3,
+  inertiaRatio: d.inertiaRatio,
+  kineticRatio: mean(steady.filter((h) => h.kineticRatio != null).map((h) => h.kineticRatio)),
   maxDamage: d.maxDamage,
   failed: d.nFailed,
   ...porosity(),

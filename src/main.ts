@@ -33,6 +33,9 @@ $('bite').addEventListener('click', (e) => explorer.select(view.pick(e.clientX, 
 const history: { t: number[]; F: number[]; T: number[] } = { t: [], F: [], T: [] };
 let geometry: Geometry | null = null;
 let last: Frame | null = null;
+// mean of the kinetic-energy ratio measured in the steady phase (held after it ends)
+let kineticSum = 0;
+let kineticN = 0;
 let frames = 0;
 let running = false;
 let dirty = false;
@@ -132,6 +135,8 @@ function restart() {
   edited = false;
   $('reset').classList.remove('pending');
   history.t.length = 0;
+  kineticSum = 0;
+  kineticN = 0;
   history.F.length = 0;
   history.T.length = 0;
   last = null;
@@ -162,7 +167,7 @@ $('pause').addEventListener('click', () => {
 $('reset').addEventListener('click', restart);
 
 function updateButtons() {
-  const done = last?.diag.phase === 'done';
+  const done = last?.diag.phase === 'done' || last?.diag.phase === 'stalled';
   ($('run') as HTMLButtonElement).disabled = running || done;
   ($('pause') as HTMLButtonElement).disabled = !running;
   $('run').textContent = frames > 1 && !done ? '続ける' : '圧延を始める';
@@ -179,6 +184,10 @@ function onFrame(f: Frame) {
     history.t.push(d.t * 1e3);
     history.F.push(d.rollForce * 1e-6);
     history.T.push(d.rollTorque * 1e-3);
+    if (d.kineticRatio != null) {
+      kineticSum += d.kineticRatio;
+      kineticN++;
+    }
   }
   dirty = true;
   updateButtons();
@@ -204,6 +213,10 @@ function updateResults(d: Diagnostics, f: Frame) {
     ['出側板厚', d.exitThickness != null ? (d.exitThickness * 1e3).toFixed(4) : '—', 'mm'],
     ['先進率', d.forwardSlip != null ? (d.forwardSlip * 100).toFixed(2) : '—', '%'],
     ['最大損傷', d.maxDamage.toFixed(3), ''],
+    // quasi-static: the condition's estimate ρ ms V² r / 2k̄, and what was measured in the steady phase —
+    // the kinetic energy the rolls put in per second over the plastic work per second (its mean, kept after)
+    ['慣性の見積もり', (d.inertiaRatio * 100).toFixed(1), '%'],
+    ['慣性 / 塑性仕事率（定常）', kineticN ? ((kineticSum / kineticN) * 100).toFixed(1) : '—', '%'],
     ['亀裂になった点', String(d.nFailed), '個'],
     ['粒子数', String(d.nActive), '個'],
     ['時間刻み', (d.dt * 1e9).toFixed(1), 'ns'],
@@ -353,7 +366,7 @@ window.__mpm = {
     return geometry !== null;
   },
   get done() {
-    return last?.diag.phase === 'done' || (stopAfter !== null && (last?.diag.step ?? 0) >= stopAfter && !running);
+    return last?.diag.phase === 'done' || last?.diag.phase === 'stalled' || (stopAfter !== null && (last?.diag.step ?? 0) >= stopAfter && !running);
   },
   get diag() {
     return last?.diag ?? null;
