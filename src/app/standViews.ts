@@ -123,6 +123,29 @@ export class StandViews {
     for (const s of this.slots) s.view.rangeOverride = range;
   }
 
+  /** one picture of the stands side by side, each with its number (the PNG export); one stand: the live canvas */
+  image(): HTMLCanvasElement {
+    if (!this.active) return this.liveCanvas;
+    const parts = this.slots.map((s, k) => (k === this.current ? this.liveCanvas : s.canvas));
+    const out = document.createElement('canvas');
+    out.width = parts.reduce((a, c) => a + c.width, 0);
+    out.height = Math.max(...parts.map((c) => c.height));
+    const g = out.getContext('2d')!;
+    const dpr = window.devicePixelRatio || 1;
+    g.fillStyle = getComputedStyle(this.bite).backgroundColor || '#fff';
+    g.fillRect(0, 0, out.width, out.height);
+    g.font = `600 ${13 * dpr}px sans-serif`;
+    g.textBaseline = 'top';
+    let x = 0;
+    parts.forEach((c, k) => {
+      g.drawImage(c, x, 0);
+      g.fillStyle = getComputedStyle(this.slots[k].label).color || '#000';
+      g.fillText(`#${k + 1}`, x + 10 * dpr, 46 * dpr);
+      x += c.width;
+    });
+    return out;
+  }
+
   /** the finished stands' pictures (the live one is drawn by the page) */
   draw(): void {
     if (!this.active) return;

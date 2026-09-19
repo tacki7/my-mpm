@@ -546,6 +546,27 @@ button.pending {
   margin-top: 22px;
 }
 
+/* a tandem: one column per stand, in the stand's colour */
+.stand-results {
+  margin-top: 22px;
+}
+
+.stand-results thead th {
+  text-align: right;
+  font-weight: 600;
+  padding-left: 8px;
+}
+
+.stand-results thead th.current {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.stand-results caption {
+  caption-side: bottom;
+  text-align: left;
+}
+
 .cracks ol {
   list-style: none;
   padding: 0;

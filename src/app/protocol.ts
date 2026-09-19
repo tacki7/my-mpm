@@ -32,6 +32,10 @@ export interface CrackView extends Crack {
   /** current centroid of its failed points [m] */
   cx: number;
   cy: number;
+  /** the stand it started in (0 in a single pass), and its time and step on the whole pass's clock */
+  stand: number;
+  tPass: number;
+  stepPass: number;
 }
 
 /** Stress state of one material point (Cauchy stress, Pa; lengths m). */
@@ -122,6 +126,8 @@ export interface StandMessage {
   geometry: Geometry;
   result: StandResult;
   next: Geometry | null;
+  /** the same stand's picture again (another field or the principal directions): only the frame changes */
+  refresh?: boolean;
 }
 
 export type FromWorker =
