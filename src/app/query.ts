@@ -73,47 +73,134 @@ export function applyQuery(base: SimParams, q: URLSearchParams): SimParams {
   if (cond) {
     const rolling = { ...p.rolling };
     try {
-      merge(p as unknown as Obj, JSON.parse(fromBase64Url(cond)));
+      const c: unknown = JSON.parse(fromBase64Url(cond));
+      merge(p as unknown as Obj, c, '');
+      if (isObj(c) && Array.isArray(c.defects)) p.defects = c.defects.slice(0, MAX_DEFECTS).filter((d) => isDefect(d, p));
     } catch {
       // not ours: ignored like any invalid value
     }
     if (!hasBite(p.rolling)) p.rolling = rolling;
   }
+  // a URL must not start a run too big for the page (whoever opens a shared link)
+  if (points(p) > MAX_POINTS) {
+    p.rolling = { ...base.rolling };
+    p.numerics = { ...base.numerics };
+    p.defects = base.defects.map((d) => ({ ...d }));
+  }
   return p;
+}
+
+/**
+ * Most material points a URL may ask for: what the URL keys allow at the default length
+ * (80 cells through 16 mm is 409 600; the default is 6 400), not combinations far beyond
+ * (80 cells through 500 mm of a 0.05 mm sheet would be 1.3e8).
+ */
+export const MAX_POINTS = 500_000;
+const MAX_DEFECTS = 20;
+
+/** Material points of a sheet on the lattice (spacing h0 / (cells × ppc)). */
+export function points(p: SimParams): number {
+  const n = p.numerics.cellsThrough * p.numerics.ppc;
+  return (p.rolling.sheetLength / p.rolling.h0) * n * n;
 }
 
 type Obj = Record<string, unknown>;
 const isObj = (v: unknown): v is Obj => typeof v === 'object' && v !== null && !Array.isArray(v);
 
 /**
- * Put the leaves of `src` into `dst`: only keys `dst` already has (and the optional tension
- * ramp), with the same type, finite numbers; the defect list is checked defect by defect.
+ * What a `cond` may set, leaf by leaf (SI units): a range, a range of integers, a list of
+ * choices, a flag or a short text. A leaf not listed here is ignored, and so is a value
+ * outside its rule. The ranges are the URL's (LIMITS) and the panel's, and physical bounds
+ * for the rest.
  */
-function merge(dst: Obj, src: unknown): void {
+type Rule = { range: [number, number]; int?: boolean } | { oneOf: readonly string[] } | 'flag' | 'text';
+const r = (lo: number, hi: number, int = false): Rule => ({ range: [lo, hi], int });
+const RULES: Record<string, Rule> = {
+  'rolling.h0': r(0.05e-3, 50e-3),
+  'rolling.reduction': r(0.005, 0.7),
+  'rolling.rollRadius': r(5e-3, 2),
+  'rolling.sheetLength': r(1e-3, 0.5),
+  'rolling.rollSpeed': r(0.05, 20),
+  'rolling.millSpeed': r(0.1, 60),
+  'rolling.mu': r(0, 1),
+  'rolling.backTension': r(0, 5e9),
+  'rolling.frontTension': r(0, 5e9),
+  'rolling.tensionRamp': r(0, 1),
+  'material.name': 'text',
+  'material.rho': r(100, 30000),
+  'material.E': r(1e9, 1e12),
+  'material.nu': r(0, 0.499),
+  'material.hardening': { oneOf: ['johnson-cook', 'swift'] },
+  'material.jcA': r(0, 3e9),
+  'material.jcB': r(0, 3e9),
+  'material.jcN': r(0, 1.5),
+  'material.jcC': r(0, 0.2),
+  'material.jcM': r(0.1, 5),
+  'material.epsDot0': r(1e-6, 1e6),
+  'material.swK': r(1e6, 5e9),
+  'material.swE0': r(1e-4, 0.5),
+  'material.swN': r(0, 1),
+  'material.tRoom': r(0, 2000),
+  'material.tMelt': r(300, 5000),
+  'damage.model': { oneOf: DAMAGE },
+  'damage.yield': { oneOf: YIELD },
+  'damage.failure': { oneOf: ['erode', 'tension-cut'] },
+  'damage.D1': r(-5, 5),
+  'damage.D2': r(-5, 10),
+  'damage.D3': r(-5, 5),
+  'damage.D4': r(-1, 1),
+  'damage.D5': r(-5, 5),
+  'damage.clCrit': r(0.01, 5),
+  'damage.etaCutoff': r(-2, 0),
+  'damage.gtn.q1': r(0, 5),
+  'damage.gtn.q2': r(0, 5),
+  'damage.gtn.q3': r(0, 25),
+  'damage.gtn.k': r(1, 20),
+  'damage.gtn.fc': r(0.001, 0.5),
+  'damage.gtn.fn': r(0, 1),
+  'damage.gtn.en': r(0, 2),
+  'damage.gtn.sn': r(1e-3, 2),
+  'damage.gtn.f0': r(0, 0.2),
+  'damage.gtn.nucleation': { oneOf: NUCLEATION },
+  'numerics.cellsThrough': r(2, 80, true),
+  'numerics.ppc': r(1, 4, true),
+  'numerics.massScale': r(1, 1e8),
+  'numerics.cfl': r(0.05, 1),
+  'numerics.jbar': 'flag',
+};
+
+function allowed(rule: Rule, v: unknown): boolean {
+  if (rule === 'flag') return typeof v === 'boolean';
+  if (rule === 'text') return typeof v === 'string' && v.length <= 80;
+  if ('oneOf' in rule) return typeof v === 'string' && rule.oneOf.includes(v);
+  return typeof v === 'number' && Number.isFinite(v) && v >= rule.range[0] && v <= rule.range[1] && (!rule.int || Number.isInteger(v));
+}
+
+/** Put the leaves of `src` into `dst` where RULES allows them (defects are handled apart). */
+function merge(dst: Obj, src: unknown, path: string): void {
   if (!isObj(src)) return;
   for (const [k, v] of Object.entries(src)) {
-    if (k === '__proto__' || k === 'constructor' || k === 'prototype') continue;
-    if (k === 'defects') {
-      if (Array.isArray(v) && Array.isArray(dst.defects)) dst.defects = v.filter(isDefect).map((d) => ({ ...d }));
-      continue;
-    }
-    if (!(k in dst)) {
-      if (k === 'tensionRamp' && typeof v === 'number' && Number.isFinite(v) && v >= 0) dst[k] = v;
-      continue;
-    }
-    const t = dst[k];
-    if (isObj(t)) merge(t, v);
-    else if (typeof t === 'number') {
-      if (typeof v === 'number' && Number.isFinite(v)) dst[k] = v;
-    } else if (typeof t === typeof v) dst[k] = v;
+    if (k === '__proto__' || k === 'constructor' || k === 'prototype' || (!path && k === 'defects')) continue;
+    const full = path ? `${path}.${k}` : k;
+    const t = Object.prototype.hasOwnProperty.call(dst, k) ? dst[k] : undefined;
+    if (isObj(t)) merge(t, v, full);
+    else if (RULES[full] && allowed(RULES[full], v)) dst[k] = v;
   }
 }
 
-function isDefect(d: unknown): d is Defect {
+/** A defect of the right kind, inside the sheet of p, with positive sizes. */
+function isDefect(d: unknown, p: SimParams): d is Defect {
   if (!isObj(d) || (d.kind !== 'void' && d.kind !== 'weak')) return false;
-  const fin = (x: unknown) => typeof x === 'number' && Number.isFinite(x);
-  if (!fin(d.x) || !fin(d.y) || !fin(d.ax) || !fin(d.ay) || (d.ax as number) <= 0 || (d.ay as number) <= 0) return false;
-  return d.ductility === undefined || (fin(d.ductility) && (d.ductility as number) > 0);
+  const L = p.rolling.sheetLength;
+  const h = p.rolling.h0;
+  const within = (x: unknown, lo: number, hi: number) => typeof x === 'number' && Number.isFinite(x) && x >= lo && x <= hi;
+  return (
+    within(d.x, 0, L) &&
+    within(d.y, -h / 2, h / 2) &&
+    within(d.ax, 1e-6, L) &&
+    within(d.ay, 1e-6, h) &&
+    (d.ductility === undefined || within(d.ductility, 1e-3, 1))
+  );
 }
 
 /** The leaves of `b` that differ from `a` (whole arrays), or undefined when none do. */

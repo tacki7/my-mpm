@@ -4,7 +4,7 @@
 // should not (unknown keys, wrong types, prototype keys, broken base64, no bite).
 // @check
 import { ok, done } from './lib.mjs';
-import { applyQuery, conditionsQuery } from '../../src/app/query.ts';
+import { MAX_POINTS, applyQuery, conditionsQuery, points } from '../../src/app/query.ts';
 import { PRESETS } from '../../src/mpm/presets.ts';
 import { cloneParams, STEEL_4340 } from '../../src/mpm/params.ts';
 
@@ -62,6 +62,21 @@ ok(same(bad, base), 'wrong types, unknown keys and bad defects are ignored');
 applyQuery(base, new URLSearchParams({ cond: btoa('{"__proto__":{"polluted":true},"rolling":{"__proto__":{"polluted":true}}}') }));
 ok({}.polluted === undefined, 'prototype keys do not reach Object.prototype');
 ok(same(applyQuery(base, new URLSearchParams({ cond: '%%%not base64' })), base), 'a broken cond is ignored');
+// values outside their ranges (a crafted link must not freeze whoever opens it)
+const huge = applyQuery(base, new URLSearchParams({
+  cond: enc({
+    numerics: { cellsThrough: 1e6, massScale: 1e-9, ppc: 3.5, cfl: 5 },
+    rolling: { sheetLength: 10, rollSpeed: 1e5, mu: 3, tensionRamp: -1 },
+    material: { E: 1, nu: 0.7, hardening: 'glass', swN: 9 },
+    damage: { model: 'foo', gtn: { fc: 7 } },
+    defects: [{ kind: 'void', x: 1, y: 0, ax: 0.01, ay: 0.001 }],
+  }),
+}));
+ok(same(huge, base), 'out-of-range values, unknown choices and defects outside the sheet are ignored', same(huge, base) ? '' : JSON.stringify(huge));
+const tooMany = applyQuery(base, new URLSearchParams({ cells: '80', L: '500', h0: '0.05' }));
+ok(same(tooMany.rolling, base.rolling) && same(tooMany.numerics, base.numerics), `a run with more than ${MAX_POINTS} points from the URL falls back to the preset's size`);
+const fine = applyQuery(base, new URLSearchParams({ cells: '80' }));
+ok(fine.numerics.cellsThrough === 80, 'the largest the URL keys allow at the default length still runs', `${points(fine)} points`);
 const noBite = applyQuery(base, new URLSearchParams({ cond: enc({ rolling: { h0: 0.05, reduction: 0.7, rollRadius: 0.005 } }) }));
 ok(same(noBite.rolling, cloneParams(base).rolling), 'h0, r and R that cannot bite are ignored together, as with the readable keys');
 done();
