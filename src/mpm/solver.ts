@@ -90,6 +90,16 @@ export interface Diagnostics {
   nFailed: number;
   cracks: number;
   plasticWork: number; // [J/m]
+  /**
+   * How far from quasi-static the condition is, before running: the inertia pressure of the
+   * (mass-scaled) strip ρ ms V² r over the mean plane-strain flow stress 2k̄ of the pass
+   */
+  inertiaRatio: number;
+  /**
+   * The same, measured: the kinetic energy the rolls put into the strip per second, ṁ (v1² − v0²)/2,
+   * over the plastic work per second, since the last read (steady phase only; null otherwise)
+   */
+  kineticRatio: number | null;
 }
 
 export interface PressureProfile {
@@ -228,6 +238,12 @@ export class Sim {
   /** ramp time of the tensions [s] */
   readonly tensionRamp: number;
   plasticWork = 0;
+  /** true once the sheet has stopped after the pusher let go (friction could not draw it in) */
+  stalled = false;
+  private slowSince = -1;
+  readonly inertiaRatio: number;
+  private lastWork = 0;
+  private lastWorkT = 0;
   readonly cracks: Crack[] = [];
 
   // accumulators since the last diagnostics read
@@ -413,6 +429,10 @@ export class Sim {
     // Tensions are ramped over ten passes of the (mass-scaled) elastic wave along the sheet
     // unless given: a step load rings, and the ringing alone can crack the head.
     this.tensionRamp = r.tensionRamp && r.tensionRamp > 0 ? r.tensionRamp : (10 * r.sheetLength) / c;
+    // mean plane-strain flow stress of the pass: at half the pass's equivalent strain, no rate factor
+    const epMid = (1 / Math.sqrt(3)) * Math.log(1 / (1 - r.reduction));
+    const twoK = (2 / Math.sqrt(3)) * flowStress(P.material, epMid, 0, P.material.tRoom).sy;
+    this.inertiaRatio = (rho * r.rollSpeed * r.rollSpeed * r.reduction) / twoK;
 
     // Contact traction bins over the bite and a little around it, one per grid
     // column and centred on it: bins whose edges fall on the columns collect 0, 1
@@ -439,6 +459,7 @@ export class Sim {
     gpen1.fill(INF);
     gpush.fill(0);
     this.updatePusher();
+    if (!this.pusherActive && !this.stalled && this.step % 50 === 0) this.checkStall();
     this.p2g();
     this.gridUpdate();
     if (this.params.numerics.jbar) {
@@ -1180,6 +1201,7 @@ export class Sim {
   }
 
   phase(): Phase {
+    if (this.stalled) return 'stalled';
     const head = this.headX();
     const tail = this.tailX();
     if (tail > 2 * this.params.rolling.h0 || tail === INF) return 'done';
@@ -1300,6 +1322,17 @@ export class Sim {
     }
     const ex = this.exitMeasure();
     const phase = this.phase();
+    let kineticRatio: number | null = null;
+    const dt = this.t - this.lastWorkT;
+    if (phase === 'steady' && ex && dt > 0 && this.plasticWork > this.lastWork) {
+      const r = this.params.rolling;
+      const v1 = ex.speed;
+      const v0 = (v1 * ex.thickness) / r.h0; // mass flow
+      const mdot = this.params.material.rho * this.params.numerics.massScale * r.h0 * v0;
+      kineticRatio = (0.5 * mdot * (v1 * v1 - v0 * v0)) / ((this.plasticWork - this.lastWork) / dt);
+    }
+    this.lastWork = this.plasticWork;
+    this.lastWorkT = this.t;
     return {
       t: this.t,
       step: this.step,
@@ -1321,7 +1354,30 @@ export class Sim {
       nFailed,
       cracks: this.cracks.length,
       plasticWork: this.plasticWork,
+      inertiaRatio: this.inertiaRatio,
+      kineticRatio,
     };
+  }
+
+  /**
+   * After the pusher has let go the sheet must be drawn in by friction. If its mean speed
+   * stays under 5 % of the roll speed for as long as the roll surface takes to cross the
+   * contact length, the rolls cannot draw it in (μ too small for the bite angle): stalled.
+   */
+  private checkStall(): void {
+    const { n, active, vx, mass } = this;
+    let mv = 0;
+    let m = 0;
+    for (let p = 0; p < n; p++) {
+      if (!active[p]) continue;
+      mv += mass[p] * vx[p];
+      m += mass[p];
+    }
+    const r = this.params.rolling;
+    if (m > 0 && Math.abs(mv / m) < 0.05 * r.rollSpeed) {
+      if (this.slowSince < 0) this.slowSince = this.t;
+      else if (this.t - this.slowSince > this.contactLength / r.rollSpeed) this.stalled = true;
+    } else this.slowSince = -1;
   }
 
   /**

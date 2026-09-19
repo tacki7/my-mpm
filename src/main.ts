@@ -162,7 +162,7 @@ $('pause').addEventListener('click', () => {
 $('reset').addEventListener('click', restart);
 
 function updateButtons() {
-  const done = last?.diag.phase === 'done';
+  const done = last?.diag.phase === 'done' || last?.diag.phase === 'stalled';
   ($('run') as HTMLButtonElement).disabled = running || done;
   ($('pause') as HTMLButtonElement).disabled = !running;
   $('run').textContent = frames > 1 && !done ? '続ける' : '圧延を始める';
@@ -204,6 +204,8 @@ function updateResults(d: Diagnostics, f: Frame) {
     ['出側板厚', d.exitThickness != null ? (d.exitThickness * 1e3).toFixed(4) : '—', 'mm'],
     ['先進率', d.forwardSlip != null ? (d.forwardSlip * 100).toFixed(2) : '—', '%'],
     ['最大損傷', d.maxDamage.toFixed(3), ''],
+    // quasi-static: the kinetic energy the rolls put in per second over the plastic work per second (the condition's estimate until steady)
+    ['慣性 / 塑性仕事率', ((d.kineticRatio ?? d.inertiaRatio) * 100).toFixed(1), '%'],
     ['亀裂になった点', String(d.nFailed), '個'],
     ['粒子数', String(d.nActive), '個'],
     ['時間刻み', (d.dt * 1e9).toFixed(1), 'ns'],
@@ -353,7 +355,7 @@ window.__mpm = {
     return geometry !== null;
   },
   get done() {
-    return last?.diag.phase === 'done' || (stopAfter !== null && (last?.diag.step ?? 0) >= stopAfter && !running);
+    return last?.diag.phase === 'done' || last?.diag.phase === 'stalled' || (stopAfter !== null && (last?.diag.step ?? 0) >= stopAfter && !running);
   },
   get diag() {
     return last?.diag ?? null;
