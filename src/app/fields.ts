@@ -24,6 +24,9 @@ export const FIELDS: FieldInfo[] = [
   { id: 'sxx', label: '圧延方向応力 σxx', tab: '圧延方向 σxx', unit: 'MPa', scale: 'diverging' },
   { id: 'syy', label: '板厚方向応力 σyy', tab: '板厚方向 σyy', unit: 'MPa', scale: 'diverging' },
   { id: 'sxy', label: 'せん断応力 σxy', tab: 'せん断 σxy', unit: 'MPa', scale: 'diverging' },
+  // 0 everywhere unless the Taylor-Quinney coefficient χ is above 0 (kept away from the other all-zero
+  // field, porosity: two all-zero tabs side by side look the same)
+  { id: 'dT', label: '温度上昇 ΔT', unit: 'K', scale: 'sequential' },
   { id: 'lagrange', label: 'メタルフロー', unit: '', scale: 'lattice', range: [0, 1] },
   // 0 everywhere unless the yield condition is GTN
   { id: 'porosity', label: '空孔率 f', unit: '', scale: 'sequential' },

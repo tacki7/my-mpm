@@ -19,7 +19,7 @@ B. Banerjee, *Material Point Method Simulations of Fragmenting Cylinders*, arXiv
 | Hancock-MacKenzie εf = 1.65 exp(−1.5 σ*) | 同じ |
 | 分岐（Drucker の安定条件・音響テンソルの特異）による破壊 | 両方を表示の量に。音響テンソルの特異は判定にも選べる（`damage.model = 'localization'`、既定は使わない）。下の「分岐の指標」 |
 | 破壊した粒子: 応力を 0 にする（または別の速度場に移す） | 「応力をすべて失う」と「圧縮だけ受け持つ」を選べる。別の速度場は未実装 |
-| Mie-Grüneisen 状態方程式・断熱温度上昇 | 使わない（冷間・低速なので線形の体積弾性で十分）。温度は室温一定 |
+| Mie-Grüneisen 状態方程式・断熱温度上昇 | 状態方程式は使わない（冷間・低速なので線形の体積弾性で十分）。断熱温度上昇は `material.chi`（Taylor-Quinney、既定 0 = 室温一定） |
 
 圧延のために足したもの: 剛体ロールとの摩擦接触、Cockcroft-Latham 基準（圧延の割れで最もよく使われる）、
 三軸度の下限（Bao-Wierzbicki: η < −1/3 では損傷しない）、押し込み装置、前後方張力。
@@ -42,6 +42,10 @@ B. Banerjee, *Material Point Method Simulations of Fragmenting Cylinders*, arXiv
 - 圧力 p = −K ln J（J = det F）
 - J2: q = √(3/2 s:s) > σy なら q − 3GΔεp = σy(εp + Δεp) を安全化 Newton で解き、s を (1 − 3GΔεp/q) 倍
 - ひずみ速度は計算上の値に `millSpeed / rollSpeed` を掛けた実機換算で速度依存則に入れる
+- 断熱温度上昇（`material.chi` > 0）: 塑性仕事の χ が熱になり、熱は逃げない（伝導なし）。ΔT = χ w J / (ρ0 cp)
+  （w は現在の体積あたりの塑性仕事、J で基準体積あたりに、ρ0 は質量スケーリング前の密度）。温度は Johnson-Cook の
+  流動応力の (1 − T*^m) と損傷の D5 に効く。比熱 cp は材料ごと（4340 は論文の Cp(T) の室温の値 455 J/(kg·K)）。
+  シートに溜まった熱は χ × 塑性仕事に一致する（`tools/checks/heating.mjs`）。数値は `docs/validation.md`「断熱温度上昇」
 
 ## GTN（空孔率）
 
