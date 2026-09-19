@@ -721,6 +721,45 @@ details.group > summary {
   display: none;
 }
 
+/* ── saving the results ───────────────────────────────────────────────── */
+.export {
+  margin-top: 22px;
+}
+
+.export-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.export-buttons button,
+.export-url button {
+  padding: 3px 10px;
+  font-size: var(--fs-s);
+}
+
+.export-url {
+  display: grid;
+  gap: 4px;
+  margin-top: 8px;
+}
+
+.export-url input {
+  width: 100%;
+  font-size: var(--fs-xs);
+  background: var(--sheet);
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+  padding: 3px 6px;
+  color: var(--ink-soft);
+}
+
+.export-status {
+  margin: 6px 0 0;
+  font-size: var(--fs-xs);
+  color: var(--ink-soft);
+}
+
 /* ── narrow screens ───────────────────────────────────────────────────── */
 @media (max-width: 1100px) {
   .layout {
