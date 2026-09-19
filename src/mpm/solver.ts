@@ -18,8 +18,10 @@
 // World frame: x along rolling (the exit plane of the rigid rolls is x = 0),
 // y through the thickness (mid-plane y = 0). Everything per unit width.
 import { biteGeometry, cloneParams, type DamageModel, type SimParams } from './params.ts';
+import { druckerWork, localization } from './bifurcation.ts';
 import {
   elasticConstants,
+  flowStress,
   gtnReturn,
   hmFractureStrain,
   homologousTemperature,
@@ -108,6 +110,8 @@ export type FieldName =
   | 'dHM'
   | 'dCL'
   | 'porosity'
+  | 'loc'
+  | 'drucker'
   | 'sxx'
   | 'syy'
   | 'sxy'
@@ -116,6 +120,7 @@ export type FieldName =
   | 'lagrange';
 
 const INF = 1e30;
+const DRUCKER_DECAY = 1 - 1 / 64;
 
 export class Sim {
   readonly params: SimParams;
@@ -182,6 +187,12 @@ export class Sim {
   readonly dCL: Float64Array;
   readonly por: Float64Array; // porosity f (GTN)
   readonly ev: Float64Array; // plastic volume strain Σ tr Δεp (GTN): p = −K (ln J − ev)
+  readonly hmod: Float64Array; // hardening modulus dσy/dεp of the last step, ∞ when it did not flow (J2)
+  // Drucker's σ̇ : Dp / ε̇p² = Σ Δσ:Δεp / Σ Δεp² over the recent plastic steps (weight 1 − 1/DRUCKER_STEPS per step):
+  // one step alone is dominated by the noise of the elastic trial
+  readonly drW: Float64Array;
+  readonly drE: Float64Array;
+  readonly locHit: Uint8Array; // 1 once the acoustic tensor turned singular (damage model 'localization')
   readonly duct: Float64Array; // ductility multiplier (defects)
   readonly dJ: Float64Array; // trial volume ratio J of the current step (J-bar)
   readonly active: Uint8Array;
@@ -339,6 +350,10 @@ export class Sim {
     this.dCL = F();
     this.por = F();
     this.ev = F();
+    this.hmod = F().fill(Infinity);
+    this.drW = F();
+    this.drE = F();
+    this.locHit = new Uint8Array(n);
     this.duct = F();
     this.dJ = F();
     this.active = new Uint8Array(n);
@@ -735,6 +750,7 @@ export class Sim {
       let sy = this.syy[p];
       let sh = this.sxy[p];
       let sz = this.szz[p];
+      const sz0 = sz;
       const rot = dt * w;
       const rx = sx + 2 * rot * sh;
       const ry = sy - 2 * rot * sh;
@@ -749,6 +765,7 @@ export class Sim {
 
       let q = Math.sqrt(1.5 * (sx * sx + sy * sy + sz * sz + 2 * sh * sh));
       let dep = 0;
+      let H = Infinity; // hardening modulus when the point flows (J2)
       const isFailed = this.failed[p] === 1;
       if (isFailed) {
         sx = sy = sz = sh = 0;
@@ -782,8 +799,12 @@ export class Sim {
           q -= 3 * G * dep;
           this.ep[p] += dep;
           this.plasticWork += q * dep * this.vol0[p] * J;
+          H = flowStress(mat, this.ep[p], epsDot, this.temp[p]).H;
+          this.drW[p] = DRUCKER_DECAY * this.drW[p] + druckerWork(sx - rx, sy - ry, sh - rh, sz - sz0, sx, sy, sh, sz, q, dep);
+          this.drE[p] = DRUCKER_DECAY * this.drE[p] + dep * dep;
         }
       }
+      this.hmod[p] = H;
       this.sxx[p] = sx;
       this.syy[p] = sy;
       this.szz[p] = sz;
@@ -803,6 +824,7 @@ export class Sim {
       this.s1[p] = s1;
 
       if (dep > 0) {
+        if (dmg.model === 'localization' && localization(this.el, H, sx, sy, sh, sz).ratio <= 0) this.locHit[p] = 1;
         const du = 1 / this.duct[p];
         const Ts = homologousTemperature(mat, this.temp[p]);
         const epsDotStar = epsDot / mat.epsDot0;
@@ -826,6 +848,8 @@ export class Sim {
         return this.dCL[p];
       case 'gtn':
         return this.por[p] / this.params.damage.gtn.fc;
+      case 'localization':
+        return this.locHit[p];
       default:
         return 0;
     }
@@ -1121,6 +1145,12 @@ export class Sim {
           break;
         case 'porosity':
           v = this.por[p];
+          break;
+        case 'loc':
+          v = localization(this.el, this.hmod[p], this.sxx[p], this.syy[p], this.sxy[p], this.szz[p]).ratio;
+          break;
+        case 'drucker':
+          v = this.hmod[p] < Infinity && this.drE[p] > 0 ? (this.drW[p] / this.drE[p]) * MPa : 0;
           break;
         case 'sxx':
           v = (this.sxx[p] - this.pres[p]) * MPa;

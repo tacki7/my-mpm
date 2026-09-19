@@ -27,6 +27,11 @@ export const FIELDS: FieldInfo[] = [
   { id: 'lagrange', label: 'メタルフロー', unit: '', scale: 'lattice', range: [0, 1] },
   // 0 everywhere unless the yield condition is GTN
   { id: 'porosity', label: '空孔率 f', unit: '', scale: 'sequential' },
+  // min det of the acoustic tensor / elastic: 1 where the point does not flow, about H/3G where it does,
+  // ≤ 0 where a shear band can form (drawn red). Not evaluated with the GTN yield condition.
+  { id: 'loc', label: '局所化の指標 det A / det Aₑ', unit: '', scale: 'diverging', range: [-0.01, 0.01], flip: true },
+  // Drucker: σ̇ : Dp / ε̇p², the slope of the flow stress along the path; negative is unstable
+  { id: 'drucker', label: 'Drucker の指標 σ̇:Dp / ε̇p²', unit: 'MPa', scale: 'diverging', flip: true },
 ];
 
 export function fieldInfo(id: FieldName): FieldInfo {

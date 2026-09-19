@@ -139,6 +139,7 @@ export function buildPanel(root: HTMLElement, onEdit: () => void): Panel {
       ['hancock-mackenzie', 'Hancock-MacKenzie（三軸度）'],
       ['cockcroft-latham', 'Cockcroft-Latham（最大主応力）'],
       ['gtn', '空孔率が fc に達する（GTN）'],
+      ['localization', 'せん断帯が生じうる（音響テンソルの特異。硬化する材料では起きない）'],
       ['none', '判定しない'],
     ]),
   );
