@@ -45,6 +45,17 @@ function sectionStress(sim, x0, x1) {
     s += sectionStress(sim, x0, x0 + 0.6e-3);
   }
   near(s / N / MPa, 100, 0.1, 'exit strip stress [MPa] under 100 MPa front tension');
+  // the grip's total load is the stress times the end column's height, however the grip's columns are shaped
+  let top = -Infinity;
+  let bot = Infinity;
+  for (let p = sim.n - 1; p >= 0 && sim.tag[p] === 2; p--) {
+    if (!sim.active[p]) continue;
+    const e = 0.5 * sim.dp * Math.hypot(sim.f01[p], sim.f11[p]);
+    top = Math.max(top, sim.py[p] + e);
+    bot = Math.min(bot, sim.py[p] - e);
+  }
+  const load = typeof sim.endLoad === 'function' ? sim.endLoad(2) : NaN;
+  near(load, sim.frontNow * (top - bot), 1e-3, 'front grip load = σf × the head column height (the scale is from the start of the step)');
 }
 
 // ── back tension: carried by the entry strip, released once the tail reaches the bite
