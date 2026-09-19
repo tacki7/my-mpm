@@ -291,8 +291,8 @@ export class Explorer {
     if (d.model === 'johnson-cook') parts.push(`JC の曲線は表示中の点のひずみ速度 ε̇* ${rate.toPrecision(3)}・温度 T* ${Ts.toFixed(2)} で描く。`);
     if (duct !== 1) parts.push(`弱い部分の点なので延性 ${duct} 倍。`);
     if (gov)
-      parts.push('実線は (η, εp) の経路。D = ∫ dεp / εf(η) なので η が変わると曲線の手前や先で D = 1 になる。点線は同じ損傷を今の η の比例負荷で与えるひずみ D·εf(η) で、D = 1 のとき曲線に載る。');
-    else parts.push('線は (η, εp) の経路。');
+      parts.push('実線は (εp, η) の経路。D = ∫ dεp / εf(η) なので η が変わると曲線の手前や先で D = 1 になる。点線は同じ損傷を今の η の比例負荷で与えるひずみ D·εf(η) で、D = 1 のとき曲線に載る。');
+    else parts.push('線は (εp, η) の経路。');
     this.note.textContent = parts.join('');
   }
 }
