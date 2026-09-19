@@ -13,6 +13,7 @@ Hancock-MacKenzie、破壊した粒子の応力の扱い）。式と出典の対
 | `src/mpm/solver.ts` | `Sim`: P2G → 格子更新（ロール接触）→ G2P 2 段（体積の平均化）→ 構成則・損傷 |
 | `src/mpm/material.ts` | 流動応力、J2 リターンマップ、破断ひずみ（純関数） |
 | `src/mpm/params.ts` / `presets.ts` | 入力（SI 単位）と、名前付きの条件 |
+| `src/mpm/planview/` | 平面図モデル（x 圧延方向・z 板幅方向、板厚は粒子の状態）。耳割れ用。`node tools/planview.mjs --W 20` |
 | `src/app/` | ワーカー（`sim.worker.ts`）、描画（`view.ts`）、グラフ、条件パネル |
 | `tools/check.mjs` | 回帰関門。`// @check` の付いたスクリプトを集めて回す |
 | `tools/run.mjs` | ヘッドレスで 1 回圧延して数値を出す（`npm run sim -- --cells 6 --L 8`） |
@@ -43,7 +44,8 @@ npm run sim -- --cells 6 --L 8 --every 2000   # 粗い圧延を 1 回（約 6 �
 ```
 
 CI（`.github/workflows/check.yml`）が push のたびに `npm ci` → `npm run check` → `npm run build` を回す（ubuntu・Node 24、
-1 回約 1 分: 関門 44 s のうち tension.mjs 25 s・rolling-smoke 12 s、2026-09-19。上限 10 分）。PR にはその枝の push の結果が付く。
+1 回約 1.5 分: 関門のスクリプトの合計 77 s のうち tension.mjs 16 s・presets-tension 10 s・stall 8 s・planview 7 s、2026-09-19。上限 10 分）。
+PR にはその枝の push の結果が付く。
 
 node は 22.18 以降（型の除去が既定で有効）。`src/` は**消去できる構文だけ**（enum・namespace・
 コンストラクタ引数のプロパティ禁止。`erasableSyntaxOnly`）で書き、import は `.ts` の拡張子付き。
