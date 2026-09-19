@@ -78,6 +78,8 @@ export interface Diagnostics {
   exitThickness: number | null;
   /** mean sheet speed at the exit probe / roll surface speed − 1 */
   forwardSlip: number | null;
+  /** neutral point: where the friction on the sheet turns from +x (entry side) to −x, averaged since the last read; null without one [m] */
+  neutralX: number | null;
   maxDamage: number;
   nFailed: number;
   cracks: number;
@@ -87,7 +89,7 @@ export interface Diagnostics {
 export interface PressureProfile {
   /** bin centres [m] */
   x: Float64Array;
-  /** normal pressure [Pa] and tangential traction on the sheet along +x [Pa], mean of both rolls */
+  /** normal and tangential (+x) force on the sheet per unit length along x [Pa], mean of both rolls */
   p: Float64Array;
   tau: Float64Array;
 }
@@ -199,13 +201,18 @@ export class Sim {
   private lastForce = 0;
   private lastTorque = 0;
   private lastPush = 0;
-  // contact traction bins (both rolls)
-  readonly binX0: number;
+  private lastNeutral: number | null = null;
+  // contact traction bins (both rolls), one per grid column
+  readonly binCol0: number; // grid column of the first bin
+  readonly binX0: number; // left edge of the first bin
   readonly binW: number;
   readonly nBins: number;
   private readonly binN: Float64Array;
   private readonly binT: Float64Array;
   private binSteps = 0;
+  private readonly lastP: Float64Array; // the last profile, repeated when nothing was stepped in between
+  private readonly lastTau: Float64Array;
+  private readonly accTau: Float64Array; // tangential force per bin since the last diagnostics read
 
   constructor(input: SimParams) {
     const P = cloneParams(input);
@@ -356,12 +363,18 @@ export class Sim {
     const c = Math.sqrt((this.el.K + (4 / 3) * this.el.G) / rho);
     this.dt = (num.cfl * h) / (c + 1.5 * r.rollSpeed);
 
-    // Contact traction bins over the bite and a little around it.
+    // Contact traction bins over the bite and a little around it, one per grid
+    // column and centred on it: bins whose edges fall on the columns collect 0, 1
+    // or 2 of them by round-off, which made the friction hill saw-toothed.
     this.binW = h;
-    this.binX0 = -Lc - 6 * h;
+    this.binCol0 = Math.floor((-Lc - 6 * h - this.ox) / h);
+    this.binX0 = this.ox + (this.binCol0 - 0.5) * h;
     this.nBins = Math.ceil((Lc + 12 * h) / h);
     this.binN = new Float64Array(this.nBins);
     this.binT = new Float64Array(this.nBins);
+    this.lastP = new Float64Array(this.nBins);
+    this.lastTau = new Float64Array(this.nBins);
+    this.accTau = new Float64Array(this.nBins);
   }
 
   /** Advance one explicit step. */
@@ -457,8 +470,7 @@ export class Sim {
     const pushing = this.pusherActive;
     const vPush = this.vIn;
     const invDt = 1 / dt;
-    const binN = this.binN;
-    const binT = this.binT;
+    const { binN, binT, accTau, binCol0, nBins } = this;
     let pushImpulse = 0;
     const fyAcc = [0, 0];
     const tqAcc = [0, 0];
@@ -473,7 +485,8 @@ export class Sim {
       }
       let vx = gvx[idx] / m;
       let vy = gvy[idx] / m;
-      const xi = ox + Math.floor(idx / nyN) * h;
+      const col = Math.floor(idx / nyN);
+      const xi = ox + col * h;
       const yi = oy + (idx % nyN) * h;
       for (let k = 0; k < 2; k++) {
         if (this.gpen[k][idx] >= 0) continue;
@@ -507,8 +520,8 @@ export class Sim {
         const fy = m * (nvy - vy) * invDt;
         fyAcc[k] += -fy;
         tqAcc[k] += -(rx * fy - ry * fx);
-        const b = Math.floor((xi - this.binX0) / this.binW);
-        if (b >= 0 && b < this.nBins) {
+        const b = col - binCol0;
+        if (b >= 0 && b < nBins) {
           binN[b] += fx * nx + fy * ny;
           // tangent with +x orientation
           let tnx = -ny;
@@ -517,7 +530,9 @@ export class Sim {
             tnx = -tnx;
             tny = -tny;
           }
-          binT[b] += fx * tnx + fy * tny;
+          const ft = fx * tnx + fy * tny;
+          binT[b] += ft;
+          accTau[b] += ft;
         }
         vx = nvx;
         vy = nvy;
@@ -901,6 +916,7 @@ export class Sim {
       // top roll turns counter-clockwise (ω > 0): driving torque opposes the resisting torque of the sheet
       this.lastTorque = (-this.accTorque[0] + this.accTorque[1]) / 2 / steps;
       this.lastPush = this.accPush / steps;
+      this.lastNeutral = this.neutralPoint(this.accTau);
     }
     const fy = this.lastForce;
     const tq = this.lastTorque;
@@ -909,6 +925,7 @@ export class Sim {
     this.accFy = [0, 0];
     this.accTorque = [0, 0];
     this.accPush = 0;
+    this.accTau.fill(0);
     let nActive = 0;
     let nFailed = 0;
     let maxD = 0;
@@ -934,6 +951,7 @@ export class Sim {
       pusherActive: this.pusherActive,
       exitThickness: ex ? ex.thickness : null,
       forwardSlip: ex ? ex.speed / this.params.rolling.rollSpeed - 1 : null,
+      neutralX: this.lastNeutral,
       maxDamage: maxD,
       nFailed,
       cracks: this.cracks.length,
@@ -941,21 +959,47 @@ export class Sim {
     };
   }
 
-  /** Contact traction along x, averaged since the last call (which resets it). */
-  pressureProfile(): PressureProfile {
-    const steps = Math.max(1, this.binSteps);
-    const x = new Float64Array(this.nBins);
-    const p = new Float64Array(this.nBins);
-    const tau = new Float64Array(this.nBins);
-    for (let b = 0; b < this.nBins; b++) {
-      x[b] = this.binX0 + (b + 0.5) * this.binW;
-      p[b] = this.binN[b] / (2 * steps * this.binW);
-      tau[b] = this.binT[b] / (2 * steps * this.binW);
+  /**
+   * Neutral point from the tangential force per bin: the end of the entry-side
+   * zone where friction drives the sheet (+x), taken where the running sum from
+   * the entry peaks (robust to a stray sign flip) and refined to the zero crossing
+   * between that bin and the next. Null when friction never turns from + to −.
+   */
+  private neutralPoint(tau: Float64Array): number | null {
+    let cum = 0;
+    let best = 0;
+    let bb = -1;
+    for (let b = 0; b < tau.length; b++) {
+      cum += tau[b];
+      if (cum > best) {
+        best = cum;
+        bb = b;
+      }
     }
-    this.binN.fill(0);
-    this.binT.fill(0);
-    this.binSteps = 0;
-    return { x, p, tau };
+    if (bb < 0 || bb + 1 >= tau.length || !(tau[bb + 1] < 0)) return null;
+    const t0 = tau[bb];
+    const t1 = tau[bb + 1];
+    return this.binX0 + (bb + 0.5) * this.binW + (this.binW * t0) / (t0 - t1);
+  }
+
+  /**
+   * Contact traction along x, averaged since the last call (which resets it).
+   * With nothing stepped in between (e.g. a read while paused) the last one is repeated.
+   */
+  pressureProfile(): PressureProfile {
+    const { nBins, binW, binSteps, lastP, lastTau } = this;
+    if (binSteps > 0) {
+      for (let b = 0; b < nBins; b++) {
+        lastP[b] = this.binN[b] / (2 * binSteps * binW);
+        lastTau[b] = this.binT[b] / (2 * binSteps * binW);
+      }
+      this.binN.fill(0);
+      this.binT.fill(0);
+      this.binSteps = 0;
+    }
+    const x = new Float64Array(nBins);
+    for (let b = 0; b < nBins; b++) x[b] = this.binX0 + (b + 0.5) * binW;
+    return { x, p: lastP.slice(), tau: lastTau.slice() };
   }
 
   /** Current centroid of each crack's failed points. */
