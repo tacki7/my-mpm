@@ -35,8 +35,8 @@ export interface SlabReference {
 /**
  * Δ = mean thickness / contact length, (h0 + h1) / 2 / Lc. The slab method takes the deformation as
  * even through the thickness, which holds for Δ below about 1; a thicker plate deforms unevenly (the
- * surface more than the centre) and needs more force than the method gives (h0 10 mm, R 15 mm, 5 %:
- * Δ 3.6, and the MPM force at 12 cells is 1.47 times the method's).
+ * surface more than the centre) and needs more force than the method gives (the central-burst preset,
+ * h0 10 mm, R 15 mm, 5 %: Δ 3.6, and the MPM force at 12 cells is 1.56 times the method's).
  */
 export function thicknessRatio(r: RollingParams): number {
   const { gap, contactLength } = biteGeometry(r);
