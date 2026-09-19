@@ -47,7 +47,7 @@ const report = (sim, d, res) => {
     `stand ${stand + 1}/${stands}: h0 ${entry.h0_mm.toFixed(4)} mm, L ${entry.sheetLength_mm.toFixed(2)} mm, ${summary.particles} points, ${summary.steps} steps (${secs.toFixed(1)} s), ` +
       `F ${summary.steadyForce_kN_per_mm.toFixed(3)} kN/mm, exit ${summary.exitThickness_mm.toFixed(4)} mm, out ${entry.thicknessOut_mm?.toFixed(4) ?? '-'} mm, ` +
       `slip ${(summary.forwardSlip * 100).toFixed(2)} %, Dmax ${summary.maxDamage.toFixed(3)}, failed ${summary.failed}, cracks ${summary.cracks.length}, ${d.phase}` +
-      (res ? `, mass lost ${(res.massLost * 100).toFixed(2)} %${res.separated ? ', separated' : ''}` : ''),
+      (res ? `, mass lost ${(res.massLost * 100).toFixed(2)} %${res.separated ? ', separated' : ''}, cracks born ${res.cracksBorn}, grown ${(res.crackGrowth * 1e6).toFixed(4)} mm²` : ''),
   );
   hist = [];
   t0 = performance.now();

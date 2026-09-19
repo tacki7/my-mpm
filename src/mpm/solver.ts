@@ -63,6 +63,12 @@ export interface Crack {
   count: number;
   /** tandem (src/mpm/tandem.ts): the stand it started in, set once that stand is over; absent in a single pass */
   stand?: number;
+  /**
+   * tandem: the area of material that failed into this crack in each stand [m², per unit width]: the mass of its
+   * failed points over ρ, at the stand's end less at its start (after the remap), so the finer lattice of the next
+   * stand does not count again what is already cracked. Absent in a single pass
+   */
+  areaByStand?: number[];
 }
 
 export type Phase = 'approach' | 'bite' | 'steady' | 'tail-out' | 'done' | 'stalled';
