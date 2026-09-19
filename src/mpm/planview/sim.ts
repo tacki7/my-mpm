@@ -472,8 +472,10 @@ export class PlanSim {
    * in-plane area (the thickness does not change the side). The mid-width symmetry plane: the failed points'
    * mirror images count too — the ghost nodes' G and C are folded onto their mirrors (z negated), the plane's own
    * nodes have G_z = C_z = 0, and the ghosts take the mirrored values back, so a point near the plane is on the
-   * same side at a ghost node as its mirror image is at the real one. Only the node columns the failed points'
-   * stencils cover, and the points whose stencils reach them, are visited.
+   * same side at a ghost node as its mirror image is at the real one. Only the box of the failed points' stencils
+   * is visited (their columns, and their rows, widened to the ghosts when it comes within reach of the plane's
+   * fold), with the points whose stencils reach into it; the failed points are found by the typed array's own
+   * search, and the sums run over them in the same order as a plain loop would.
    */
   private assignFields(): Uint8Array | null {
     const { n, active, failed, px, pz, mass, invH, ox, oz, nzN, gGx, gGz, gCx, gCz, gCw } = this;
