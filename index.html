@@ -35,6 +35,7 @@
       <aside class="conditions" id="panel" aria-label="圧延条件">
         <p class="preset-note" id="preset-note"></p>
       </aside>
+      <div class="splitter split-left" data-size="left" aria-label="条件の欄の幅（ドラッグか矢印キー、ダブルクリックで元に戻す）"></div>
 
       <section class="stage section-only" aria-label="ロールバイト">
         <div class="field-tabs" id="field-tabs" role="radiogroup" aria-label="色で表す量"></div>
@@ -45,17 +46,20 @@
           <div class="legend" id="legend"></div>
           <div class="phase" id="phase" aria-live="polite"></div>
         </div>
+        <div class="splitter split-charts" data-size="charts" aria-label="グラフの高さ（ドラッグか矢印キー、ダブルクリックで元に戻す）"></div>
         <div class="charts">
           <figure>
             <figcaption>圧延荷重（ロール 1 本あたり、板幅 1 mm あたり）</figcaption>
             <canvas id="chart-force"></canvas>
             <div class="chart-legend" id="legend-force"></div>
           </figure>
+          <div class="splitter split-col" data-size="c12" aria-label="荷重とフリクションヒルのグラフの境（ドラッグか矢印キー、ダブルクリックで元に戻す）"></div>
           <figure>
             <figcaption>接触面の圧力と摩擦応力（フリクションヒル）</figcaption>
             <canvas id="chart-hill"></canvas>
             <div class="chart-legend" id="legend-hill"></div>
           </figure>
+          <div class="splitter split-col" data-size="c23" aria-label="フリクションヒルと破断軌跡のグラフの境（ドラッグか矢印キー、ダブルクリックで元に戻す）"></div>
           <figure class="locus" id="locus">
             <figcaption>破断軌跡 εf(η) と負荷経路</figcaption>
             <canvas id="chart-locus"></canvas>
@@ -72,6 +76,7 @@
         </div>
       </section>
 
+      <div class="splitter split-right" data-size="right" aria-label="結果の欄の幅（ドラッグか矢印キー、ダブルクリックで元に戻す）"></div>
       <aside class="record" aria-label="結果">
         <section class="certificate section-only">
           <h2>圧延結果</h2>

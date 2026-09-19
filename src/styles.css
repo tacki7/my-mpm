@@ -143,7 +143,8 @@ button.pending {
 /* ── layout ───────────────────────────────────────────────────────────── */
 .layout {
   display: grid;
-  grid-template-columns: 250px minmax(0, 1fr) 300px;
+  /* the side panes' widths can be dragged (src/app/splitters.ts sets these variables) */
+  grid-template-columns: var(--w-left, 250px) 6px minmax(0, 1fr) 6px var(--w-right, 300px);
   gap: 0;
   min-height: calc(100vh - 90px);
 }
@@ -285,7 +286,8 @@ button.pending {
 /* ── stage ────────────────────────────────────────────────────────────── */
 .stage {
   display: grid;
-  grid-template-rows: auto minmax(360px, 1fr) auto;
+  /* tabs, roll bite, the handle between the bite and the charts, charts */
+  grid-template-rows: auto minmax(240px, 1fr) 6px auto;
   min-width: 0;
 }
 
@@ -417,7 +419,7 @@ button.pending {
 
 .charts {
   display: grid;
-  grid-template-columns: 1fr 1.25fr 1.1fr;
+  grid-template-columns: var(--c1, 1fr) 6px var(--c2, 1.25fr) 6px var(--c3, 1.1fr);
   border-top: 1px solid var(--rule);
 }
 
@@ -427,9 +429,6 @@ button.pending {
   min-width: 0;
 }
 
-.charts figure + figure {
-  border-left: 1px solid var(--rule);
-}
 
 .charts figcaption {
   font-size: var(--fs-s);
@@ -438,8 +437,77 @@ button.pending {
 
 .charts canvas {
   width: 100%;
-  height: 190px;
+  height: var(--chart-h, 190px);
   display: block;
+}
+
+/* ── draggable boundaries (src/app/splitters.ts) ───────────────────────── */
+.splitter {
+  position: relative;
+  z-index: 2;
+  background: var(--sheet);
+  touch-action: none;
+  outline-offset: -2px;
+}
+
+/* the drawn line is 1 px in the middle of the 6 px handle */
+.splitter::after {
+  content: '';
+  position: absolute;
+  background: var(--rule);
+}
+
+.split-left,
+.split-right,
+.split-col {
+  cursor: col-resize;
+}
+
+.split-left::after,
+.split-right::after,
+.split-col::after {
+  inset: 0 auto 0 50%;
+  width: 1px;
+  transform: translateX(-50%);
+}
+
+.split-charts {
+  cursor: row-resize;
+}
+
+.split-charts::after {
+  inset: 50% 0 auto 0;
+  height: 1px;
+  transform: translateY(-50%);
+}
+
+.splitter:hover::after,
+.splitter.dragging::after,
+.splitter:focus-visible::after {
+  background: var(--steel);
+}
+
+.split-left:hover::after,
+.split-right:hover::after,
+.split-col:hover::after,
+.split-left.dragging::after,
+.split-right.dragging::after,
+.split-col.dragging::after {
+  width: 3px;
+}
+
+.split-charts:hover::after,
+.split-charts.dragging::after {
+  height: 3px;
+}
+
+/* the side panes carry their own rule lines no more: the handles draw them */
+.conditions {
+  border-right: 0;
+}
+
+.record {
+  border-left: 0;
 }
 
 /* ── record ───────────────────────────────────────────────────────────── */
@@ -885,7 +953,11 @@ body[data-view='plan'] .section-only {
 /* ── narrow screens ───────────────────────────────────────────────────── */
 @media (max-width: 1100px) {
   .layout {
-    grid-template-columns: 240px minmax(0, 1fr);
+    grid-template-columns: var(--w-left, 240px) 6px minmax(0, 1fr);
+  }
+  /* the record goes under the stage: no handle on its side */
+  .split-right {
+    display: none;
   }
   .record {
     grid-column: 1 / -1;
@@ -913,6 +985,13 @@ body[data-view='plan'] .section-only {
   }
   .layout {
     grid-template-columns: 1fr;
+  }
+  /* one column: nothing to drag */
+  .splitter {
+    display: none;
+  }
+  .stage {
+    grid-template-rows: auto minmax(360px, 1fr) auto;
   }
   /* on a phone the roll bite comes first, then the results, then the detailed conditions
      (the preset and the buttons stay at the top) */
@@ -943,8 +1022,7 @@ body[data-view='plan'] .section-only {
   .charts {
     grid-template-columns: 1fr;
   }
-  .charts figure + figure {
-    border-left: 0;
+  .charts .splitter + figure {
     border-top: 1px solid var(--rule);
   }
 }

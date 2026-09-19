@@ -7,6 +7,7 @@ import { FIELDS, damageLabel, fieldInfo } from './app/fields.ts';
 import { Explorer } from './app/explorer.ts';
 import { buildExport } from './app/export.ts';
 import { buildPanel } from './app/panel.ts';
+import { setupSplitters } from './app/splitters.ts';
 import type { CrackView, Frame, FromWorker, Geometry, ToWorker } from './app/protocol.ts';
 import { applyQuery, stopAfterOf } from './app/query.ts';
 import { Overview } from './app/overview.ts';
@@ -399,6 +400,10 @@ const ro = new ResizeObserver(() => {
   dirty = true;
 });
 ro.observe($('bite'));
+// the panes' boundaries can be dragged; the charts redraw at their new size (the bite has its observer)
+setupSplitters(() => {
+  dirty = true;
+});
 
 // ── test hook (headless checks read this; see CLAUDE.md) ────────────────────
 declare global {
