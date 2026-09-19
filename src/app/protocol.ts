@@ -1,9 +1,11 @@
 // Messages between the page and the simulation worker.
 import type { SimParams } from '../mpm/params.ts';
 import type { Crack, Diagnostics, FieldName } from '../mpm/solver.ts';
+import type { StandResult } from './tandemStub.ts';
 
 export type ToWorker =
-  | { type: 'init'; params: SimParams; field: FieldName; stopAfter: number | null }
+  /** stands: a tandem of that many stands (1: the single stand as before) */
+  | { type: 'init'; params: SimParams; stands: number; field: FieldName; stopAfter: number | null }
   | { type: 'run' }
   | { type: 'pause' }
   | { type: 'field'; field: FieldName }
@@ -76,6 +78,8 @@ export interface Track {
   id: number;
   state: PointState;
   path: number[];
+  /** the stand of each (η, εp, D) sample (0 first; all 0 with one stand) */
+  stand: number[];
 }
 
 export interface Frame {
@@ -99,9 +103,27 @@ export interface Frame {
   tracks: Track[];
   running: boolean;
   msPerStep: number;
+  /** the stand shown (0 first) of `stands`; the time and steps of the stands before (the whole pass: offset + diag) */
+  stand: number;
+  stands: number;
+  tOffset: number;
+  stepOffset: number;
+  /** the finished stands */
+  results: StandResult[];
+}
+
+/** A stand finished: its last frame and geometry (the page keeps them), its result, and the next stand's geometry. */
+export interface StandMessage {
+  type: 'stand';
+  stand: number;
+  frame: Frame;
+  geometry: Geometry;
+  result: StandResult;
+  next: Geometry | null;
 }
 
 export type FromWorker =
   | { type: 'ready'; geometry: Geometry }
   | Frame
+  | StandMessage
   | { type: 'error'; message: string };
