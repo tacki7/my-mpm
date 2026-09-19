@@ -110,6 +110,8 @@ export interface Frame {
   stepOffset: number;
   /** the finished stands */
   results: StandResult[];
+  /** the whole pass is over (one stand: its phase is done or stalled; a tandem: the last stand is closed) */
+  passDone: boolean;
 }
 
 /** A stand finished: its last frame and geometry (the page keeps them), its result, and the next stand's geometry. */
