@@ -233,10 +233,14 @@ function loop(): void {
   let steps = 0;
   while (performance.now() - t0 < FRAME_MS - 6) {
     const chunk = stopAfter === null ? 20 : Math.min(20, stopAfter - passStep());
-    for (let k = 0; k < chunk; k++) tandem!.advance();
+    const t = tandem!;
+    for (let k = 0; k < chunk; k++) {
+      t.advance();
+      // a tandem's pass is over: no steps past the last stand's end (its stands end at any step, not a chunk's)
+      if (t.stands > 1 && t.done) break;
+    }
     tracker?.record();
     // a tandem keeps each stand's picture (checked every chunk of 20 steps, so the moment is the same every run)
-    const t = tandem!;
     if (t.stands > 1 && !t.done && !pictures[t.stand] && wantsPicture(sim)) pictures[t.stand] = snapshot(sim, tracker);
     steps += Math.max(0, chunk);
     if (stopAfter !== null && passStep() >= stopAfter) break;
