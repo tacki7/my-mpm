@@ -66,6 +66,7 @@ tools/browser/browser.sh stop <cdp>; tools/browser/browser.sh stop <dev>
 画面を触ったら `CDP_PORT=<cdp> node tools/browser/smoke.mjs http://localhost:<dev>/ <作業用ディレクトリ>/smoke.png`（約 10 秒）:
 読み込みエラー 0 → 粗い圧延を最後まで → 定常の荷重・出側板厚・先進率が帯の中 → 色の量のタブを全部押して再描画 → スクショ → about:blank。
 1 行ずつ PASS / FAIL、どれか FAIL で exit 1。帯は標準条件・6 セル用（URL で条件を変えると外れる）。スクショは自分で見る。
+画面の状態（やり直し・`stopafter`・条件パネルと URL・描画中の例外）を触ったら `CDP_PORT=<cdp> node tools/browser/ui-state.mjs http://localhost:<dev>/`（1〜2 分）。
 
 ポートは必ず渡す（既定値は無い）。`window.__mpm` は `frames` `running` `ready` `done` `diag` `cracks`
 `geometry` `params` `history` と `run()` `restart()` `setField(id)` を持つ。
@@ -75,7 +76,8 @@ tools/browser/browser.sh stop <cdp>; tools/browser/browser.sh stop <dev>
 `?preset=standard|front-tension|central-burst|void|high-friction&h0=1&r=25&R=100&L=16&mu=0.08&tb=0&tf=0`
 `&mat=spcc|s4340|al6061&damage=johnson-cook|hancock-mackenzie|cockcroft-latham|none&cells=10&ms=10000`
 `&field=seq|eta|s1|pres|ep|damage|sxx|syy|sxy|lagrange&autorun=1&stopafter=<step>`
-— 長さは mm、張力は MPa、`r` は %。不正な値は黙って無視される。効いたかは `__mpm.params` で確かめる。
+— 長さは mm、張力は MPa、`r` は %。不正な値は黙って無視される（`h0`・`r`・`R` はロールが噛めない組み合わせなら 3 つとも）。
+効いたかは `__mpm.params` で確かめる。`stopafter` はそのステップで 1 回止まり、「続ける」で先へ進む。
 
 ## Git 運用
 

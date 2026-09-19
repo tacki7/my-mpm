@@ -7,7 +7,7 @@ import { css, lattice, split, temper } from './app/colormap.ts';
 import { FIELDS, fieldInfo } from './app/fields.ts';
 import { buildPanel } from './app/panel.ts';
 import type { CrackView, Frame, FromWorker, Geometry, ToWorker } from './app/protocol.ts';
-import { applyQuery } from './app/query.ts';
+import { applyQuery, stopAfterOf } from './app/query.ts';
 import { BiteView } from './app/view.ts';
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -16,7 +16,7 @@ const query = new URLSearchParams(location.search);
 let presetId = presetById(query.get('preset') ?? '')?.id ?? 'standard';
 let params: SimParams = applyQuery(presetById(presetId)!.build(), query);
 let field: FieldName = (FIELDS.find((f) => f.id === query.get('field'))?.id ?? 'seq') as FieldName;
-const stopAfter = query.has('stopafter') ? Math.max(1, parseInt(query.get('stopafter')!, 10)) : null;
+const stopAfter = stopAfterOf(query);
 
 const view = new BiteView($<HTMLCanvasElement>('bite'));
 const history: { t: number[]; F: number[] } = { t: [], F: [] };
@@ -26,6 +26,7 @@ let frames = 0;
 let running = false;
 let dirty = false;
 let edited = false;
+let awaitingReady = false; // frames of the run a restart replaced may still be on their way
 
 // ── conditions ──────────────────────────────────────────────────────────────
 const presetSel = $<HTMLSelectElement>('preset');
@@ -80,17 +81,23 @@ function startWorker() {
   worker.onmessage = (e: MessageEvent<FromWorker>) => {
     const m = e.data;
     if (m.type === 'ready') {
+      awaitingReady = false;
       geometry = m.geometry;
       view.geometry = geometry;
       if (query.get('autorun') === '1' && frames === 0) run();
-    } else if (m.type === 'frame') onFrame(m);
+    } else if (m.type === 'frame') {
+      if (!awaitingReady) onFrame(m);
+    }
     else if (m.type === 'error') showError(m.message);
   };
   worker.onerror = (e) => showError(e.message);
 }
 
 function restart() {
-  if (edited) params = panel.read(params);
+  if (edited) {
+    params = panel.read(params);
+    panel.show(params); // what runs, after clamping
+  }
   edited = false;
   $('reset').classList.remove('pending');
   history.t.length = 0;
@@ -101,6 +108,7 @@ function restart() {
   frames = 0;
   crackSeen = 0;
   $('crack-log').replaceChildren();
+  awaitingReady = true;
   send({ type: 'init', params: cloneParams(params), field, stopAfter });
   updateButtons();
 }
@@ -226,7 +234,7 @@ function drawLegend() {
   const stops: string[] = [];
   for (let k = 0; k <= 10; k++) {
     const t = k / 10;
-    stops.push(css(info.scale === 'diverging' ? split(t) : info.scale === 'lattice' ? lattice(t) : temper(t)));
+    stops.push(css(info.scale === 'diverging' ? split(info.flip ? 1 - t : t) : info.scale === 'lattice' ? lattice(t) : temper(t)));
   }
   const unit = info.unit ? ` ${info.unit}` : '';
   const fmt = (v: number) => (Math.abs(v) >= 100 ? v.toFixed(0) : Math.abs(v) >= 1 ? v.toFixed(2) : v.toFixed(3));
@@ -263,13 +271,16 @@ function drawCharts() {
 }
 
 function frameLoop() {
-  if (dirty) {
-    dirty = false;
-    view.draw();
-    drawLegend();
-    drawCharts();
+  try {
+    if (dirty) {
+      dirty = false;
+      view.draw();
+      drawLegend();
+      drawCharts();
+    }
+  } finally {
+    requestAnimationFrame(frameLoop); // one failing draw must not stop the drawing
   }
-  requestAnimationFrame(frameLoop);
 }
 
 const ro = new ResizeObserver(() => {

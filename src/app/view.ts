@@ -2,6 +2,7 @@
 // failed points in ink, and a vermilion stamp where each crack started.
 import { css, lattice, split, temper, type Rgb } from './colormap.ts';
 import { fieldInfo } from './fields.ts';
+import { uiFont } from './font.ts';
 import type { Frame, Geometry } from './protocol.ts';
 
 const BINS = 48;
@@ -44,7 +45,7 @@ export class BiteView {
     const Lc = g.contactLength;
     const worldW = Math.max(3.4 * Lc, 16 * g.h0);
     const sx = this.w / worldW;
-    const x0 = -Lc / 2 - worldW * 0.08; // bite a little left of centre: the exit side shows more
+    const x0 = -Lc / 2 + worldW * 0.08; // world x at the centre: the bite sits a little left of it, the exit side shows more
     const ez = Math.min(12, Math.max(1, (0.3 * this.h) / (g.h0 * sx)));
     const sy = sx * ez;
     const X = (x: number) => this.w / 2 + (x - x0) * sx;
@@ -132,7 +133,7 @@ export class BiteView {
     }
     ctx.restore();
     ctx.fillStyle = '#1d2a3a';
-    ctx.font = '12px var(--font-ui)';
+    ctx.font = uiFont(12);
     ctx.textAlign = 'center';
     ctx.fillText('入口', T.X(-g.contactLength), yBot + 16);
     ctx.fillText('出口', T.X(0), yBot + 16);
@@ -144,7 +145,7 @@ export class BiteView {
     const [lo, hi] = this.state.range;
     if (info.scale === 'lattice') return (v) => lattice(v);
     if (info.scale === 'diverging') {
-      const m = Math.max(Math.abs(lo), Math.abs(hi)) || 1;
+      const m = (info.flip ? -1 : 1) * (Math.max(Math.abs(lo), Math.abs(hi)) || 1);
       return (v) => split(0.5 + (0.5 * v) / m);
     }
     const span = hi - lo || 1;
@@ -184,7 +185,8 @@ export class BiteView {
     const info = fieldInfo(f.field);
     const [lo, hi] = this.state.range;
     const span = hi - lo || 1;
-    const m = Math.max(Math.abs(lo), Math.abs(hi)) || 1;
+    // a flipped field runs its diverging colours the other way
+    const m = (info.flip ? -1 : 1) * (Math.max(Math.abs(lo), Math.abs(hi)) || 1);
     // bucket the points by colour: one fill per bucket
     const buckets: number[][] = Array.from({ length: BINS }, () => []);
     const failed: number[] = [];
@@ -243,7 +245,7 @@ export class BiteView {
       ctx.fill();
       ctx.stroke();
       ctx.fillStyle = '#c23b22';
-      ctx.font = '600 12px var(--font-ui)';
+      ctx.font = uiFont(12, 600);
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
       ctx.fillText(String(c.id + 1), x, y + 0.5);
