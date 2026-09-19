@@ -11,7 +11,7 @@ import { presetById } from '../../src/mpm/presets.ts';
 // ── the slab method as drawn = karman() for the same condition
 for (const [id, mod, want] of [
   ['standard', () => {}, 3.027],
-  ['central-burst', () => {}, 3.687],
+  ['central-burst', () => {}, 3.486],
   ['standard', (p) => (p.rolling.mu = 0.12), null],
 ]) {
   const P = presetById(id).build();

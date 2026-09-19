@@ -39,24 +39,30 @@ export const PRESETS: Preset[] = [
   {
     id: 'central-burst',
     label: '厚肉・軽圧下の中心割れ',
-    note: '接触長に比べて板が厚く（h/L > 1）、変形が板厚中心まで届かない。中心に静水圧の引張が残る。',
+    note: '接触長に比べて板が厚い（Δ = 平均板厚 / 接触長 ≈ 3.6）と、張力なしでも塑性変形中の板厚中心が静水圧の引張（η > 0）になり、中心の偏析帯（延性 1/50）が割れる（既定の 12 セル以上で。10 セル以下の粗い格子では割れない）。表層は圧縮のまま。実物の中心割れは多パスで累積するので、1 パスで見せるために延性を下げている。割れの間隔は格子で決まる（docs/presets.md）。',
     build: () => {
       const p = defaultParams();
-      p.rolling.h0 = 4 * mm;
-      p.rolling.reduction = 0.08;
-      p.rolling.rollRadius = 25 * mm;
-      p.rolling.sheetLength = 24 * mm;
-      p.rolling.mu = 0.1;
+      p.rolling.h0 = 10 * mm;
+      p.rolling.reduction = 0.05;
+      p.rolling.rollRadius = 15 * mm;
+      p.rolling.sheetLength = 32 * mm;
+      // above tan α (α = √(Δh / R) = 0.18) so the rolls bite and draw the plate on their own; at μ 0.1 (just over
+      // α / 2) the plate skidded and slowed through the pass (forward slip −2 → −18 %)
+      p.rolling.mu = 0.2;
       p.material = { ...STEEL_4340 };
-      p.damage = { ...DAMAGE_4340, D1: 0.02, D2: 0.6 };
-      p.numerics.cellsThrough = 16;
+      // the paper's Johnson-Cook constants; damage grows only under hydrostatic tension (η > 0)
+      p.damage = { ...DAMAGE_4340, etaCutoff: 0 };
+      // centreline segregation: a weak band along the mid-plane, clear of both ends. 1/50 is the loosest that
+      // cracks at 12 cells (1/20 reaches D 0.44, 1/33 D 0.74); coarser grids need 1/100 (docs/presets.md)
+      p.defects = [{ kind: 'weak', x: 16 * mm, y: 0, ax: 13 * mm, ay: 0.5 * mm, ductility: 0.02 }];
+      p.numerics.cellsThrough = 12;
       return p;
     },
   },
   {
     id: 'void',
     label: '内部欠陥（空洞）起点',
-    note: '板厚中心に空洞がある板。ロールバイトで潰れるか、出口側の引張で開くか。',
+    note: '板厚中心に空洞がある板。空洞はロールバイトで上下から潰れ（高さは点の間隔 1 つ分まで）、出口の先でも圧縮のままで開かない。割れない。',
     build: () => {
       const p = defaultParams();
       p.rolling.h0 = 1.5 * mm;
