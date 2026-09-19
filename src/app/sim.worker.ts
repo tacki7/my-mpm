@@ -4,7 +4,7 @@
 // of them); when a stand is done the worker sends that picture and the stand's geometry (the page shows it
 // in the stand's slot), and follows the points on into the next stand.
 import type { SimParams } from '../mpm/params.ts';
-import type { Sim, FieldName } from '../mpm/solver.ts';
+import type { Sim, FieldName, Diagnostics } from '../mpm/solver.ts';
 import type { FromWorker, ToWorker, Frame, Geometry } from './protocol.ts';
 import { READ_STEPS, TandemSim, type StandDone } from '../mpm/tandem.ts';
 import { Tracker } from './tracker.ts';
@@ -24,6 +24,12 @@ let msPerStep = 0;
 let dirsOn = false;
 /** a tandem: each stand's picture (null until taken), and the first stand's sheet, which sets the window */
 let pictures: (Picture | null)[] = [];
+/** the last live frame's diagnostics and pressure profile: a picture takes them rather than read (and so restart) the
+ * means the page shows (Sim.diagnostics() and pressureProfile() average over the steps since their last call) */
+let lastDiag: Diagnostics | null = null;
+let lastProfile: Frame['profile'] | null = null;
+/** a tandem: each stand change's parentOf (next stand's point → the point it came from), to follow a pick made before it */
+let changes: Int32Array[] = [];
 let scale: { contactLength: number; h0: number } | null = null;
 
 /** a stand's picture kept for later: every field and the principal directions, so that it can be drawn again in any */
@@ -96,10 +102,23 @@ function dirsOf(s: Sim): Float32Array {
   return dirs;
 }
 
-/** the rest of a frame of sim s with its tracker */
-function restOf(s: Sim, tr: Tracker | null): Picture['rest'] {
-  const diag = s.diagnostics();
-  const prof = s.pressureProfile();
+/** the rest of a frame of sim s with its tracker; keep: without reading the display's means (a picture) */
+function restOf(s: Sim, tr: Tracker | null, keep = false): Picture['rest'] {
+  let diag: Diagnostics;
+  let profile: Frame['profile'];
+  if (keep && lastDiag && lastProfile) {
+    // the last frame's, at this moment: the pictures use its time (the rolls' marks), step and phase
+    diag = { ...lastDiag, t: s.t, step: s.step, phase: s.phase() };
+    profile = lastProfile;
+  } else {
+    diag = s.diagnostics();
+    const prof = s.pressureProfile();
+    profile = { x: Array.from(prof.x), p: Array.from(prof.p), tau: Array.from(prof.tau) };
+    if (!keep) {
+      lastDiag = diag;
+      lastProfile = profile;
+    }
+  }
   const cent = s.crackCentroids();
   const t = tandem!;
   const k = tr?.stand ?? t.stand;
@@ -109,7 +128,7 @@ function restOf(s: Sim, tr: Tracker | null): Picture['rest'] {
   return {
     type: 'frame',
     diag,
-    profile: { x: Array.from(prof.x), p: Array.from(prof.p), tau: Array.from(prof.tau) },
+    profile,
     cracks: s.cracks.map((c, i) => {
       const j = c.stand ?? k; // a crack of the stand still running has no stand yet
       // a record with no points left (a tandem carries the records on; their points may be gone): where it began
@@ -148,7 +167,7 @@ function snapshot(s: Sim, tr: Tracker | null): Picture {
     s.readField(f.id, v);
     vals.set(f.id, v);
   }
-  const rest = restOf(s, tr);
+  const rest = restOf(s, tr, true);
   rest.running = false;
   rest.passDone = false;
   return { geometry: geometryOf(s), ...arraysOf(s), dirs: dirsOf(s), vals, rest };
@@ -198,6 +217,7 @@ function onStandDone(e: StandDone): void {
   const [f, transfer] = pictureFrame(pic);
   post({ type: 'stand', stand: e.stand, frame: f, geometry: pic.geometry, result: { ...e.result }, next: e.next ? geometryOf(e.next) : null }, transfer);
   if (!e.next || !e.parentOf) return;
+  changes[e.stand] = e.parentOf;
   const next = new Tracker(e.next, { tracker: tracker!, parentOf: e.parentOf });
   if (selected !== null) {
     const child = next.childOf(selected);
@@ -274,6 +294,9 @@ self.onmessage = (e: MessageEvent<ToWorker>) => {
         sim = tandem.sim;
         tracker = new Tracker(sim);
         pictures = [];
+        changes = [];
+        lastDiag = null;
+        lastProfile = null;
         scale = { contactLength: sim.contactLength, h0: sim.params.rolling.h0 };
         selected = null;
         // headless checks read the simulation itself through the worker target (tools/browser/explorer.mjs)
@@ -299,6 +322,12 @@ self.onmessage = (e: MessageEvent<ToWorker>) => {
         break;
       case 'select':
         selected = m.particle;
+        // picked in a stand the tandem has since left: the point's child in the stand now running
+        for (let k = m.stand ?? tandem?.stand ?? 0; selected !== null && selected >= 0 && tandem && k < tandem.stand; k++) {
+          const map = changes[k];
+          const child = map ? map.indexOf(selected) : -1;
+          selected = child >= 0 ? child : null;
+        }
         if (!running) frame();
         break;
       case 'dirs':

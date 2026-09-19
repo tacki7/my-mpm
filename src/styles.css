@@ -1096,8 +1096,15 @@ body[data-view='plan'] .section-only {
   .stand-slot + .stand-slot .stand-label {
     top: 10px;
   }
+  /* the stands start under the toolbar and the overview (84 px + 44 px), which would otherwise sit on #1's sheet */
   .bite.tandem {
-    min-height: calc(var(--stands) * 240px + 60px);
+    min-height: calc(var(--stands) * 240px + 140px);
+  }
+  .bite.tandem .stand-row {
+    top: 136px;
+  }
+  .bite.tandem .stand-slot .stand-label {
+    top: 10px;
   }
   .record {
     order: 2;

@@ -93,6 +93,12 @@ ok(fine.numerics.cellsThrough === 80, 'the largest the URL keys allow at the def
     '5 stands at r 60 % are too many points even on the preset\'s grid: back to one stand, the reduction kept',
     `${steep.rolling.stands} stand, r ${steep.rolling.reduction}, ${points(steep).toFixed(0)} points`);
 }
+// one stand is no stands at all: ?stands=1 (or a tandem set back to one) writes neither stands nor a cond
+{
+  const one = applyQuery(base, new URLSearchParams({ stands: '1' }));
+  const q = conditionsQuery('standard', base, one);
+  ok(!('stands' in one.rolling) && !q.has('stands') && !q.has('cond'), '?stands=1 is one stand as the preset has it: no stands key, and its URL has neither stands nor cond', q.toString());
+}
 const noBite = applyQuery(base, new URLSearchParams({ cond: enc({ rolling: { h0: 0.05, reduction: 0.7, rollRadius: 0.005 } }) }));
 ok(same(noBite.rolling, cloneParams(base).rolling), 'h0, r and R that cannot bite are ignored together, as with the readable keys');
 done();

@@ -10,7 +10,8 @@ export type ToWorker =
   | { type: 'pause' }
   | { type: 'field'; field: FieldName }
   /** the material point the stress explorer follows (null: none) */
-  | { type: 'select'; particle: number | null }
+  /** stand: the stand of the frame the point was picked in (a tandem may have moved on before the worker reads it) */
+  | { type: 'select'; particle: number | null; stand?: number }
   /** send the in-plane principal stresses with each frame (for the direction glyphs) */
   | { type: 'dirs'; on: boolean };
 

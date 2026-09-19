@@ -7,7 +7,9 @@
 // stand; the CSV files are downloaded with a stand column on the whole pass's clock, and the PNG holds
 // the three pictures; real mouse events on the running stand's slot zoom, reset and pick a point; moving a boundary between the panes resizes the slots with the roll bite; a narrow
 // screen (700 px) stacks the pictures without a sideways scroll; a strip broken through the thickness
-// stops the tandem with the reason in the table and the status; five stands' table fits the record column at
+// stops the tandem with the reason in the table and the status; a crack grown over the stands is in the table
+// by stand; at a stand's end the old sheet is not drawn in the new rolls and a point picked just then is
+// followed to its child; five stands' table fits the record column at
 // 1600 and 700 px; the stands field is the section view's only; and back
 // to one stand, the page is as before (no slots, no table). Not a `@check` (it needs the dev server and
 // Chrome).
@@ -262,6 +264,24 @@ try {
     `${broke.stopped}; ${broke.phase}; ${broke.note.slice(0, 30)}; ${broke.labels.join(' ')}`,
   );
 
+  // ── a crack that starts in stand 1 and grows through stand 3 (a small weak spot, 4 cells, a 4 mm strip; about
+  //    15 s): the table's cracks born and area grown are the crack records' stands and areaByStand summed by stand
+  const grows = Buffer.from(JSON.stringify({ damage: { ...DAMAGE_4340, etaCutoff: -2 }, defects: [{ kind: 'weak', x: 2e-3, y: 0, ax: 0.15e-3, ay: 0.3e-3, ductility: 0.02 }] })).toString('base64url');
+  await c.navigate(page(`?stands=3&cells=4&L=4&autorun=1&cond=${grows}`));
+  await c.waitFor('__mpm.done', 300000);
+  await painted();
+  const grown = await c.evaluate(`(() => {
+    const line = (name) => [...([...document.querySelectorAll('#stand-results tbody')].find((b) => b.querySelector('tr.name th').textContent.startsWith(name))?.querySelectorAll('tr.values td') ?? [])].map((d) => d.textContent);
+    return { born: line('生まれた亀裂'), area: line('伸びた面積'), records: __mpm.cracks.map((c) => ({ stand: c.stand, area: c.areaByStand ?? [] })) };
+  })()`);
+  const bornWant = [0, 1, 2].map((k) => String(grown.records.filter((r) => r.stand === k).length));
+  const areaWant = [0, 1, 2].map((k) => (grown.records.reduce((a, r) => a + (r.area[k] ?? 0), 0) * 1e6).toFixed(3));
+  ok(
+    grown.records.length > 0 && areaWant.filter((v) => +v > 0).length >= 2 && grown.born.join() === bornWant.join() && grown.area.join() === areaWant.join(),
+    "the table's cracks born and area grown [mm²] are the crack records' summed by stand",
+    `born ${grown.born.join(' / ')} (records ${bornWant.join(' / ')}), area ${grown.area.join(' / ')} (records ${areaWant.join(' / ')})`,
+  );
+
   // ── five stands, the input's most, with the table full of real values (4 cells, a 4 mm strip: about 85 s):
   //    nothing in the record column scrolls sideways and no row head wraps, at 1600 and at 700 px
   await c.navigate(page('?stands=5&cells=4&L=4&autorun=1'));
@@ -292,13 +312,13 @@ try {
     const worst = await c.evaluate(`(async () => {
       const { StandTable } = await import('/src/app/standTable.ts');
       const t = new StandTable(document.getElementById('stand-results-section'), document.getElementById('stand-results'));
-      const res = [1e-3, 0.748e-3, 0.561e-3, 0.42e-3, 0.315e-3].map((h, k) => ({ stand: k, h0: h, sheetLength: 0, particles: 0, steps: 0, t: 0, phase: 'done', steadyForce: 13.72e6, steadyTorque: 0, exitThickness: h * 0.75, forwardSlip: 0.1044, thicknessOut: h * 0.75, massLost: 0.0123, separated: false, maxDamage: 0.9123, nFailed: 12345, cracks: 0, cracksBorn: 0, crackGrowth: 0 }));
+      const res = [1e-3, 0.748e-3, 0.561e-3, 0.42e-3, 0.315e-3].map((h, k) => ({ stand: k, h0: h, sheetLength: 0, particles: 0, steps: 0, t: 0, phase: 'done', steadyForce: 13.72e6, steadyTorque: 0, exitThickness: h * 0.75, forwardSlip: 0.1044, thicknessOut: h * 0.75, massLost: 0.0123, separated: false, maxDamage: 0.9123, nFailed: 12345, cracks: 0, cracksBorn: 123, crackGrowth: 12.345e-6 }));
       t.update(5, res, 4, true, null, 'lost');
       await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
       const rec = document.querySelector('.record'), wrap = document.querySelector('.stand-results .table-scroll');
       return { recOver: rec.scrollWidth - rec.clientWidth, wrapOver: wrap.scrollWidth - wrap.clientWidth, rows: document.querySelectorAll('#stand-results tr.name').length };
     })()`);
-    ok(worst.recOver <= 0 && worst.wrapOver <= 0 && worst.rows === 8, `five stands' table at ${w} px, every value at its widest and the lost-mass line: no sideways scroll`, `overflow record ${worst.recOver} / table ${worst.wrapOver} px, ${worst.rows} quantities`);
+    ok(worst.recOver <= 0 && worst.wrapOver <= 0 && worst.rows === 10, `five stands' table at ${w} px, every value at its widest and the lost-mass line: no sideways scroll`, `overflow record ${worst.recOver} / table ${worst.wrapOver} px, ${worst.rows} quantities`);
   }
   await c.setViewport(1600, 1000);
 
@@ -309,6 +329,47 @@ try {
   await c.evaluate(`document.querySelector('.view-switch button[data-mode="section"]').click()`);
   const sectionField = await c.evaluate(`document.querySelector('input[name="stands"]').closest('.field').getBoundingClientRect().height`);
   ok(planField === 0 && sectionField > 0, 'the stands field shows in the section view only', `plan ${planField} px, section ${sectionField} px`);
+
+  // ── the moment a stand ends (2 stands, 4 cells, a 4 mm strip; stand 1 ends at step 9142): the roll bite does not
+  //    draw the old sheet in the new stand's rolls, and a point clicked on the old stand's picture just as the worker
+  //    moves on is followed to its child, not read as the new stand's point of the same number. "続ける" from step
+  //    9130, then at once a click on a point half-way along the rolled sheet (zoomed out to see it all)
+  await c.send('Page.addScriptToEvaluateOnNewDocument', { source: `
+    window.__switchLog = [];
+    const W = window.Worker;
+    window.Worker = class extends W {
+      set onmessage(fn) { super.onmessage = (e) => { fn(e); const m = e.data; if (m.type === 'stand' && m.next && !m.refresh) window.__switchLog.push(window.__mpm.drawn); }; }
+      get onmessage() { return super.onmessage; }
+    };` });
+  await c.navigate(page('?stands=2&cells=4&L=4&autorun=1&stopafter=9130'));
+  await c.waitFor('__mpm.done', 120000);
+  await painted();
+  const mid = await c.evaluate(`(() => { const b = document.getElementById('bite').getBoundingClientRect(); return { x: b.x + b.width / 2, y: b.y + b.height / 2 }; })()`);
+  await c.send('Input.dispatchMouseEvent', { type: 'mouseWheel', x: mid.x, y: mid.y, deltaX: 0, deltaY: 600 });
+  await painted();
+  const along = await c.evaluate(`(() => {
+    const all = [];
+    for (let id = 0; ; id++) { const s = __mpm.screenOf(id); if (!s) break; all.push(s); }
+    const b = document.getElementById('bite').getBoundingClientRect();
+    const xs = all.map((o) => o.x), head = Math.max(...xs), tail = Math.min(...xs);
+    for (let id = 0; id < all.length; id++) {
+      const s = all[id], rel = (head - s.x) / (head - tail);
+      if (rel < 0.35 || rel > 0.65 || s.y < b.y + 60 || s.y > b.y + b.height - 60) continue;
+      const x = Math.round(s.x), y = Math.round(s.y), d = Math.hypot(s.x - x, s.y - y);
+      if (all.every((o, j) => j === id || Math.hypot(o.x - x, o.y - y) >= d + 1)) return { id, x, y, rel, stand: __mpm.stand, step: __mpm.diag.step };
+    }
+    return null;
+  })()`);
+  await c.evaluate("document.getElementById('run').click()");
+  if (along) for (const type of ['mousePressed', 'mouseReleased']) await c.send('Input.dispatchMouseEvent', { type, x: along.x, y: along.y, button: 'left', clickCount: 1 });
+  await c.waitFor('__mpm.done', 120000);
+  const switched = await c.evaluate(`({ log: __switchLog, sel: __mpm.tracks.find((t) => t.role === 'selected') ?? null, L: __mpm.standResults[1]?.sheetLength })`);
+  ok(switched.log.length === 1 && switched.log[0].frameStand === null && switched.log[0].geometryStand === 1,
+    "at the stand's end the roll bite draws no sheet in the new rolls until the new stand's first frame", JSON.stringify(switched.log));
+  const relNow = switched.sel ? switched.sel.state.sheetX / switched.L : NaN;
+  ok(!!along && along.stand === 0 && along.step === 9130 && Math.abs(relNow - along.rel) < 0.05,
+    "a point clicked on stand 1's picture as the worker moves on is followed to its child in stand 2",
+    along ? `clicked point ${along.id} at ${along.rel.toFixed(3)} of the sheet from the head; selected in stand 2: point ${switched.sel?.id} at ${relNow.toFixed(3)}` : 'no point to click');
 
   // ── one stand again: nothing of the tandem left on the page
   await c.navigate(page('?cells=6&L=8'));

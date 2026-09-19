@@ -15,8 +15,9 @@ const ROLES: { role: TrackRole; label: string; color: string }[] = [
 ];
 const colorOf = (r: TrackRole) => ROLES.find((x) => x.role === r)!.color;
 
-/** a tandem's stands on the loading path of the point shown (the locus keeps its blue, cracks their vermilion) */
-const STAND_COLORS = ['#4b5a68', '#9c4a1c', '#6b3f7a', '#3d7a6a', '#b08a2e'];
+/** a tandem's stands on the loading path of the point shown (the locus keeps its blue, cracks their vermilion; no
+ * copper, which the most damaged point's brown is too near), neighbours well apart */
+const STAND_COLORS = ['#4b5a68', '#3d7a6a', '#6b3f7a', '#b08a2e', '#a8467a'];
 export const standColor = (k: number) => STAND_COLORS[k % STAND_COLORS.length];
 
 const MPa = 1e-6;

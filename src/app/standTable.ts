@@ -16,6 +16,10 @@ const ROWS: [string, (r: StandResult) => string, string][] = [
   ['先進率', (r) => (r.forwardSlip != null ? (r.forwardSlip * 100).toFixed(2) : '—'), '%'],
   ['最大損傷', (r) => r.maxDamage.toFixed(3), ''],
   ['亀裂の点', (r) => String(r.nFailed), '個'],
+  // the crack records that started in the stand, and the area (in the section, per unit width) that failed in it:
+  // new cracks and older ones growing, not the recount of carried cracks on the next stand's finer lattice
+  ['生まれた亀裂', (r) => String(r.cracksBorn), '個'],
+  ['伸びた面積', (r) => (r.crackGrowth * 1e6).toFixed(3), 'mm²'],
 ];
 
 /** the share of a stand's mass on points that left the grid */
@@ -104,11 +108,16 @@ export class StandTable {
     });
     const thead = document.createElement('thead');
     thead.append(head);
-    // the tandem stopped before its last stand (src/mpm/tandem.ts, TandemStop)
+    // under the table: why the tandem stopped before its last stand (src/mpm/tandem.ts, TandemStop), and why a
+    // finished stand has no steady values
+    const notes: string[] = [];
+    const k = results.length; // the stand it stopped at (1 = the first)
+    if (stopped) notes.push(`${STOP_TEXT[stopped](k, results[k - 1])}。その先のスタンドは計算していない`);
+    const unsteady = results.filter((r) => r.steadyForce == null).map((r) => `#${r.stand + 1}`);
+    if (unsteady.length) notes.push(`${unsteady.join('・')} は定常の読みが無い（板が短く、頭端が出口の先に届く前に尾端がバイトに入る）ので、荷重・出側板厚・先進率は —`);
     const caption = document.createElement('caption');
     caption.className = 'table-note';
-    const k = results.length; // the stand it stopped at (1 = the first)
-    if (stopped) caption.textContent = `${STOP_TEXT[stopped](k, results[k - 1])}。その先のスタンドは計算していない`;
-    this.table.replaceChildren(...(stopped ? [caption] : []), thead, ...bodies);
+    caption.textContent = notes.join('。');
+    this.table.replaceChildren(...(notes.length ? [caption] : []), thead, ...bodies);
   }
 }

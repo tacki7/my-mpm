@@ -171,11 +171,16 @@ export function drawChart(canvas: HTMLCanvasElement, spec: ChartSpec): void {
       ctx.fill();
     }
     if (d.label) {
-      ctx.fillStyle = d.color;
+      // above and right of the dot, with a rim of the paper so that a line under it does not hide it
       ctx.font = uiFont(11, 600);
       ctx.textAlign = 'left';
       ctx.textBaseline = 'bottom';
-      ctx.fillText(d.label, X(d.x) + 5, Y(d.y) - 3);
+      ctx.lineJoin = 'round';
+      ctx.lineWidth = 3;
+      ctx.strokeStyle = getComputedStyle(canvas).getPropertyValue('--paper').trim() || '#e6e9e7';
+      ctx.strokeText(d.label, X(d.x) + 5, Y(d.y) - 5);
+      ctx.fillStyle = d.color;
+      ctx.fillText(d.label, X(d.x) + 5, Y(d.y) - 5);
     }
   }
   ctx.restore();
