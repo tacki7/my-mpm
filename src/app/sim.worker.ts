@@ -4,7 +4,7 @@
 import type { SimParams } from '../mpm/params.ts';
 import type { Sim, FieldName } from '../mpm/solver.ts';
 import type { FromWorker, ToWorker, Frame, Geometry } from './protocol.ts';
-import { TandemSim } from './tandemStub.ts';
+import { READ_STEPS, TandemSim, type StandDone } from '../mpm/tandem.ts';
 import { Tracker } from './tracker.ts';
 
 let tandem: TandemSim | null = null;
@@ -21,7 +21,7 @@ let dirsOn = false;
 
 const FRAME_MS = 33;
 /** steps between the tandem's own reads (tools/tandem.mjs reads at the same steps, so the results agree) */
-const EVERY = 2000;
+const EVERY = READ_STEPS;
 
 function post(msg: FromWorker, transfer: Transferable[] = []) {
   (self as unknown as Worker).postMessage(msg, transfer);
@@ -112,7 +112,7 @@ function frame(): void {
 const passStep = () => tandem!.stepOffset + sim!.step;
 
 /** one stand is past: hold its last picture, and follow the points into the next stand */
-function onStandDone(e: { stand: number; sim: Sim; next: Sim | null; parentOf: Int32Array | null; result: import('./tandemStub.ts').StandResult }): void {
+function onStandDone(e: StandDone): void {
   tracker?.record();
   const [last, transfer] = makeFrame(e.sim, tracker);
   last.running = false;

@@ -1,7 +1,7 @@
 // Messages between the page and the simulation worker.
 import type { SimParams } from '../mpm/params.ts';
 import type { Crack, Diagnostics, FieldName } from '../mpm/solver.ts';
-import type { StandResult } from './tandemStub.ts';
+import type { StandResult } from '../mpm/tandem.ts';
 
 export type ToWorker =
   /** stands: a tandem of that many stands (1: the single stand as before) */
