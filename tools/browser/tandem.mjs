@@ -7,7 +7,8 @@
 // stand; the CSV files are downloaded with a stand column on the whole pass's clock, and the PNG holds
 // the three pictures; real mouse events on the running stand's slot zoom, reset and pick a point; moving a boundary between the panes resizes the slots with the roll bite; a narrow
 // screen (700 px) stacks the pictures without a sideways scroll; a strip broken through the thickness
-// stops the tandem with the reason in the table and the status; five stands' table fits the record column at
+// stops the tandem with the reason in the table and the status; a crack grown over the stands is in the table
+// by stand; five stands' table fits the record column at
 // 1600 and 700 px; the stands field is the section view's only; and back
 // to one stand, the page is as before (no slots, no table). Not a `@check` (it needs the dev server and
 // Chrome).
@@ -262,6 +263,24 @@ try {
     `${broke.stopped}; ${broke.phase}; ${broke.note.slice(0, 30)}; ${broke.labels.join(' ')}`,
   );
 
+  // ── a crack that starts in stand 1 and grows through stand 3 (a small weak spot, 4 cells, a 4 mm strip; about
+  //    15 s): the table's cracks born and area grown are the crack records' stands and areaByStand summed by stand
+  const grows = Buffer.from(JSON.stringify({ damage: { ...DAMAGE_4340, etaCutoff: -2 }, defects: [{ kind: 'weak', x: 2e-3, y: 0, ax: 0.15e-3, ay: 0.3e-3, ductility: 0.02 }] })).toString('base64url');
+  await c.navigate(page(`?stands=3&cells=4&L=4&autorun=1&cond=${grows}`));
+  await c.waitFor('__mpm.done', 300000);
+  await painted();
+  const grown = await c.evaluate(`(() => {
+    const line = (name) => [...([...document.querySelectorAll('#stand-results tbody')].find((b) => b.querySelector('tr.name th').textContent.startsWith(name))?.querySelectorAll('tr.values td') ?? [])].map((d) => d.textContent);
+    return { born: line('生まれた亀裂'), area: line('伸びた面積'), records: __mpm.cracks.map((c) => ({ stand: c.stand, area: c.areaByStand ?? [] })) };
+  })()`);
+  const bornWant = [0, 1, 2].map((k) => String(grown.records.filter((r) => r.stand === k).length));
+  const areaWant = [0, 1, 2].map((k) => (grown.records.reduce((a, r) => a + (r.area[k] ?? 0), 0) * 1e6).toFixed(3));
+  ok(
+    grown.records.length > 0 && areaWant.filter((v) => +v > 0).length >= 2 && grown.born.join() === bornWant.join() && grown.area.join() === areaWant.join(),
+    "the table's cracks born and area grown [mm²] are the crack records' summed by stand",
+    `born ${grown.born.join(' / ')} (records ${bornWant.join(' / ')}), area ${grown.area.join(' / ')} (records ${areaWant.join(' / ')})`,
+  );
+
   // ── five stands, the input's most, with the table full of real values (4 cells, a 4 mm strip: about 85 s):
   //    nothing in the record column scrolls sideways and no row head wraps, at 1600 and at 700 px
   await c.navigate(page('?stands=5&cells=4&L=4&autorun=1'));
@@ -292,13 +311,13 @@ try {
     const worst = await c.evaluate(`(async () => {
       const { StandTable } = await import('/src/app/standTable.ts');
       const t = new StandTable(document.getElementById('stand-results-section'), document.getElementById('stand-results'));
-      const res = [1e-3, 0.748e-3, 0.561e-3, 0.42e-3, 0.315e-3].map((h, k) => ({ stand: k, h0: h, sheetLength: 0, particles: 0, steps: 0, t: 0, phase: 'done', steadyForce: 13.72e6, steadyTorque: 0, exitThickness: h * 0.75, forwardSlip: 0.1044, thicknessOut: h * 0.75, massLost: 0.0123, separated: false, maxDamage: 0.9123, nFailed: 12345, cracks: 0, cracksBorn: 0, crackGrowth: 0 }));
+      const res = [1e-3, 0.748e-3, 0.561e-3, 0.42e-3, 0.315e-3].map((h, k) => ({ stand: k, h0: h, sheetLength: 0, particles: 0, steps: 0, t: 0, phase: 'done', steadyForce: 13.72e6, steadyTorque: 0, exitThickness: h * 0.75, forwardSlip: 0.1044, thicknessOut: h * 0.75, massLost: 0.0123, separated: false, maxDamage: 0.9123, nFailed: 12345, cracks: 0, cracksBorn: 123, crackGrowth: 12.345e-6 }));
       t.update(5, res, 4, true, null, 'lost');
       await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
       const rec = document.querySelector('.record'), wrap = document.querySelector('.stand-results .table-scroll');
       return { recOver: rec.scrollWidth - rec.clientWidth, wrapOver: wrap.scrollWidth - wrap.clientWidth, rows: document.querySelectorAll('#stand-results tr.name').length };
     })()`);
-    ok(worst.recOver <= 0 && worst.wrapOver <= 0 && worst.rows === 8, `five stands' table at ${w} px, every value at its widest and the lost-mass line: no sideways scroll`, `overflow record ${worst.recOver} / table ${worst.wrapOver} px, ${worst.rows} quantities`);
+    ok(worst.recOver <= 0 && worst.wrapOver <= 0 && worst.rows === 10, `five stands' table at ${w} px, every value at its widest and the lost-mass line: no sideways scroll`, `overflow record ${worst.recOver} / table ${worst.wrapOver} px, ${worst.rows} quantities`);
   }
   await c.setViewport(1600, 1000);
 

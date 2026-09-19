@@ -16,6 +16,10 @@ const ROWS: [string, (r: StandResult) => string, string][] = [
   ['先進率', (r) => (r.forwardSlip != null ? (r.forwardSlip * 100).toFixed(2) : '—'), '%'],
   ['最大損傷', (r) => r.maxDamage.toFixed(3), ''],
   ['亀裂の点', (r) => String(r.nFailed), '個'],
+  // the crack records that started in the stand, and the area (in the section, per unit width) that failed in it:
+  // new cracks and older ones growing, not the recount of carried cracks on the next stand's finer lattice
+  ['生まれた亀裂', (r) => String(r.cracksBorn), '個'],
+  ['伸びた面積', (r) => (r.crackGrowth * 1e6).toFixed(3), 'mm²'],
 ];
 
 /** the share of a stand's mass on points that left the grid */
