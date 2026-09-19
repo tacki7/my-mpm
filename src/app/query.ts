@@ -152,6 +152,7 @@ const RULES: Record<string, Rule> = {
   'damage.D5': r(-5, 5),
   'damage.clCrit': r(0.01, 5),
   'damage.etaCutoff': r(-2, 0),
+  'damage.nonlocalLength': r(0, 5e-3),
   'damage.gtn.q1': r(0, 5),
   'damage.gtn.q2': r(0, 5),
   'damage.gtn.q3': r(0, 25),

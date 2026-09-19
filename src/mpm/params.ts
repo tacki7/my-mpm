@@ -80,6 +80,11 @@ export interface DamageParams {
   /** no damage accumulates while the triaxiality η = σm/σeq is below this (Bao-Wierzbicki cut-off −1/3) */
   etaCutoff: number;
   failure: FailureMode;
+  /**
+   * Nonlocal damage: the increments of the three indicators are averaged over this length [m]
+   * before they add up (through the grid, like J-bar; 0 = local, per point)
+   */
+  nonlocalLength: number;
 }
 
 export interface RollingParams {
@@ -232,6 +237,7 @@ export const DAMAGE_4340: DamageParams = {
   clCrit: 0.6,
   etaCutoff: -1 / 3,
   failure: 'tension-cut',
+  nonlocalLength: 0,
 };
 
 export function defaultParams(): SimParams {
