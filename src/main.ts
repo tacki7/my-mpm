@@ -9,7 +9,7 @@ import { buildExport } from './app/export.ts';
 import { buildPanel } from './app/panel.ts';
 import { setupSplitters } from './app/splitters.ts';
 import type { CrackView, Frame, FromWorker, Geometry, ToWorker } from './app/protocol.ts';
-import { applyQuery, standsOf, stopAfterOf } from './app/query.ts';
+import { applyQuery, stopAfterOf } from './app/query.ts';
 import { Overview } from './app/overview.ts';
 import { PlanMode } from './app/planMode.ts';
 import { BiteView } from './app/view.ts';
@@ -26,8 +26,6 @@ let presetId = presetById(query.get('preset') ?? '')?.id ?? 'standard';
 let params: SimParams = applyQuery(presetById(presetId)!.build(), query);
 let field: FieldName = (FIELDS.find((f) => f.id === query.get('field'))?.id ?? 'seq') as FieldName;
 const stopAfter = stopAfterOf(query);
-/** stands of the tandem (1: a single stand, as before) */
-let stands = standsOf(query);
 
 const view = new BiteView($<HTMLCanvasElement>('bite'));
 const explorer = new Explorer(
@@ -208,7 +206,7 @@ function restart() {
   explorer.reset();
   view.marks = [];
   awaitingReady = true;
-  send({ type: 'init', params: cloneParams(params), stands, field, stopAfter });
+  send({ type: 'init', params: cloneParams(params), stands: params.rolling.stands ?? 1, field, stopAfter });
   updateButtons();
 }
 
