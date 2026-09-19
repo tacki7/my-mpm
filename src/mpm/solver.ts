@@ -185,6 +185,10 @@ export class Sim {
   readonly dJC: Float64Array;
   readonly dHM: Float64Array;
   readonly dCL: Float64Array;
+  /** nonlocal damage: this step's increments of JC, HM, CL, averaged over the grid before they add up */
+  private nlInc: Float64Array[] | null = null;
+  private nlMass: Float64Array | null = null;
+  private nlGrid: Float64Array | null = null;
   readonly por: Float64Array; // porosity f (GTN)
   readonly ev: Float64Array; // plastic volume strain Σ tr Δεp (GTN): p = −K (ln J − ev)
   readonly flowRate: Float64Array; // equivalent strain rate [1/s] of the last step if the point flowed (J2), −1 if not
@@ -672,6 +676,8 @@ export class Sim {
     const rateScale = P.rolling.millSpeed / P.rolling.rollSpeed;
     const failMode = dmg.failure;
     const gtn = dmg.yield === 'gtn' ? dmg.gtn : null;
+    const nl = dmg.nonlocalLength > 0 ? (this.nlInc ??= [0, 1, 2].map(() => new Float64Array(n))) : null;
+    if (nl) for (const a of nl) a.fill(0);
     const xMax = (nxN - 3) * h + ox;
     const yMax = (nyN - 3) * h + oy;
     const xMin = ox + 2 * h;
@@ -828,12 +834,101 @@ export class Sim {
         const du = 1 / this.duct[p];
         const Ts = homologousTemperature(mat, this.temp[p]);
         const epsDotStar = epsDot / mat.epsDot0;
+        if (nl) {
+          // nonlocal: keep the increments; they are averaged and added after this pass
+          if (eta > dmg.etaCutoff) {
+            nl[0][p] = (dep / jcFractureStrain(dmg, eta, epsDotStar, Ts)) * du;
+            nl[1][p] = (dep / hmFractureStrain(eta)) * du;
+          }
+          if (s1 > 0) nl[2][p] = ((s1 / q) * dep * du) / dmg.clCrit;
+          continue;
+        }
         if (eta > dmg.etaCutoff) {
           this.dJC[p] += (dep / jcFractureStrain(dmg, eta, epsDotStar, Ts)) * du;
           this.dHM[p] += (dep / hmFractureStrain(eta)) * du;
         }
         if (s1 > 0) this.dCL[p] += ((s1 / q) * dep * du) / dmg.clCrit;
         if (dmg.model !== 'none' && this.governingDamage(p) >= 1) this.fail(p);
+      }
+    }
+    if (nl) this.addNonlocalDamage(nl);
+  }
+
+  /** Grid passes of the nonlocal average for a length ℓ: one pass spreads by about 0.71 h along each axis (std). */
+  nonlocalPasses(length: number): number {
+    return Math.max(1, Math.round(2 * (length / this.h) ** 2));
+  }
+
+  private addNonlocalDamage(inc: Float64Array[]): void {
+    this.nonlocalAverage(inc, this.nonlocalPasses(this.params.damage.nonlocalLength));
+    const { n, active, failed } = this;
+    const model = this.params.damage.model;
+    for (let p = 0; p < n; p++) {
+      if (!active[p] || failed[p]) continue;
+      this.dJC[p] += inc[0][p];
+      this.dHM[p] += inc[1][p];
+      this.dCL[p] += inc[2][p];
+      if (model !== 'none' && this.governingDamage(p) >= 1) this.fail(p);
+    }
+  }
+
+  /**
+   * Average per-point values over the grid, in place: each pass scatters them to the nodes
+   * mass-weighted and gathers them back with the quadratic B-spline weights of the points'
+   * current positions (as J-bar does for the volume). Failed points neither give nor take.
+   * A uniform field stays the same and Σ m·v is kept (the weights are a partition of unity).
+   */
+  nonlocalAverage(values: Float64Array[], passes: number): void {
+    const { n, active, failed, px, py, mass, invH, ox, oy, nyN } = this;
+    const k = values.length;
+    const nNodes = this.nxN * nyN;
+    const gm = (this.nlMass ??= new Float64Array(nNodes));
+    const gv = this.nlGrid && this.nlGrid.length === nNodes * k ? this.nlGrid : (this.nlGrid = new Float64Array(nNodes * k));
+    const wx = [0, 0, 0];
+    const wy = [0, 0, 0];
+    const cell = (p: number) => {
+      const gx = (px[p] - ox) * invH;
+      const gy = (py[p] - oy) * invH;
+      const bx = Math.floor(gx - 0.5);
+      const by = Math.floor(gy - 0.5);
+      const fx = gx - bx;
+      const fy = gy - by;
+      wx[0] = 0.5 * (1.5 - fx) * (1.5 - fx);
+      wx[1] = 0.75 - (fx - 1) * (fx - 1);
+      wx[2] = 0.5 * (fx - 0.5) * (fx - 0.5);
+      wy[0] = 0.5 * (1.5 - fy) * (1.5 - fy);
+      wy[1] = 0.75 - (fy - 1) * (fy - 1);
+      wy[2] = 0.5 * (fy - 0.5) * (fy - 0.5);
+      return bx * nyN + by;
+    };
+    for (let pass = 0; pass < passes; pass++) {
+      gm.fill(0);
+      gv.fill(0);
+      for (let p = 0; p < n; p++) {
+        if (!active[p] || failed[p]) continue;
+        const base = cell(p);
+        const m = mass[p];
+        for (let i = 0; i < 3; i++) {
+          for (let j = 0; j < 3; j++) {
+            const idx = base + i * nyN + j;
+            const wm = wx[i] * wy[j] * m;
+            gm[idx] += wm;
+            for (let c = 0; c < k; c++) gv[idx * k + c] += wm * values[c][p];
+          }
+        }
+      }
+      for (let idx = 0; idx < nNodes; idx++) {
+        const m = gm[idx];
+        if (m > 0) for (let c = 0; c < k; c++) gv[idx * k + c] /= m;
+      }
+      for (let p = 0; p < n; p++) {
+        if (!active[p] || failed[p]) continue;
+        const base = cell(p);
+        for (let c = 0; c < k; c++) {
+          let v = 0;
+          for (let i = 0; i < 3; i++) for (let j = 0; j < 3; j++) v += wx[i] * wy[j] * gv[(base + i * nyN + j) * k + c];
+          values[c][p] = v;
+        }
       }
     }
   }

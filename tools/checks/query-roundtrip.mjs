@@ -36,6 +36,7 @@ p.material = { ...STEEL_4340, jcA: 801.5e6, jcN: 0.2712 };
 p.damage.D2 = 1.111;
 p.damage.D4 = 0.0031;
 p.damage.clCrit = 0.4321;
+p.damage.nonlocalLength = 0.12e-3;
 p.damage.failure = 'erode';
 p.damage.model = 'cockcroft-latham';
 p.damage.yield = 'gtn';
