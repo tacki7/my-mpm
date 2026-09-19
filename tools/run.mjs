@@ -50,7 +50,9 @@ const summary = {
   steadyTorque_N: mean(steady.map((h) => h.rollTorque)),
   exitThickness_mm: mean(steady.filter((h) => h.exitThickness).map((h) => h.exitThickness)) * 1e3,
   forwardSlip: mean(steady.filter((h) => h.forwardSlip != null).map((h) => h.forwardSlip)),
-  neutralX_mm: mean(steady.filter((h) => h.neutralX != null).map((h) => h.neutralX)) * 1e3,
+  // null when no steady sample had one (the mean of nothing is not 0: that would read "at the exit")
+  neutralX_mm: ((xs) => (xs.length ? mean(xs) * 1e3 : null))(steady.filter((h) => h.neutralX != null).map((h) => h.neutralX)),
+  neutralStates: Object.fromEntries(['found', 'sticking', 'backward', 'forward'].map((k) => [k, steady.filter((h) => h.neutralState === k).length])),
   inertiaRatio: d.inertiaRatio,
   kineticRatio: mean(steady.filter((h) => h.kineticRatio != null).map((h) => h.kineticRatio)),
   maxDamage: d.maxDamage,

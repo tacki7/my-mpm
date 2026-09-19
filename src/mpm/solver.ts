@@ -63,6 +63,8 @@ export interface Crack {
 
 export type Phase = 'approach' | 'bite' | 'steady' | 'tail-out' | 'done' | 'stalled';
 
+export type NeutralState = 'found' | 'sticking' | 'backward' | 'forward' | 'none';
+
 export interface Diagnostics {
   t: number;
   step: number;
@@ -85,8 +87,18 @@ export interface Diagnostics {
   exitThickness: number | null;
   /** mean sheet speed at the exit probe / roll surface speed − 1 */
   forwardSlip: number | null;
-  /** neutral point: where the friction on the sheet turns from +x (entry side) to −x, averaged since the last read; null without one [m] */
+  /**
+   * neutral point: where the friction on the sheet, summed per bin since the last read, turns from +x
+   * (the rolls draw the sheet in, entry side) to −x inside the bite (−Lc < x < 0); null when it does not [m]
+   */
   neutralX: number | null;
+  /**
+   * why there is a neutral point or not, from the same sums: 'found'; 'sticking' (no zero in the bite and
+   * the friction stays under μ p everywhere in it: the whole arc sticks); 'backward' (it drives the sheet
+   * in all along: the sheet slides back on the rolls); 'forward' (it holds the sheet back all along);
+   * 'none' (no contact since the last read)
+   */
+  neutralState: NeutralState;
   maxDamage: number;
   nFailed: number;
   cracks: number;
@@ -264,6 +276,7 @@ export class Sim {
   private lastTorque = 0;
   private lastPush = 0;
   private lastNeutral: number | null = null;
+  private lastNeutralState: NeutralState = 'none';
   // contact traction bins (both rolls), one per grid column
   readonly binCol0: number; // grid column of the first bin
   readonly binX0: number; // left edge of the first bin
@@ -275,6 +288,7 @@ export class Sim {
   private readonly lastP: Float64Array; // the last profile, repeated when nothing was stepped in between
   private readonly lastTau: Float64Array;
   private readonly accTau: Float64Array; // tangential force per bin since the last diagnostics read
+  private readonly accN: Float64Array; // normal force per bin since the last diagnostics read
 
   constructor(input: SimParams) {
     const P = cloneParams(input);
@@ -450,7 +464,9 @@ export class Sim {
     // column and centred on it: bins whose edges fall on the columns collect 0, 1
     // or 2 of them by round-off, which made the friction hill saw-toothed.
     this.binW = h;
-    this.binCol0 = Math.floor((-Lc - 6 * h - this.ox) / h);
+    // (−Lc − 6h − ox)/h = (max(2h0, 4h) + L)/h, a whole number of columns up to round-off (floor made
+    // 179.999… into 179 and moved the window one column back)
+    this.binCol0 = Math.round((-Lc - 6 * h - this.ox) / h);
     this.binX0 = this.ox + (this.binCol0 - 0.5) * h;
     this.nBins = Math.ceil((Lc + 12 * h) / h);
     this.binN = new Float64Array(this.nBins);
@@ -458,6 +474,7 @@ export class Sim {
     this.lastP = new Float64Array(this.nBins);
     this.lastTau = new Float64Array(this.nBins);
     this.accTau = new Float64Array(this.nBins);
+    this.accN = new Float64Array(this.nBins);
   }
 
   /** Advance one explicit step. */
@@ -617,7 +634,7 @@ export class Sim {
     const pushing = this.pusherActive;
     const vPush = this.vIn;
     const invDt = 1 / dt;
-    const { binN, binT, accTau, binCol0, nBins } = this;
+    const { binN, binT, accTau, accN, binCol0, nBins } = this;
     let pushImpulse = 0;
     const fyAcc = [0, 0];
     const tqAcc = [0, 0];
@@ -666,7 +683,9 @@ export class Sim {
           tqAcc[k] += -(rx * fy - ry * fx);
           const b = col - binCol0;
           if (b >= 0 && b < nBins) {
-            binN[b] += fx * nx + fy * ny;
+            const fn = fx * nx + fy * ny;
+            binN[b] += fn;
+            accN[b] += fn;
             // tangent with +x orientation
             let tnx = -ny;
             let tny = nx;
@@ -938,7 +957,10 @@ export class Sim {
       fyAcc[k] += -f * ny;
       tqAcc[k] += -(rx * f * ny - ry * f * nx);
       const b = col - this.binCol0;
-      if (b >= 0 && b < this.nBins) this.binN[b] += f;
+      if (b >= 0 && b < this.nBins) {
+        this.binN[b] += f;
+        this.accN[b] += f;
+      }
     }
   }
 
@@ -1477,7 +1499,7 @@ export class Sim {
       // top roll turns counter-clockwise (ω > 0): driving torque opposes the resisting torque of the sheet
       this.lastTorque = (-this.accTorque[0] + this.accTorque[1]) / 2 / steps;
       this.lastPush = this.accPush / steps;
-      this.lastNeutral = this.neutralPoint(this.accTau);
+      [this.lastNeutral, this.lastNeutralState] = this.neutralPoint(this.accTau, this.accN);
     }
     const fy = this.lastForce;
     const tq = this.lastTorque;
@@ -1487,6 +1509,7 @@ export class Sim {
     this.accTorque = [0, 0];
     this.accPush = 0;
     this.accTau.fill(0);
+    this.accN.fill(0);
     let nActive = 0;
     let nFailed = 0;
     let maxD = 0;
@@ -1526,6 +1549,7 @@ export class Sim {
       exitThickness: ex ? ex.thickness : null,
       forwardSlip: ex ? ex.speed / this.params.rolling.rollSpeed - 1 : null,
       neutralX: this.lastNeutral,
+      neutralState: this.lastNeutralState,
       maxDamage: maxD,
       nFailed,
       cracks: this.cracks.length,
@@ -1557,27 +1581,47 @@ export class Sim {
   }
 
   /**
-   * Neutral point from the tangential force per bin: the end of the entry-side
-   * zone where friction drives the sheet (+x), taken where the running sum from
-   * the entry peaks (robust to a stray sign flip) and refined to the zero crossing
-   * between that bin and the next. Null when friction never turns from + to −.
+   * Neutral point from the tangential and normal force per bin: the end of the entry-side zone
+   * where friction drives the sheet (+x), taken where the running sum from the entry peaks (robust
+   * to a stray sign flip) and refined to the zero crossing between that bin and the next. Only a
+   * zero inside the bite counts; otherwise null, with the reason (see Diagnostics.neutralState).
    */
-  private neutralPoint(tau: Float64Array): number | null {
+  private neutralPoint(tau: Float64Array, fn: Float64Array): [number | null, NeutralState] {
+    const { binX0, binW } = this;
+    const Lc = this.contactLength;
+    const mu = this.params.rolling.mu;
     let cum = 0;
     let best = 0;
     let bb = -1;
+    let contact = false;
     for (let b = 0; b < tau.length; b++) {
       cum += tau[b];
       if (cum > best) {
         best = cum;
         bb = b;
       }
+      if (fn[b] > 0) contact = true;
     }
-    if (bb < 0 || bb + 1 >= tau.length || !(tau[bb + 1] < 0)) return null;
-    const t0 = tau[bb];
-    const t1 = tau[bb + 1];
-    return this.binX0 + (bb + 0.5) * this.binW + (this.binW * t0) / (t0 - t1);
+    if (!contact) return [null, 'none'];
+    if (bb >= 0 && bb + 1 < tau.length && tau[bb + 1] < 0) {
+      const t0 = tau[bb];
+      const t1 = tau[bb + 1];
+      const x = binX0 + (bb + 0.5) * binW + (binW * t0) / (t0 - t1);
+      if (x > -Lc && x < 0) return [x, 'found'];
+    }
+    // no zero in the bite: the whole arc sticks (friction under μ p in every bin, 1 % for round-off:
+    // a slipping node carries μ p exactly), or friction acts one way all along
+    let sticking = true;
+    let sum = 0;
+    for (let b = 0; b < tau.length; b++) {
+      const xb = binX0 + (b + 0.5) * binW;
+      if (!(xb > -Lc && xb < 0) || !(fn[b] > 0)) continue;
+      if (Math.abs(tau[b]) >= 0.99 * mu * fn[b]) sticking = false;
+      sum += tau[b];
+    }
+    return [null, sticking ? 'sticking' : sum > 0 ? 'backward' : 'forward'];
   }
+
 
   /**
    * Contact traction along x, averaged since the last call (which resets it).
