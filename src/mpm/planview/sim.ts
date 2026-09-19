@@ -106,6 +106,17 @@ export class PlanSim {
   // the node columns [lo, hi) assignFields wrote last step
   private gGLo = 0;
   private gGHi = 0;
+  // 'dfg': the node columns [fcLo, fcHi) that can be on the second field this step (the failed points' stencils,
+  // set by assignFields), and the columns of the second field written since they were last cleared
+  private fcLo = 0;
+  private fcHi = 0;
+  private dirtyLo = 0;
+  private dirtyHi = 0;
+  // assignFields: a point's weights and their gradients along x and z
+  private readonly swx = new Float64Array(3);
+  private readonly swz = new Float64Array(3);
+  private readonly sdx = new Float64Array(3);
+  private readonly sdz = new Float64Array(3);
   /** 'dfg': node-steps this step where the two fields came together (contact) */
   fieldContacts = 0;
 
@@ -354,15 +365,28 @@ export class PlanSim {
     const nNodes = this.nxN * nzN;
     const r = this.params.rolling;
     const R = r.rollRadius;
-    // the second field's nodes only when it is used this step (nothing reads them otherwise)
-    const end = pf !== null ? this.NN : nNodes;
-    gm.fill(0, 0, end);
-    gvx.fill(0, 0, end);
-    gvz.fill(0, 0, end);
-    gcap.fill(0, 0, end);
-    this.gfx.fill(0, 0, end);
-    this.gfz.fill(0, 0, end);
-    gpush.fill(0, 0, end);
+    gm.fill(0, 0, nNodes);
+    gvx.fill(0, 0, nNodes);
+    gvz.fill(0, 0, nNodes);
+    gcap.fill(0, 0, nNodes);
+    this.gfx.fill(0, 0, nNodes);
+    this.gfz.fill(0, 0, nNodes);
+    gpush.fill(0, 0, nNodes);
+    // the second field only when it is used this step, over its columns now and those it was written on before
+    // (outside them it stays cleared, and nothing reads it)
+    if (pf !== null) {
+      const a = nNodes + Math.min(this.dirtyLo, this.fcLo) * nzN;
+      const b = nNodes + Math.max(this.dirtyHi, this.fcHi) * nzN;
+      gm.fill(0, a, b);
+      gvx.fill(0, a, b);
+      gvz.fill(0, a, b);
+      gcap.fill(0, a, b);
+      this.gfx.fill(0, a, b);
+      this.gfz.fill(0, a, b);
+      gpush.fill(0, a, b);
+      this.dirtyLo = this.fcLo;
+      this.dirtyHi = this.fcHi;
+    }
     const k4 = 4 * invH * invH;
     const grip = this.gripCols;
     const NI = this.NI;
@@ -448,18 +472,25 @@ export class PlanSim {
    * in-plane area (the thickness does not change the side). The mid-width symmetry plane: the failed points'
    * mirror images count too — the ghost nodes' G and C are folded onto their mirrors (z negated), the plane's own
    * nodes have G_z = C_z = 0, and the ghosts take the mirrored values back, so a point near the plane is on the
-   * same side at a ghost node as its mirror image is at the real one. Only the node columns the failed points'
-   * stencils cover, and the points whose stencils reach them, are visited.
+   * same side at a ghost node as its mirror image is at the real one. Only the box of the failed points' stencils
+   * is visited (their columns, and their rows, widened to the ghosts when it comes within reach of the plane's
+   * fold), with the points whose stencils reach into it; the failed points are found by the typed array's own
+   * search, and the sums run over them in the same order as a plain loop would.
    */
   private assignFields(): Uint8Array | null {
     const { n, active, failed, px, pz, mass, invH, ox, oz, nzN, gGx, gGz, gCx, gCz, gCw } = this;
     let lo = Infinity;
     let hi = -Infinity;
-    for (let p = 0; p < n; p++) {
-      if (!active[p] || !failed[p]) continue;
+    let r0 = Infinity;
+    let r1 = -Infinity;
+    for (let p = failed.indexOf(1); p >= 0; p = failed.indexOf(1, p + 1)) {
+      if (!active[p]) continue;
       const bx = Math.floor((px[p] - ox) * invH - 0.5);
+      const bz = Math.floor((pz[p] - oz) * invH - 0.5);
       if (bx < lo) lo = bx;
       if (bx > hi) hi = bx;
+      if (bz < r0) r0 = bz;
+      if (bz > r1) r1 = bz;
     }
     // last step's columns are cleared first (what it wrote), then this step's
     gGx.fill(0, this.gGLo * nzN, this.gGHi * nzN);
@@ -469,17 +500,15 @@ export class PlanSim {
     gCw.fill(0, this.gGLo * nzN, this.gGHi * nzN);
     if (lo === Infinity) {
       this.gGLo = this.gGHi = 0;
+      this.fcLo = this.fcHi = 0;
       return null;
     }
     hi += 3;
-    this.gGLo = lo;
-    this.gGHi = hi;
+    this.gGLo = this.fcLo = lo;
+    this.gGHi = this.fcHi = hi;
     const pf = this.pfBuf.length === 9 * n ? this.pfBuf : (this.pfBuf = new Uint8Array(9 * n));
     this.pfAny.fill(0);
-    const wx = [0, 0, 0];
-    const wz = [0, 0, 0];
-    const dx = [0, 0, 0];
-    const dz = [0, 0, 0];
+    const { swx: wx, swz: wz, sdx: dx, sdz: dz } = this;
     const weights = (p: number): number => {
       const gx = (px[p] - ox) * invH;
       const gz = (pz[p] - oz) * invH;
@@ -502,8 +531,8 @@ export class PlanSim {
       dz[2] = -(fz - 0.5) * invH;
       return bx * nzN + bz;
     };
-    for (let p = 0; p < n; p++) {
-      if (!active[p] || !failed[p]) continue;
+    for (let p = failed.indexOf(1); p >= 0; p = failed.indexOf(1, p + 1)) {
+      if (!active[p]) continue;
       const V = this.dp * this.dp * (this.f00[p] * this.f11[p] - this.f01[p] * this.f10[p]);
       const m = mass[p];
       const base = weights(p);
@@ -545,11 +574,42 @@ export class PlanSim {
       }
     }
     const byCentroid = (this.params.numerics.crackSide ?? 'centroid') === 'centroid';
+    // the rows G can be non-zero on: the failed points' stencils, and with the fold across the plane (a box within two
+    // rows of the plane's mirror band) every row from the ghosts up to the band's top
+    const near = r0 <= 2 * kSym;
+    const zLo = near ? 0 : r0;
+    const zHi = near ? Math.max(r1 + 2, 2 * kSym) : r1 + 2;
     let any = false;
     for (let p = 0; p < n; p++) {
       if (!active[p]) continue;
       const bx = Math.floor((px[p] - ox) * invH - 0.5);
       if (bx + 3 <= lo || bx >= hi) continue;
+      const bz = Math.floor((pz[p] - oz) * invH - 0.5);
+      if (bz + 2 < zLo || bz > zHi) continue;
+      if (byCentroid) {
+        // the side needs no weights: the point beyond C_i along G_i, at each node where G_i ≠ 0
+        const b = bx * nzN + bz;
+        let far = 0;
+        for (let i = 0; i < 3; i++) {
+          for (let j = 0; j < 3; j++) {
+            const idx = b + i * nzN + j;
+            const Gx = gGx[idx];
+            const Gz = gGz[idx];
+            let f = 0;
+            if (Gx !== 0 || Gz !== 0) {
+              const w = gCw[idx];
+              f = (px[p] - gCx[idx] / w) * Gx + (pz[p] - gCz[idx] / w) * Gz > 0 ? 1 : 0;
+            }
+            pf[9 * p + 3 * i + j] = f;
+            far |= f;
+          }
+        }
+        if (far) {
+          this.pfAny[p] = 1;
+          any = true;
+        }
+        continue;
+      }
       const base = weights(p);
       let gpx = 0;
       let gpz = 0;
@@ -640,7 +700,9 @@ export class PlanSim {
     const halves = two ? 2 : 1;
     this.fieldContacts = 0;
     for (let i = 0; i < nxN; i++) {
-      for (let half = 0; half < halves; half++) {
+      // the second field has mass only on the failed points' columns (elsewhere it stays cleared)
+      const hv = halves === 2 && i >= this.fcLo && i < this.fcHi ? 2 : 1;
+      for (let half = 0; half < hv; half++) {
         const col = i * nzN + half * nNodes;
         for (let k = 0; k < kSym; k++) {
           const g = col + k;
@@ -651,8 +713,8 @@ export class PlanSim {
           gcap[q] += gcap[g];
         }
       }
-      if (two) this.fieldContact(i * nzN + kSym, (i + 1) * nzN, mMin);
-      for (let half = 0; half < halves; half++) {
+      if (hv === 2) this.fieldContact(i * nzN + kSym, (i + 1) * nzN, mMin);
+      for (let half = 0; half < hv; half++) {
         const col = i * nzN + half * nNodes;
         for (let k = kSym; k < nzN; k++) {
           const idx = col + k;
