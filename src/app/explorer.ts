@@ -234,45 +234,47 @@ export class Explorer {
     const curves = fns.map((c) => ({ ...c, y: eta.map(c.fn) }));
     const gov = curves.find((c) => c.model === d.model);
     const govAt = gov ? gov.y[Math.round(((1 / 3 - lo) / (hi - lo)) * (N - 1))] ?? 0 : 0;
-    const yMax = Math.max(0.3, 1.3 * epMax, Math.min(3, 1.2 * (Number.isFinite(govAt) ? govAt : 0)));
+    // strain axis (horizontal) from 0 to epTop; triaxiality η on the vertical axis
+    const epTop = Math.max(0.3, 1.3 * epMax, Math.min(3, 1.2 * (Number.isFinite(govAt) ? govAt : 0)));
     const series: Series[] = curves.map((c) => ({
-      x: eta,
-      y: c.y,
+      x: c.y,
+      y: eta,
       color: c === gov ? '#2c4a8c' : 'rgba(138,148,156,0.9)',
       label: c.label,
       dash: c === gov ? undefined : [4, 3],
     }));
     const dots: NonNullable<Parameters<typeof drawChart>[1]['dots']> = [];
     for (const t of this.tracks) {
-      const x: number[] = [];
-      const y: number[] = [];
+      // path as (εp, η): the strain across, the triaxiality up
+      const ep: number[] = [];
+      const et: number[] = [];
       for (let i = 0; i < t.path.length; i += 3) {
-        x.push(t.path[i]);
-        y.push(t.path[i + 1]);
+        et.push(t.path[i]);
+        ep.push(t.path[i + 1]);
       }
-      series.push({ x, y, color: colorOf(t.role), label: t.role });
+      series.push({ x: ep, y: et, color: colorOf(t.role), label: t.role });
       // the shown point, also as D·εf(η): the strain that would give its damage under proportional
       // loading at the current η — it meets the locus exactly when D = 1
       if (t === shown && gov) {
         const f = gov.fn;
-        // (where εf is far above the chart — compression — the line would only spike: leave a gap)
-        const yd = x.map((e, i) => (f(e) > 2 * yMax ? NaN : t.path[3 * i + 2] * f(e)));
-        series.push({ x, y: yd, color: colorOf(t.role), label: 'D·εf', dash: [2, 3] });
-        if (t.state.failed && x.length) dots.push({ x: x[x.length - 1], y: yd[yd.length - 1], color: colorOf(t.role), r: 5, ring: true });
+        // (where εf is far right of the chart — compression — the line would only spike: leave a gap)
+        const dEf = et.map((e, i) => (f(e) > 2 * epTop ? NaN : t.path[3 * i + 2] * f(e)));
+        series.push({ x: dEf, y: et, color: colorOf(t.role), label: 'D·εf', dash: [2, 3] });
+        if (t.state.failed && et.length) dots.push({ x: dEf[dEf.length - 1], y: et[et.length - 1], color: colorOf(t.role), r: 5, ring: true });
       }
-      if (x.length) {
-        const last = x.length - 1;
-        dots.push({ x: x[last], y: y[last], color: colorOf(t.role), r: t.role === this.role ? 4.5 : 3.5, ring: t.state.failed });
+      if (et.length) {
+        const last = et.length - 1;
+        dots.push({ x: ep[last], y: et[last], color: colorOf(t.role), r: t.role === this.role ? 4.5 : 3.5, ring: t.state.failed });
       }
     }
     drawChart(this.canvas, {
-      xLabel: '応力三軸度 η',
-      yLabel: 'εp',
+      xLabel: 'εp',
+      yLabel: '応力三軸度 η',
       series,
       dots,
-      marks: d.model === 'johnson-cook' || d.model === 'hancock-mackenzie' ? [{ x: d.etaCutoff, label: '損傷しない ←' }] : [],
-      xRange: [lo, hi],
-      yRange: [0, yMax],
+      hmarks: d.model === 'johnson-cook' || d.model === 'hancock-mackenzie' ? [{ y: d.etaCutoff, label: '損傷しない ↓' }] : [],
+      xRange: [0, epTop],
+      yRange: [lo, hi],
     });
     const item = (color: string, text: string, dotted = false) =>
       `<span class="item"><span class="swatch${dotted ? ' dotted' : ''}" style="--c:${color}"></span>${text}</span>`;
@@ -289,8 +291,8 @@ export class Explorer {
     if (d.model === 'johnson-cook') parts.push(`JC の曲線は表示中の点のひずみ速度 ε̇* ${rate.toPrecision(3)}・温度 T* ${Ts.toFixed(2)} で描く。`);
     if (duct !== 1) parts.push(`弱い部分の点なので延性 ${duct} 倍。`);
     if (gov)
-      parts.push('実線は (η, εp) の経路。D = ∫ dεp / εf(η) なので η が変わると曲線の手前や先で D = 1 になる。点線は同じ損傷を今の η の比例負荷で与えるひずみ D·εf(η) で、D = 1 のとき曲線に載る。');
-    else parts.push('線は (η, εp) の経路。');
+      parts.push('実線は (εp, η) の経路。D = ∫ dεp / εf(η) なので η が変わると曲線の手前や先で D = 1 になる。点線は同じ損傷を今の η の比例負荷で与えるひずみ D·εf(η) で、D = 1 のとき曲線に載る。');
+    else parts.push('線は (εp, η) の経路。');
     this.note.textContent = parts.join('');
   }
 }

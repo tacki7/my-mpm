@@ -19,6 +19,8 @@ export interface ChartSpec {
   series: Series[];
   /** vertical guide lines at these x values, with their labels */
   marks?: { x: number; label: string }[];
+  /** horizontal guide lines at these y values, with their labels (at the right end) */
+  hmarks?: { y: number; label: string }[];
   /** filled (or ringed) points on top of the lines */
   dots?: { x: number; y: number; color: string; r?: number; ring?: boolean }[];
   xRange?: [number, number];
@@ -115,6 +117,21 @@ export function drawChart(canvas: HTMLCanvasElement, spec: ChartSpec): void {
     ctx.textAlign = 'center';
     ctx.textBaseline = 'top';
     ctx.fillText(m.label, X(m.x), Tm);
+  }
+  for (const m of spec.hmarks ?? []) {
+    if (m.y < y0 || m.y > y1) continue;
+    ctx.save();
+    ctx.setLineDash([3, 4]);
+    ctx.strokeStyle = 'rgba(29,42,58,0.5)';
+    ctx.beginPath();
+    ctx.moveTo(L, Y(m.y));
+    ctx.lineTo(W - Rm, Y(m.y));
+    ctx.stroke();
+    ctx.restore();
+    ctx.fillStyle = ink;
+    ctx.textAlign = 'right';
+    ctx.textBaseline = 'top';
+    ctx.fillText(m.label, W - Rm, Y(m.y) + 2);
   }
   ctx.save();
   ctx.beginPath();
