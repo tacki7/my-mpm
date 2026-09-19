@@ -7,6 +7,12 @@
 // - the same cut closed through the bite: the faces do not go through each other (with the contact normal the
 //   wrong way round they did in the prototype: the band collapsed to a third)
 // - the contact between the fields keeps the momentum at every node
+// Calibrated on copies: the contact normal alone reversed (the prototype's error: its side rule did not depend on
+// the sign of G, its normal did) fails three items; the contact off and the single field fail four. Reversing G throughout does not
+// fail, and should not: with the 'centroid' side the assignment and the normal both follow G and stay consistent.
+// The bounds sit between the working values and those copies: the largest σyy across the faces is 13 MPa here,
+// 54 MPa with the contact off; the closed cut keeps 3.000 dp here, 2.98 on the single field, 2.14 with the contact
+// off
 // @check
 import { ok, between, done } from './lib.mjs';
 import { Sim } from '../../src/mpm/solver.ts';
@@ -88,7 +94,7 @@ function faceSyy(sim) {
   const two = burst('dfg');
   ok(one.f.length >= 4 && one.mean > 100e6, 'centreline cracks, single field: tension across the faces (the case this checks)', `${one.f.length} face points, mean ${(one.mean * 1e-6).toFixed(0)} MPa, max ${(one.max * 1e-6).toFixed(0)} MPa`);
   ok(two.f.length >= 4, "centreline cracks, 'dfg': cracked columns with faces", `${two.f.length} face points`);
-  between(two.max * 1e-6, -1000, 60, "centreline cracks, 'dfg': the largest σyy across the faces [MPa] (no tension carried)");
+  between(two.max * 1e-6, -1000, 30, "centreline cracks, 'dfg': the largest σyy across the faces [MPa] (no tension carried)");
   ok(two.contacts > 0 && two.worst < 1e-12, 'the contact between the fields keeps the momentum at every node', `${two.contacts} node-steps in contact, largest relative change ${two.worst.toExponential(1)}`);
 }
 
@@ -136,6 +142,6 @@ function cut(mode, tf) {
 // ── closed through the bite: the faces hold each other off
 {
   const two = cut('dfg', 0);
-  between(two.across, 2.9, 10, "a cut closed through the bite, 'dfg': the smallest spacing of the points across it [dp] (3 at the start)");
+  between(two.across, 2.995, 10, "a cut closed through the bite, 'dfg': the smallest spacing of the points across it [dp] (3 at the start)");
 }
 done();
