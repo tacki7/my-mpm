@@ -89,8 +89,12 @@ export interface RollingParams {
   /** real mill speed [m/s]; strain rates are scaled by millSpeed/rollSpeed before entering rate-dependent laws */
   millSpeed: number;
   mu: number; // Coulomb friction coefficient roll/sheet
-  backTension: number; // [Pa] on the tail end
-  frontTension: number; // [Pa] on the head end once it has left the roll bite
+  /** [Pa] on the tail end (a stress on its current cross-section); released once the tail reaches the roll bite */
+  backTension: number;
+  /** [Pa] on the head end (a stress on its current cross-section), from when the head passes the exit probe */
+  frontTension: number;
+  /** ramp time of both tensions [s]; 0 or absent: ten passes of the elastic wave along the sheet */
+  tensionRamp?: number;
 }
 
 export interface NumericsParams {
