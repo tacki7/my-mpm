@@ -63,6 +63,10 @@ node $C nav about:blank                                # 描画を止める（�
 tools/browser/browser.sh stop <cdp>; tools/browser/browser.sh stop <dev>
 ```
 
+画面を触ったら `CDP_PORT=<cdp> node tools/browser/smoke.mjs http://localhost:<dev>/ <作業用ディレクトリ>/smoke.png`（約 10 秒）:
+読み込みエラー 0 → 粗い圧延を最後まで → 定常の荷重・出側板厚・先進率が帯の中 → 色の量のタブを全部押して再描画 → スクショ → about:blank。
+1 行ずつ PASS / FAIL、どれか FAIL で exit 1。帯は標準条件・6 セル用（URL で条件を変えると外れる）。スクショは自分で見る。
+
 ポートは必ず渡す（既定値は無い）。`window.__mpm` は `frames` `running` `ready` `done` `diag` `cracks`
 `geometry` `params` `history` と `run()` `restart()` `setField(id)` を持つ。
 
