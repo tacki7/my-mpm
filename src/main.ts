@@ -4,7 +4,7 @@ import { PRESETS, presetById } from './mpm/presets.ts';
 import type { Diagnostics, FieldName } from './mpm/solver.ts';
 import { css, lattice, split, temper } from './app/colormap.ts';
 import { FIELDS, damageLabel, fieldInfo } from './app/fields.ts';
-import { Explorer, standColor } from './app/explorer.ts';
+import { Explorer } from './app/explorer.ts';
 import { buildExport } from './app/export.ts';
 import { buildPanel } from './app/panel.ts';
 import { setupSplitters } from './app/splitters.ts';
@@ -14,6 +14,7 @@ import { Overview } from './app/overview.ts';
 import { PlanMode } from './app/planMode.ts';
 import { BiteView } from './app/view.ts';
 import { StandViews } from './app/standViews.ts';
+import { StandTable } from './app/standTable.ts';
 import type { StandResult } from './mpm/tandem.ts';
 import { attachViewControls } from './app/viewControls.ts';
 import { SteadyForce, drawForceChart, drawHillChart, slabRatio, slabReference, type ForceChartData } from './app/slabOverlay.ts';
@@ -37,6 +38,7 @@ let runStands = 1;
 let standResults: StandResult[] = [];
 /** a tandem: when each stand began on the pass's clock [ms] and its condition (its entry thickness) */
 let standStarts: { t0: number; P: SimParams }[] = [];
+const standTable = new StandTable($('stand-results-section'), $('stand-results'));
 /** the conditions of a stand: the run's, with that stand's entry thickness */
 const standParams = (h0: number): SimParams => {
   const p = cloneParams(params);
@@ -231,7 +233,6 @@ function restart() {
   runStands = params.rolling.stands ?? 1;
   standResults = [];
   standStarts = [];
-  standTableKey = '';
   steadyForce.reset();
   last = null;
   view.frame = null;
@@ -346,61 +347,9 @@ function updateResults(d: Diagnostics, f: Frame) {
   $('phase').textContent = phaseText[d.phase];
 }
 
-/** a tandem: the stands one per column, the finished ones' results (one stand: the section is hidden) */
-let standTableKey = '';
+/** a tandem: the stands' table (one stand: hidden) */
 function updateStandTable() {
-  const cur = last?.stand ?? 0;
-  const key = `${runStands}|${cur}|${standResults.length}|${last?.passDone ?? false}`;
-  if (key === standTableKey) return;
-  standTableKey = key;
-  const section = $('stand-results-section');
-  section.hidden = runStands <= 1;
-  if (runStands <= 1) return;
-  const cell = (tag: 'th' | 'td', text: string, cls?: string) => {
-    const e = document.createElement(tag);
-    e.textContent = text;
-    if (cls) e.className = cls;
-    return e;
-  };
-  const head = document.createElement('tr');
-  head.append(cell('th', ''));
-  for (let k = 0; k < runStands; k++) {
-    const th = cell('th', `#${k + 1}`, k === cur && !last?.passDone ? 'current' : undefined);
-    th.style.color = standColor(k);
-    head.append(th);
-  }
-  head.append(cell('th', ''));
-  const mm = (v: number | null | undefined, digits: number) => (v != null ? (v * 1e3).toFixed(digits) : '—');
-  const rows: [string, (r: StandResult) => string, string][] = [
-    ['入側板厚', (r) => mm(r.h0, 3), 'mm'],
-    ['出側板厚', (r) => mm(r.exitThickness, 3), 'mm'],
-    ['圧下率', (r) => (r.exitThickness != null ? ((1 - r.exitThickness / r.h0) * 100).toFixed(1) : '—'), '%'],
-    ['圧延荷重', (r) => (r.steadyForce != null ? (r.steadyForce * 1e-6).toFixed(2) : '—'), 'kN/mm'],
-    ['先進率', (r) => (r.forwardSlip != null ? (r.forwardSlip * 100).toFixed(2) : '—'), '%'],
-    ['最大損傷', (r) => r.maxDamage.toFixed(3), ''],
-    ['亀裂になった点', (r) => String(r.nFailed), '個'],
-  ];
-  const body = rows.map(([name, value, unit], i) => {
-    const tr = document.createElement('tr');
-    tr.append(cell('th', name));
-    for (let k = 0; k < runStands; k++) {
-      const r = standResults[k];
-      // the stand running now: only its entry thickness is known yet
-      const now = k === cur && !r && i === 0 && geometry ? (geometry.h0 * 1e3).toFixed(3) : k === cur && !r ? '…' : '—';
-      tr.append(cell('td', r ? value(r) : now));
-    }
-    tr.append(cell('td', unit, 'unit'));
-    return tr;
-  });
-  const stalled = standResults.find((r) => r.phase === 'stalled');
-  const note = document.createElement('caption');
-  note.className = 'table-note';
-  note.textContent = stalled ? `#${stalled.stand + 1} で板が止まった（噛み込めない）。その先のスタンドは計算していない` : '';
-  const thead = document.createElement('thead');
-  thead.append(head);
-  const tbody = document.createElement('tbody');
-  tbody.append(...body);
-  $('stand-results').replaceChildren(...(stalled ? [note] : []), thead, tbody);
+  standTable.update(runStands, standResults, last?.stand ?? 0, !!last?.passDone, geometry?.h0 ?? null);
 }
 
 /** the shared clock, from the section model's last frame, while the section view is shown */
