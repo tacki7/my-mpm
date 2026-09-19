@@ -205,7 +205,7 @@ function startWorker() {
         view.geometry = m.next;
         standViews.setCurrent(m.stand + 1);
         steadyForce.reset(); // the steady force of the stand on show
-      }
+      } else if (!m.next && !m.refresh) standViews.finish();
       view.frame = standViews.liveFrame(last); // the pass is over: the last stand's kept picture
       dirty = true;
     }
