@@ -1,16 +1,32 @@
 // The roll-bite view: rolls, the sheet as material points coloured by a field,
-// failed points in ink, and a vermilion stamp where each crack started.
+// failed points in ink, and a vermilion stamp where each crack started. Each
+// point is drawn as the parallelogram its deformation gradient makes of its
+// initial square, a little oversized so neighbours overlap (no seams). The view
+// zooms and pans (viewControls.ts drives it); the thickness can be exaggerated.
 import { css, lattice, split, temper, type Rgb } from './colormap.ts';
 import { fieldInfo } from './fields.ts';
 import { uiFont } from './font.ts';
 import type { Frame, Geometry } from './protocol.ts';
 
 const BINS = 48;
+const PAD = 1; // px added around each point's cell so that neighbours overlap
+const GLYPH = 18; // px between principal-direction glyphs
+
+export type Exaggeration = 'auto' | 1 | 2 | 4;
 
 export interface ViewState {
-  /** screen x of world x = 0 is placed so that the bite sits left of centre */
+  /** thickness exaggeration in use (from exMode) */
   exaggeration: number;
   range: [number, number];
+  /** 1: the default window, 3.4 contact lengths wide */
+  zoom: number;
+  /** world position of the centre of the canvas, from the default one [m] */
+  panX: number;
+  panY: number;
+  /** auto: the sheet takes about 30 % of the height (at most 12×) */
+  exMode: Exaggeration;
+  /** draw the in-plane principal directions */
+  dirs: boolean;
 }
 
 export class BiteView {
@@ -22,7 +38,7 @@ export class BiteView {
   frame: Frame | null = null;
   /** points followed by the stress explorer, ringed on top of the sheet */
   marks: { id: number; kind: 'selected' | 'first-crack' | 'max-damage' }[] = [];
-  state: ViewState = { exaggeration: 1, range: [0, 1] };
+  state: ViewState = { exaggeration: 1, range: [0, 1], zoom: 1, panX: 0, panY: 0, exMode: 'auto', dirs: false };
   private readonly canvas: HTMLCanvasElement;
 
   constructor(canvas: HTMLCanvasElement) {
@@ -41,18 +57,77 @@ export class BiteView {
     this.canvas.height = Math.round(this.h * this.dpr);
   }
 
-  /** world → screen transform for the current geometry */
+  /** width of the default window [m] */
+  private baseWidth(): number {
+    const g = this.geometry!;
+    return Math.max(3.4 * g.contactLength, 16 * g.h0);
+  }
+
+  /** world x at the centre of the default window: the bite sits a little left of it, the exit side shows more */
+  private homeX(): number {
+    return -this.geometry!.contactLength / 2 + this.baseWidth() * 0.08;
+  }
+
+  /** world → screen transform for the current geometry, zoom, pan and exaggeration */
   private transform() {
     const g = this.geometry!;
-    const Lc = g.contactLength;
-    const worldW = Math.max(3.4 * Lc, 16 * g.h0);
-    const sx = this.w / worldW;
-    const x0 = -Lc / 2 + worldW * 0.08; // world x at the centre: the bite sits a little left of it, the exit side shows more
-    const ez = Math.min(12, Math.max(1, (0.3 * this.h) / (g.h0 * sx)));
+    const st = this.state;
+    const sx = (this.w * st.zoom) / this.baseWidth();
+    const x0 = this.homeX() + st.panX;
+    const y0 = st.panY;
+    const ez = st.exMode === 'auto' ? Math.min(12, Math.max(1, (0.3 * this.h) / (g.h0 * sx))) : st.exMode;
     const sy = sx * ez;
     const X = (x: number) => this.w / 2 + (x - x0) * sx;
-    const Y = (y: number) => this.h / 2 - y * sy;
-    return { sx, sy, ez, X, Y, x0 };
+    const Y = (y: number) => this.h / 2 - (y - y0) * sy;
+    return { sx, sy, ez, X, Y, x0, y0 };
+  }
+
+  /** Zoom by `factor` keeping the point under (clientX, clientY) where it is. */
+  zoomAt(clientX: number, clientY: number, factor: number): void {
+    if (!this.geometry) return;
+    const r = this.canvas.getBoundingClientRect();
+    const px = clientX - r.left - this.w / 2;
+    const py = clientY - r.top - this.h / 2;
+    const T = this.transform();
+    const wx = T.x0 + px / T.sx;
+    const wy = T.y0 - py / T.sy;
+    this.state.zoom = Math.min(80, Math.max(0.25, this.state.zoom * factor));
+    const U = this.transform();
+    this.state.panX = wx - px / U.sx - this.homeX();
+    this.state.panY = wy + py / U.sy;
+  }
+
+  /** Zoom about the centre of the canvas. */
+  zoomBy(factor: number): void {
+    const r = this.canvas.getBoundingClientRect();
+    this.zoomAt(r.left + this.w / 2, r.top + this.h / 2, factor);
+  }
+
+  /** Move the picture by (dx, dy) screen pixels. */
+  panBy(dx: number, dy: number): void {
+    if (!this.geometry) return;
+    const T = this.transform();
+    this.state.panX -= dx / T.sx;
+    this.state.panY += dy / T.sy;
+  }
+
+  /** Put world x at the centre of the canvas (keeps the zoom). */
+  centerOn(x: number): void {
+    if (this.geometry) this.state.panX = x - this.homeX();
+  }
+
+  /** Back to the default window. */
+  resetView(): void {
+    this.state.zoom = 1;
+    this.state.panX = 0;
+    this.state.panY = 0;
+  }
+
+  /** World x range shown on the canvas [m]. */
+  visibleRange(): [number, number] | null {
+    if (!this.geometry) return null;
+    const T = this.transform();
+    return [T.x0 - this.w / 2 / T.sx, T.x0 + this.w / 2 / T.sx];
   }
 
   draw(): void {
@@ -69,6 +144,7 @@ export class BiteView {
     this.drawPlanes(T);
     if (f) {
       this.drawParticles(T, f);
+      this.drawDirections(T, f);
       this.drawStamps(T, f);
       this.drawMarks(T, f);
     }
@@ -257,12 +333,32 @@ export class BiteView {
       const b = Math.min(BINS - 1, Math.max(0, Math.floor(t * BINS)));
       buckets[b].push(p);
     }
-    const dx = g.dp * T.sx;
-    const dy = g.dp * T.sy;
+    // half cell of the initial lattice, on screen
+    const hx = 0.5 * g.dp * T.sx;
+    const hy = 0.5 * g.dp * T.sy;
+    const { pos, F } = f;
+    const W = this.w;
     const rect = (p: number) => {
-      const wx = Math.max(1, dx * f.ext[2 * p] * 1.04);
-      const wy = Math.max(1, dy * f.ext[2 * p + 1] * 1.04);
-      ctx.rect(T.X(f.pos[2 * p]) - wx / 2, T.Y(f.pos[2 * p + 1]) - wy / 2, wx, wy);
+      const cx = T.X(pos[2 * p]);
+      const cy = T.Y(pos[2 * p + 1]);
+      if (cx < -40 || cx > W + 40) return;
+      // images of the half edges (dp/2, 0) and (0, dp/2); screen y points down
+      let ax = F[4 * p] * hx;
+      let ay = -F[4 * p + 2] * hy;
+      let bx = F[4 * p + 1] * hx;
+      let by = -F[4 * p + 3] * hy;
+      const ka = 1 + PAD / (Math.hypot(ax, ay) || 1);
+      const kb = 1 + PAD / (Math.hypot(bx, by) || 1);
+      ax *= ka;
+      ay *= ka;
+      bx *= kb;
+      by *= kb;
+      ctx.moveTo(cx + ax + bx, cy + ay + by);
+      ctx.lineTo(cx - ax + bx, cy - ay + by);
+      ctx.lineTo(cx - ax - bx, cy - ay - by);
+      ctx.lineTo(cx + ax - bx, cy + ay - by);
+      // no closePath(): fill() closes each subpath, and closePath() on a path of thousands of
+      // subpaths made the redraw ten times slower (Chrome, 2026-09-19)
     };
     for (let b = 0; b < BINS; b++) {
       const list = buckets[b];
@@ -280,6 +376,65 @@ export class BiteView {
       for (const p of failed) rect(p);
       ctx.fill();
     }
+  }
+
+  /**
+   * In-plane principal directions as small crosses, one per GLYPH px: the arm along σI and the one
+   * along σII, copper in tension and blue in compression, longer for a larger |σ|. The directions go
+   * through the same exaggeration as the picture.
+   */
+  private drawDirections(T: ReturnType<BiteView['transform']>, f: Frame): void {
+    const d = f.dirs;
+    if (!this.state.dirs || !d) return;
+    const ctx = this.ctx;
+    const n = f.flags.length;
+    let smax = 0;
+    for (let p = 0; p < n; p++) {
+      if ((f.flags[p] & 3) !== 1) continue;
+      smax = Math.max(smax, Math.abs(d[3 * p + 1]), Math.abs(d[3 * p + 2]));
+    }
+    if (!(smax > 0)) return;
+    const cols = Math.ceil(this.w / GLYPH) + 1;
+    const taken = new Set<number>();
+    const tension = new Path2D();
+    const compression = new Path2D();
+    for (let p = 0; p < n; p++) {
+      if ((f.flags[p] & 3) !== 1) continue;
+      const cx = T.X(f.pos[2 * p]);
+      const cy = T.Y(f.pos[2 * p + 1]);
+      if (cx < 0 || cx > this.w || cy < 0 || cy > this.h) continue;
+      const key = Math.floor(cy / GLYPH) * cols + Math.floor(cx / GLYPH);
+      if (taken.has(key)) continue;
+      taken.add(key);
+      const th = d[3 * p];
+      for (const [a, s] of [
+        [th, d[3 * p + 1]],
+        [th + Math.PI / 2, d[3 * p + 2]],
+      ]) {
+        let ux = Math.cos(a) * T.sx;
+        let uy = -Math.sin(a) * T.sy;
+        const l = Math.hypot(ux, uy) || 1;
+        const half = 0.42 * GLYPH * (0.3 + (0.7 * Math.abs(s)) / smax);
+        ux = (ux / l) * half;
+        uy = (uy / l) * half;
+        const path = s > 0 ? tension : compression;
+        path.moveTo(cx - ux, cy - uy);
+        path.lineTo(cx + ux, cy + uy);
+      }
+    }
+    ctx.save();
+    ctx.lineCap = 'round';
+    // a light halo so the glyphs read on any colour of the field
+    ctx.lineWidth = 3.5;
+    ctx.strokeStyle = 'rgba(244,245,243,0.75)';
+    ctx.stroke(tension);
+    ctx.stroke(compression);
+    ctx.lineWidth = 1.5;
+    ctx.strokeStyle = '#9c4a1c';
+    ctx.stroke(tension);
+    ctx.strokeStyle = '#1f3f7a';
+    ctx.stroke(compression);
+    ctx.restore();
   }
 
   private drawStamps(T: ReturnType<BiteView['transform']>, f: Frame): void {

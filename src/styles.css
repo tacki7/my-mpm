@@ -297,6 +297,55 @@ button.pending {
   color: var(--ink-soft);
 }
 
+.bite canvas#bite {
+  cursor: grab;
+}
+
+.bite canvas#bite.dragging {
+  cursor: grabbing;
+}
+
+.view-tools {
+  position: absolute;
+  left: 18px;
+  top: 10px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  font-size: var(--fs-xs);
+}
+
+.view-tools button {
+  padding: 2px 9px;
+  font-size: var(--fs-s);
+  background: rgba(244, 245, 243, 0.9);
+}
+
+.view-tools label {
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+  background: rgba(244, 245, 243, 0.9);
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+  padding: 1px 6px;
+}
+
+.view-tools select {
+  padding: 1px 4px;
+  font-size: var(--fs-xs);
+}
+
+.bite canvas.overview {
+  position: absolute;
+  inset: auto 18px 12px auto;
+  width: min(36%, 420px);
+  height: 44px;
+  border: 1px solid var(--rule);
+  cursor: pointer;
+}
+
 .phase {
   position: absolute;
   right: 18px;

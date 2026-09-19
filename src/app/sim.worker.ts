@@ -11,6 +11,7 @@ let running = false;
 let stopAfter: number | null = null;
 let timer: ReturnType<typeof setTimeout> | null = null;
 let msPerStep = 0;
+let dirsOn = false;
 
 const FRAME_MS = 33;
 
@@ -23,24 +24,42 @@ function frame(): void {
   const s = sim;
   const n = s.n;
   const pos = new Float32Array(2 * n);
-  const ext = new Float32Array(2 * n);
+  const F = new Float32Array(4 * n);
   const val = new Float32Array(n);
   const flags = new Uint8Array(n);
   for (let p = 0; p < n; p++) {
     pos[2 * p] = s.px[p];
     pos[2 * p + 1] = s.py[p];
-    ext[2 * p] = Math.abs(s.f00[p]) + Math.abs(s.f01[p]);
-    ext[2 * p + 1] = Math.abs(s.f10[p]) + Math.abs(s.f11[p]);
+    F[4 * p] = s.f00[p];
+    F[4 * p + 1] = s.f01[p];
+    F[4 * p + 2] = s.f10[p];
+    F[4 * p + 3] = s.f11[p];
     flags[p] = (s.active[p] ? 1 : 0) | (s.failed[p] ? 2 : 0);
   }
   s.readField(field, val);
+  let dirs: Float32Array | null = null;
+  if (dirsOn) {
+    dirs = new Float32Array(3 * n);
+    for (let p = 0; p < n; p++) {
+      const pr = s.pres[p];
+      const sxx = s.sxx[p] - pr;
+      const syy = s.syy[p] - pr;
+      const sxy = s.sxy[p];
+      const c = 0.5 * (sxx + syy);
+      const r = Math.sqrt(0.25 * (sxx - syy) * (sxx - syy) + sxy * sxy);
+      dirs[3 * p] = 0.5 * Math.atan2(2 * sxy, sxx - syy);
+      dirs[3 * p + 1] = (c + r) * 1e-6;
+      dirs[3 * p + 2] = (c - r) * 1e-6;
+    }
+  }
   const diag = s.diagnostics();
   const prof = s.pressureProfile();
   const cent = s.crackCentroids();
   const msg: Frame = {
     type: 'frame',
     pos,
-    ext,
+    F,
+    dirs,
     val,
     field,
     flags,
@@ -51,7 +70,7 @@ function frame(): void {
     running,
     msPerStep,
   };
-  post(msg, [pos.buffer, ext.buffer, val.buffer, flags.buffer]);
+  post(msg, [pos.buffer, F.buffer, val.buffer, flags.buffer, ...(dirs ? [dirs.buffer] : [])]);
 }
 
 function loop(): void {
@@ -125,6 +144,10 @@ self.onmessage = (e: MessageEvent<ToWorker>) => {
         break;
       case 'select':
         selected = m.particle;
+        if (!running) frame();
+        break;
+      case 'dirs':
+        dirsOn = m.on;
         if (!running) frame();
         break;
     }

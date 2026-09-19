@@ -69,10 +69,12 @@ tools/browser/browser.sh stop <cdp>; tools/browser/browser.sh stop <dev>
 画面の状態（やり直し・`stopafter`・条件パネルと URL・描画中の例外）を触ったら `CDP_PORT=<cdp> node tools/browser/ui-state.mjs http://localhost:<dev>/`（1〜2 分）。
 応力状態エクスプローラを触ったら `CDP_PORT=<cdp> node tools/browser/explorer.mjs http://localhost:<dev>/ <作業用ディレクトリ>/x.png`
 （実クリックで粒子を選び、表示と `Sim` の値を比べる。`Sim` はワーカーの `self.__sim` を CDP でワーカーに繋いで読む）。
+ロールバイトの表示（ズーム・パン・倍率・俯瞰・主応力の向き）を触ったら `CDP_PORT=<cdp> node tools/browser/view.mjs http://localhost:<dev>/ <作業用ディレクトリ>/v`
+（ホイール・ダブルクリック・ドラッグ・キーは CDP の実イベント。`v-*.png` を自分で見る）。
 
 ポートは必ず渡す（既定値は無い）。`window.__mpm` は `frames` `running` `ready` `done` `diag` `cracks`
-`geometry` `params` `history` `explorer`（表示中の点）`tracks`（追っている点と経路）と `run()` `restart()` `setField(id)`
-`screenOf(id)`（粒子の画面座標）を持つ。
+`geometry` `params` `history` `explorer`（表示中の点）`tracks`（追っている点と経路）`view`（拡大率・パン・倍率・主応力の向き）と
+`run()` `restart()` `setField(id)` `screenOf(id)`（粒子の画面座標）`drawMs(n)`（今のフレームを n 回描いた 1 回の ms）を持つ。
 
 ## クエリパラメータ
 

@@ -8,7 +8,9 @@ export type ToWorker =
   | { type: 'pause' }
   | { type: 'field'; field: FieldName }
   /** the material point the stress explorer follows (null: none) */
-  | { type: 'select'; particle: number | null };
+  | { type: 'select'; particle: number | null }
+  /** send the in-plane principal stresses with each frame (for the direction glyphs) */
+  | { type: 'dirs'; on: boolean };
 
 /** Fixed facts of a run, sent once after init. Lengths in m. */
 export interface Geometry {
@@ -77,8 +79,10 @@ export interface Frame {
   type: 'frame';
   /** x, y per particle [m] */
   pos: Float32Array;
-  /** deformed size of each particle along x, y as multiples of the initial spacing */
-  ext: Float32Array;
+  /** deformation gradient of each particle, F00 F01 F10 F11 (its cell is drawn as F times the initial square) */
+  F: Float32Array;
+  /** in-plane principal stresses when asked for: angle of σI from x [rad], σI ≥ σII [MPa] */
+  dirs: Float32Array | null;
   /** the selected field per particle */
   val: Float32Array;
   field: FieldName;
