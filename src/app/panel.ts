@@ -53,7 +53,7 @@ const RAW: Group[] = [
           if (Math.round(v) === 1) delete p.rolling.stands;
           else p.rolling.stands = Math.round(v);
         },
-        hint: 'タンデム（圧下率は各スタンドの入側板厚に対して）。後のスタンドほど重く、r 25 % の 5 スタンドで 1 スタンドの約 60 倍（r が大きいほど増える）',
+        hint: 'タンデム（圧下率は各スタンドの入側板厚に対して）。後のスタンドほど重く、r 25 % の 5 スタンドで 1 スタンドの 50 倍ほど（格子が細かいほど、r が大きいほど増える）',
         sectionOnly: true,
       },
     ],
