@@ -1052,13 +1052,19 @@ body[data-view='plan'] .section-only {
   .plan-stage {
     order: 1;
   }
-  /* the stands one above the other on a phone */
+  /* the stands one above the other on a phone, each about as tall as a phone's picture is wide */
   .stand-row {
     flex-direction: column;
   }
   .stand-slot + .stand-slot {
     border-left: 0;
     border-top: 1px solid var(--rule);
+  }
+  .stand-slot + .stand-slot .stand-label {
+    top: 10px;
+  }
+  .bite.tandem {
+    min-height: calc(var(--stands) * 240px + 60px);
   }
   .record {
     order: 2;
