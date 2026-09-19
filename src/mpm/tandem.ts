@@ -63,6 +63,15 @@ export interface StandResult {
   cracks: number;
 }
 
+/** The current stand's steady readings so far and their means, as its StandResult will have them (null: none yet). */
+export interface SteadyMeans {
+  readings: number;
+  force: number | null;
+  torque: number | null;
+  exitThickness: number | null;
+  forwardSlip: number | null;
+}
+
 export interface StandDone {
   stand: number;
   /** the stand that finished, as it ended */
@@ -191,10 +200,25 @@ export class TandemSim {
     this.steady = [];
   }
 
-  private close(sim: Sim, phase: 'done' | 'stalled'): StandResult & { growth: number[] } {
+  /**
+   * The current stand's steady means so far, over its own readings (every `every` steps, as tools/run-summary.mjs
+   * takes them): what its result will say. After the last stand they stay; a new stand starts with none.
+   */
+  steadyMeans(): SteadyMeans {
     const s = this.steady;
     // as tools/run-summary.mjs: the plain mean over the readings (a thickness of 0 counts as none)
     const mean = (a: number[]) => (a.length ? a.reduce((x, v) => x + v, 0) / Math.max(1, a.length) : null);
+    return {
+      readings: s.length,
+      force: mean(s.map((d) => d.force)),
+      torque: mean(s.map((d) => d.torque)),
+      exitThickness: mean(s.filter((d) => d.exitThickness).map((d) => d.exitThickness as number)),
+      forwardSlip: mean(s.filter((d) => d.forwardSlip != null).map((d) => d.forwardSlip as number)),
+    };
+  }
+
+  private close(sim: Sim, phase: 'done' | 'stalled'): StandResult & { growth: number[] } {
+    const m = this.steadyMeans();
     let maxDamage = 0;
     let nFailed = 0;
     let mass = 0;
@@ -224,10 +248,10 @@ export class TandemSim {
       steps: sim.step,
       t: sim.t,
       phase,
-      steadyForce: mean(s.map((d) => d.force)),
-      steadyTorque: mean(s.map((d) => d.torque)),
-      exitThickness: mean(s.filter((d) => d.exitThickness).map((d) => d.exitThickness as number)),
-      forwardSlip: mean(s.filter((d) => d.forwardSlip != null).map((d) => d.forwardSlip as number)),
+      steadyForce: m.force,
+      steadyTorque: m.torque,
+      exitThickness: m.exitThickness,
+      forwardSlip: m.forwardSlip,
       thicknessOut: thicknessOut(sim),
       massLost: lost / mass,
       separated: separated(sim),

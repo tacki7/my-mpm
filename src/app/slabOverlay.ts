@@ -94,6 +94,48 @@ export function slabReference(P: SimParams, ep0 = 0): SlabReference {
  * force is the mean over the steps since the frame before, and frames carry different numbers of
  * steps, so each counts by its steps.
  */
+/**
+ * The contact pressure and friction over the steady phase: each frame's profile (its mean over the steps since the
+ * frame before) weighted by those steps, as SteadyForce weights the force. The friction hill of the pass, which
+ * stays after the sheet has left the rolls (the moment's profile is then 0).
+ */
+export class SteadyProfile {
+  private x: number[] | null = null;
+  private p: number[] = [];
+  private tau: number[] = [];
+  private steps = 0;
+  private lastStep = 0;
+  /** one frame's profile and diagnostics, once per frame and in order */
+  add(pr: Profile | null | undefined, d: Pick<Diagnostics, 'phase' | 'step'>): void {
+    const w = d.step - this.lastStep;
+    this.lastStep = d.step;
+    if (d.phase !== 'steady' || !pr || !(w > 0)) return;
+    if (!this.x || this.x.length !== pr.x.length) {
+      this.x = Array.from(pr.x);
+      this.p = new Array(pr.x.length).fill(0);
+      this.tau = new Array(pr.x.length).fill(0);
+      this.steps = 0;
+    }
+    for (let i = 0; i < this.p.length; i++) {
+      this.p[i] += w * pr.p[i];
+      this.tau[i] += w * pr.tau[i];
+    }
+    this.steps += w;
+  }
+  reset(): void {
+    this.x = null;
+    this.p = [];
+    this.tau = [];
+    this.steps = 0;
+    this.lastStep = 0;
+  }
+  /** null before the steady phase */
+  get mean(): Profile | null {
+    const n = this.steps;
+    return this.x && n > 0 ? { x: this.x, p: this.p.map((v) => v / n), tau: this.tau.map((v) => v / n) } : null;
+  }
+}
+
 export class SteadyForce {
   private sum = 0;
   private steps = 0;
@@ -205,6 +247,9 @@ const INK_FAINT = 'rgba(29,42,58,0.28)';
 const STEEL = '#8a949c';
 const BLUE = '#1f3f7a';
 const COPPER = '#9c4a1c';
+/** the steady phase's mean profile: broad and pale behind the moment's line */
+const BLUE_PALE = 'rgba(31,63,122,0.28)';
+const COPPER_PALE = 'rgba(156,74,28,0.28)';
 
 /** a tandem's stand on the force chart: when it began on the pass's clock [ms], its condition (its entry thickness), and the strain its strip brings in */
 export interface StandStart {
@@ -307,15 +352,21 @@ export function drawHillChart(
   P: SimParams,
   /** a tandem's later stand: the strain the strip brings in */
   ep0 = 0,
+  /** the steady phase's mean profile (SteadyProfile), drawn broad and pale behind the moment's; null before it */
+  steady: Profile | null = null,
 ): void {
   const slab = slabReference(P, ep0);
   const xs = pr ? Array.from(pr.x, (x) => x * 1e3) : [];
-  const series: Series[] = pr
-    ? [
-        { x: xs, y: Array.from(pr.p, (v) => v * 1e-6), color: BLUE, label: '圧力 p' },
-        { x: xs, y: Array.from(pr.tau, (v) => v * 1e-6), color: COPPER, label: '摩擦応力 τ', dash: [5, 3] },
-      ]
-    : [];
+  const series: Series[] = [];
+  if (steady) {
+    const sx = Array.from(steady.x, (x) => x * 1e3);
+    series.push({ x: sx, y: Array.from(steady.p, (v) => v * 1e-6), color: BLUE_PALE, label: '圧力 p（定常の平均）', width: 5 });
+    series.push({ x: sx, y: Array.from(steady.tau, (v) => v * 1e-6), color: COPPER_PALE, label: '摩擦応力 τ（定常の平均）', width: 5 });
+  }
+  if (pr) {
+    series.push({ x: xs, y: Array.from(pr.p, (v) => v * 1e-6), color: BLUE, label: '圧力 p' });
+    series.push({ x: xs, y: Array.from(pr.tau, (v) => v * 1e-6), color: COPPER, label: '摩擦応力 τ', dash: [5, 3] });
+  }
   const dots: { x: number; y: number; color: string; r?: number; ring?: boolean }[] = [];
   if (!slab.outside) {
     const sx = Array.from(slab.x, (x) => x * 1e3);
@@ -340,6 +391,7 @@ export function drawHillChart(
   setLegend(legend, [
     item(BLUE, '圧力 p'),
     item(COPPER, '摩擦応力 τ', 'dashed'),
+    ...(steady ? [item(BLUE_PALE, 'p（定常の平均）', 'band'), item(COPPER_PALE, 'τ（定常の平均）', 'band')] : []),
     ...(slab.outside
       ? [`<span class="note">${slab.outside}</span>`]
       : [item(STEEL, 'スラブ法 p', 'dashed'), item(STEEL, 'スラブ法 τ', 'dotted'), item(STEEL, 'スラブ法の中立点', 'ring')]),

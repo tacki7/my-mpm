@@ -15,12 +15,15 @@ import { PlanMode } from './app/planMode.ts';
 import { BiteView } from './app/view.ts';
 import { StandViews } from './app/standViews.ts';
 import { StandTable, stopPhrase } from './app/standTable.ts';
+import { passReadout, readoutKind, readoutNote } from './app/passReadout.ts';
 import type { StandResult } from './mpm/tandem.ts';
 import { attachViewControls } from './app/viewControls.ts';
-import { SteadyForce, drawForceChart, drawHillChart, slabRatio, slabReference, type ForceChartData, type StandStart } from './app/slabOverlay.ts';
+import { SteadyForce, SteadyProfile, drawForceChart, drawHillChart, slabRatio, slabReference, type ForceChartData, type StandStart } from './app/slabOverlay.ts';
 
 let forceChart: ForceChartData | null = null;
 const steadyForce = new SteadyForce();
+/** the friction hill over the steady phase of the stand on show (it stays after the sheet has left the rolls) */
+const steadyProfile = new SteadyProfile();
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -208,7 +211,8 @@ function startWorker() {
         geometry = m.next;
         view.geometry = m.next;
         standViews.setCurrent(m.stand + 1);
-        steadyForce.reset(); // the steady force, and the inertia ratio, of the stand on show
+        steadyForce.reset(); // the steady force, the friction hill and the inertia ratio of the stand on show
+        steadyProfile.reset();
         kineticSum = 0;
         kineticN = 0;
         // no sheet until the next stand's first frame (the last one would be drawn in the new stand's rolls)
@@ -246,6 +250,7 @@ function restart() {
   standResults = [];
   standStarts = [];
   steadyForce.reset();
+  steadyProfile.reset();
   last = null;
   view.frame = null;
   running = false;
@@ -301,6 +306,7 @@ function onFrame(f: Frame) {
     history.F.push(d.rollForce * 1e-6);
     history.T.push(d.rollTorque * 1e-3);
     steadyForce.add(d);
+    steadyProfile.add(f.profile, d);
     if (d.kineticRatio != null) {
       kineticSum += d.kineticRatio;
       kineticN++;
@@ -325,11 +331,11 @@ const phaseText: Record<Diagnostics['phase'], string> = {
 };
 
 function updateResults(d: Diagnostics, f: Frame) {
+  // the load, torque, exit thickness and slip: the steady means once there are any (they stay after the pass)
+  const pass = passReadout(d, f.steady);
+  $('results-note').textContent = readoutNote(readoutKind(d, f.steady));
   const rows: [string, string, string][] = [
-    ['圧延荷重', (d.rollForce * 1e-6).toFixed(3), 'kN/mm'],
-    ['圧延トルク', (d.rollTorque * 1e-3).toFixed(3), 'kN·m/m'],
-    ['出側板厚', d.exitThickness != null ? (d.exitThickness * 1e3).toFixed(4) : '—', 'mm'],
-    ['先進率', d.forwardSlip != null ? (d.forwardSlip * 100).toFixed(2) : '—', '%'],
+    ...pass.map((r): [string, string, string] => [r.label, r.text, r.unit]),
     [params.damage.model === 'none' ? '最大損傷（3 指標の最大）' : '最大損傷', d.maxDamage.toFixed(3), ''],
     // quasi-static: the condition's estimate ρ ms V² r / 2k̄, and what was measured in the steady phase —
     // the kinetic energy the rolls put in per second over the plastic work per second (its mean, kept after)
@@ -342,8 +348,15 @@ function updateResults(d: Diagnostics, f: Frame) {
   ];
   const tb = $('results');
   tb.replaceChildren(
-    ...rows.map(([k, v, u]) => {
+    ...rows.map(([k, v, u], i) => {
       const tr = document.createElement('tr');
+      const r = pass[i];
+      if (r) {
+        // checks read the full value
+        tr.dataset.key = r.key;
+        tr.dataset.value = r.value != null ? String(r.value) : '';
+        tr.dataset.steady = r.steady ? '1' : '0';
+      }
       const th = document.createElement('th');
       th.textContent = k;
       const td = document.createElement('td');
@@ -444,7 +457,7 @@ function drawCharts() {
   // a tandem: each stand's slab level and mark; the friction hill of the stand on show
   const shown = standStarts[last?.stand ?? 0];
   forceChart = drawForceChart($<HTMLCanvasElement>('chart-force'), $('legend-force'), history.t, history.F, params, steadyForce.mean, runStands > 1 ? standStarts : undefined);
-  drawHillChart($<HTMLCanvasElement>('chart-hill'), $('legend-hill'), last?.profile, g.contactLength, last?.diag, shown?.P ?? params, shown?.ep0);
+  drawHillChart($<HTMLCanvasElement>('chart-hill'), $('legend-hill'), last?.profile, g.contactLength, last?.diag, shown?.P ?? params, shown?.ep0, steadyProfile.mean);
   explorer.draw();
 }
 
@@ -523,6 +536,12 @@ window.__mpm = {
       steadyForce: steadyForce.mean,
       ratio: slabRatio(s, steadyForce.mean),
     };
+  },
+  /** the friction hill: the frame's profile and the steady phase's mean (null before it), x [m], p and τ [Pa] */
+  get hill() {
+    const m = steadyProfile.mean;
+    const copy = (pr: { x: ArrayLike<number>; p: ArrayLike<number>; tau: ArrayLike<number> }) => ({ x: Array.from(pr.x), p: Array.from(pr.p), tau: Array.from(pr.tau) });
+    return { frame: last ? copy(last.profile) : null, steady: m ? copy(m) : null };
   },
   /** what the force chart last drew: time [ms], one frame's means and the moving average [kN/mm], the window [ms] */
   get forceChart() {
