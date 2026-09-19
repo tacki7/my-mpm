@@ -80,6 +80,8 @@ tools/browser/browser.sh stop <cdp>; tools/browser/browser.sh stop <dev>
 結果の書き出し（CSV・PNG・条件の URL）を触ったら `CDP_PORT=<cdp> node tools/browser/export.mjs http://localhost:<dev>/ <作業用ディレクトリ>/dl-<時刻>`
 （実際にダウンロードしたファイルを読んで `__mpm.history` と比べ、条件の URL を開き直して `__mpm.params` を比べる）。
 平面図の画面（切り替え・平面図のワーカー・描画・結果・URL）を触ったら `CDP_PORT=<cdp> node tools/browser/planview.mjs http://localhost:<dev>/ <作業用ディレクトリ>/pv`
+画面の区切り（ドラッグで動かす分割線、`src/app/splitters.ts`）やレイアウトの格子を触ったら `CDP_PORT=<cdp> node tools/browser/splitters.mjs http://localhost:<dev>/ <作業用ディレクトリ>/sp`
+（実際のドラッグ・矢印キー・再読み込み・ダブルクリック・狭い画面）。
 （1 分弱。実クリックで切り替えて最後まで回し、`node tools/planview.mjs` と定常の値を比べる（相対 1e-5。Chrome と Node の V8 で
 Math.exp・log の最後の 1 ビットが違うのでビット一致はしない）、もう一度回してビット一致、タブ、16 mm の注、亀裂の記録、URL、断面に戻る・切り替えで一時停止・
 時計が表示中のビュー・未反映の編集は切り替えで反映しない・やり直すは両方、700 px。`pv-*.png` を自分で見る）。
