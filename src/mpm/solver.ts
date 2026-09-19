@@ -1127,6 +1127,10 @@ export class Sim {
     return (j + 0.5) / g;
   }
 
+  /**
+   * Damage of point p by the chosen criterion (1 = it fails). With no criterion ('none') nothing
+   * fails, and the damage shown is the largest of the three indicators, which are integrated anyway.
+   */
   governingDamage(p: number): number {
     switch (this.params.damage.model) {
       case 'johnson-cook':
@@ -1140,12 +1144,26 @@ export class Sim {
       case 'localization':
         return this.locHit[p];
       default:
-        return 0;
+        return Math.max(this.dJC[p], this.dHM[p], this.dCL[p]);
     }
   }
 
+  /**
+   * Mark point p failed, join or start a crack (its record keeps the stress state at failure), then
+   * drop the stress now as the next constitutive update would: the stored stress is what the next
+   * p2g spreads to the grid, and a cracked point must not pull on its neighbours one step more.
+   */
   private fail(p: number): void {
     this.failed[p] = 1;
+    this.addToCrack(p);
+    this.sxx[p] = this.syy[p] = this.szz[p] = this.sxy[p] = 0;
+    if (this.params.damage.failure === 'erode' || this.pres[p] < 0) this.pres[p] = 0;
+    this.seq[p] = 0;
+    this.eta[p] = 0;
+    this.s1[p] = -this.pres[p];
+  }
+
+  private addToCrack(p: number): void {
     // Join a crack that already has a failed point within two lattice spacings
     // (in the undeformed sheet), otherwise start a new one.
     const { NI, NJ, lattice, crackId } = this;

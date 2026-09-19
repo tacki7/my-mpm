@@ -3,7 +3,7 @@ import { cloneParams, type SimParams } from './mpm/params.ts';
 import { PRESETS, presetById } from './mpm/presets.ts';
 import type { Diagnostics, FieldName } from './mpm/solver.ts';
 import { css, lattice, split, temper } from './app/colormap.ts';
-import { FIELDS, fieldInfo } from './app/fields.ts';
+import { FIELDS, damageLabel, fieldInfo } from './app/fields.ts';
 import { Explorer } from './app/explorer.ts';
 import { buildExport } from './app/export.ts';
 import { buildPanel } from './app/panel.ts';
@@ -214,7 +214,7 @@ function updateResults(d: Diagnostics, f: Frame) {
     ['圧延トルク', (d.rollTorque * 1e-3).toFixed(3), 'kN·m/m'],
     ['出側板厚', d.exitThickness != null ? (d.exitThickness * 1e3).toFixed(4) : '—', 'mm'],
     ['先進率', d.forwardSlip != null ? (d.forwardSlip * 100).toFixed(2) : '—', '%'],
-    ['最大損傷', d.maxDamage.toFixed(3), ''],
+    [params.damage.model === 'none' ? '最大損傷（3 指標の最大）' : '最大損傷', d.maxDamage.toFixed(3), ''],
     // quasi-static: the condition's estimate ρ ms V² r / 2k̄, and what was measured in the steady phase —
     // the kinetic energy the rolls put in per second over the plastic work per second (its mean, kept after)
     ['慣性の見積もり', (d.inertiaRatio * 100).toFixed(1), '%'],
@@ -298,7 +298,7 @@ function drawLegend() {
   $('legend').dataset.field = field; // what it shows (checks wait on this, the tabs may use shorter names)
   $('legend').innerHTML = `
     <div class="bar" style="background:linear-gradient(90deg,${stops.join(',')})"></div>
-    <div class="ends"><span>${info.scale === 'lattice' ? '' : fmt(lo) + unit}</span><span>${info.label}</span><span>${info.scale === 'lattice' ? '' : fmt(hi) + unit}</span></div>
+    <div class="ends"><span>${info.scale === 'lattice' ? '' : fmt(lo) + unit}</span><span>${field === 'damage' ? damageLabel(params.damage.model) : info.label}</span><span>${info.scale === 'lattice' ? '' : fmt(hi) + unit}</span></div>
     <div class="exag">板厚方向を ${view.state.exaggeration.toFixed(1)} 倍に拡大して表示</div>
     ${last && last.diag.nFailed > 0 ? '<div class="failed-key"><span class="swatch"></span>藍墨の点は亀裂になった点。朱の印は亀裂の番号（右の記録と同じ）</div>' : ''}`;
 }

@@ -1,5 +1,6 @@
 // What each display field is called, its unit, and how it is coloured.
 import type { FieldName } from '../mpm/solver.ts';
+import type { DamageModel } from '../mpm/params.ts';
 
 export interface FieldInfo {
   id: FieldName;
@@ -40,6 +41,11 @@ export const FIELDS: FieldInfo[] = [
   // Fixed range: the entry and exit have outliers of ±10⁵ MPa
   { id: 'drucker', label: 'Drucker の指標 σ̇:Dp / ε̇p²', unit: 'MPa', scale: 'diverging', range: [-2000, 2000], flip: true },
 ];
+
+/** The damage field's name: with no failure criterion it is the largest of the three integrated indicators. */
+export function damageLabel(model: DamageModel): string {
+  return model === 'none' ? '損傷 D（判定しない: JC・HM・CL の最大）' : '損傷 D';
+}
 
 export function fieldInfo(id: FieldName): FieldInfo {
   return FIELDS.find((f) => f.id === id) ?? FIELDS[0];
