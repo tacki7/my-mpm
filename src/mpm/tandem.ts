@@ -152,7 +152,8 @@ export class TandemSim {
     const old = this.sim;
     const result = this.close(old, phase);
     this.results.push(result);
-    for (const c of old.cracks) if (c.stand === undefined) c.stand = this.stand;
+    // a tandem of more than one stand marks its records with the stand; a single stand leaves them as the single pass has them
+    if (this.stands > 1) for (const c of old.cracks) if (c.stand === undefined) c.stand = this.stand;
     const more = this.stand + 1 < this.stands;
     if (more) {
       this.stopped =
