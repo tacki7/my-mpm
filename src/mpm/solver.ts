@@ -203,6 +203,8 @@ export class Sim {
   private readonly binN: Float64Array;
   private readonly binT: Float64Array;
   private binSteps = 0;
+  private readonly lastP: Float64Array; // the last profile, repeated when nothing was stepped in between
+  private readonly lastTau: Float64Array;
   private readonly accTau: Float64Array; // tangential force per bin since the last diagnostics read
 
   constructor(input: SimParams) {
@@ -360,6 +362,8 @@ export class Sim {
     this.nBins = Math.ceil((Lc + 12 * h) / h);
     this.binN = new Float64Array(this.nBins);
     this.binT = new Float64Array(this.nBins);
+    this.lastP = new Float64Array(this.nBins);
+    this.lastTau = new Float64Array(this.nBins);
     this.accTau = new Float64Array(this.nBins);
   }
 
@@ -947,21 +951,24 @@ export class Sim {
     return this.binX0 + (bb + 0.5) * this.binW + (this.binW * t0) / (t0 - t1);
   }
 
-  /** Contact traction along x, averaged since the last call (which resets it). */
+  /**
+   * Contact traction along x, averaged since the last call (which resets it).
+   * With nothing stepped in between (e.g. a read while paused) the last one is repeated.
+   */
   pressureProfile(): PressureProfile {
-    const steps = Math.max(1, this.binSteps);
-    const x = new Float64Array(this.nBins);
-    const p = new Float64Array(this.nBins);
-    const tau = new Float64Array(this.nBins);
-    for (let b = 0; b < this.nBins; b++) {
-      x[b] = this.binX0 + (b + 0.5) * this.binW;
-      p[b] = this.binN[b] / (2 * steps * this.binW);
-      tau[b] = this.binT[b] / (2 * steps * this.binW);
+    const { nBins, binW, binSteps, lastP, lastTau } = this;
+    if (binSteps > 0) {
+      for (let b = 0; b < nBins; b++) {
+        lastP[b] = this.binN[b] / (2 * binSteps * binW);
+        lastTau[b] = this.binT[b] / (2 * binSteps * binW);
+      }
+      this.binN.fill(0);
+      this.binT.fill(0);
+      this.binSteps = 0;
     }
-    this.binN.fill(0);
-    this.binT.fill(0);
-    this.binSteps = 0;
-    return { x, p, tau };
+    const x = new Float64Array(nBins);
+    for (let b = 0; b < nBins; b++) x[b] = this.binX0 + (b + 0.5) * binW;
+    return { x, p: lastP.slice(), tau: lastTau.slice() };
   }
 
   /** Current centroid of each crack's failed points. */

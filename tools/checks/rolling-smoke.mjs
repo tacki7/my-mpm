@@ -37,7 +37,10 @@ while (sim.step < 60000) {
         jump += Math.abs(prof.p[b + 1] - prof.p[b]);
       }
     }
-    hill.push({ F, saw: jump / sum, xn: d.neutralX, ford: -Math.sqrt(Math.max(0, d.forwardSlip ?? 0) * P.rolling.rollRadius * (d.exitThickness ?? NaN)) });
+    // a second read with nothing stepped in between (the page does this while paused) repeats the profile
+    const again = sim.pressureProfile();
+    const repeated = again.p.every((v, b) => v === prof.p[b]) && again.tau.every((v, b) => v === prof.tau[b]);
+    hill.push({ F, saw: jump / sum, repeated, xn: d.neutralX, ford: -Math.sqrt(Math.max(0, d.forwardSlip ?? 0) * P.rolling.rollRadius * (d.exitThickness ?? NaN)) });
     for (let p = 0; p < sim.n; p++) {
       if (!sim.active[p]) continue;
       const J = sim.f00[p] * sim.f11[p] - sim.f01[p] * sim.f10[p];
@@ -61,6 +64,7 @@ ok(badJ === 0, 'volume ratio J stays within 0.98..1.02 (plastic flow is isochori
 ok(spurious === 0, 'no hydrostatic tension (η > 1) inside the roll bite', `${spurious} point-samples`);
 between(mean(hill.map((h) => h.F)) / mean(steady.map((d) => d.rollForce)), 0.9, 1.1, 'integral of the pressure profile / roll force');
 between(Math.max(...hill.map((h) => h.saw)), 0, 0.25, 'friction hill is smooth (mean jump between neighbouring bins / mean pressure; 1.3 when bins caught 0–2 grid columns)');
+ok(hill.every((h) => h.repeated), 'a profile read again without a step repeats the last one (not zeros)');
 ok(hill.every((h) => h.xn != null && h.xn > -sim.contactLength && h.xn < 0), 'neutral point inside the bite', hill.map((h) => (h.xn == null ? 'none' : (h.xn * 1e3).toFixed(3) + ' mm')).join(', '));
 between(mean(hill.map((h) => h.xn / h.ford)), 0.75, 1.25, "neutral point / Ford's xn = −√(f R h1) from the forward slip");
 ok(last.nFailed === 0, 'ductile SPCC at 25 % does not crack', `${last.nFailed} failed, max D ${last.maxDamage.toFixed(3)}`);
