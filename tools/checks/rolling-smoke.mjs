@@ -56,7 +56,7 @@ const last = sim.diagnostics();
 const mean = (a) => a.reduce((s, v) => s + v, 0) / Math.max(1, a.length);
 ok(last.phase === 'done', 'the sheet goes through the rolls and leaves', `phase ${last.phase} at step ${sim.step}`);
 ok(steady.length >= 2, 'a steady phase is reached', `${steady.length} samples`);
-between(mean(steady.map((d) => d.rollForce)) * 1e-6, 2.5, 6, 'steady roll force [kN/mm] (slab theory ≈ 2.9 with the rate factor)');
+between(mean(steady.map((d) => d.rollForce)) * 1e-6, 2.5, 6, 'steady roll force [kN/mm] (slab method 3.03, docs/validation.md)');
 between(mean(steady.map((d) => d.exitThickness ?? NaN)) * 1e3, 0.745, 0.77, 'exit thickness [mm] (gap 0.75 + springback)');
 between(mean(steady.map((d) => d.forwardSlip ?? NaN)) * 100, 0, 6, 'forward slip [%]');
 ok(nan === 0, 'no NaN in positions or stresses', `${nan}`);
