@@ -47,6 +47,23 @@ export function flowStress(m: MaterialParams, ep: number, epsDot: number, T: num
 }
 
 /**
+ * The two parts of flowStress's σy, computed with the same operations (so their product is the
+ * same number to the last bit): the strength at the plastic strain, and the rate × temperature
+ * factor. The first changes only when the point flows, so a solver can keep it per point.
+ */
+export function staticStrength(m: MaterialParams, ep: number): number {
+  if (m.hardening === 'swift') return m.swK * Math.pow(m.swE0 + (ep > 0 ? ep : 0), m.swN);
+  return m.jcA + m.jcB * (ep > 0 ? Math.pow(ep, m.jcN) : 0);
+}
+
+export function strengthFactor(m: MaterialParams, epsDot: number, T: number): number {
+  const rate = rateFactor(m, epsDot);
+  const Ts = homologousTemperature(m, T);
+  const thermal = Ts > 0 ? 1 - Math.pow(Ts, m.jcM) : 1;
+  return rate * thermal;
+}
+
+/**
  * Plastic multiplier of the J2 radial return: the Δεp ≥ 0 that satisfies
  * q_trial − 3G Δεp = σy(εp + Δεp). Returns 0 when the trial state is elastic.
  * Safeguarded Newton (bisection fallback) — the Johnson-Cook slope is infinite at εp = 0.
