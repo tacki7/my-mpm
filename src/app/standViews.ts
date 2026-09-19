@@ -167,8 +167,13 @@ export class StandViews {
     let x = 0;
     parts.forEach((c, k) => {
       g.drawImage(c, x, 0);
+      // the number on the sheet's colour, as the page shows it (the far side of a roll is dark steel)
+      const text = `#${k + 1}`;
+      const m = g.measureText(text);
+      g.fillStyle = 'rgba(244,245,243,0.9)';
+      g.fillRect(x + 6 * dpr, 44 * dpr, m.width + 8 * dpr, m.actualBoundingBoxDescent + 4 * dpr);
       g.fillStyle = getComputedStyle(this.slots[k].label).color || '#000';
-      g.fillText(`#${k + 1}`, x + 10 * dpr, 46 * dpr);
+      g.fillText(text, x + 10 * dpr, 46 * dpr);
       x += c.width;
     });
     return out;

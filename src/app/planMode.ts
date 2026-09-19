@@ -152,8 +152,8 @@ export class PlanMode {
       this.inputs.set(f.key, inp);
     }
     fs.append(el('p', 'hint', '板厚・圧下率・摩擦・材料・破壊の基準・亀裂の面は上の条件を使う（板厚方向のセル数は断面だけ）'));
-    // right after the preset's note, where the view's own settings are looked for first
-    const note = this.o.panelRoot.querySelector('.preset-note');
+    // right after the preset's note (and its button), where the view's own settings are looked for first
+    const note = this.o.panelRoot.querySelector('.note-more') ?? this.o.panelRoot.querySelector('.preset-note');
     if (note) note.after(fs);
     else this.o.panelRoot.prepend(fs);
     this.showSettings(this.settings);

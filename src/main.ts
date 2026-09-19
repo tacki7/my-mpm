@@ -21,6 +21,7 @@ import type { StandResult } from './mpm/tandem.ts';
 import { attachViewControls } from './app/viewControls.ts';
 import { attachKeyPick } from './app/keyPick.ts';
 import { ChartSummary } from './app/chartSummary.ts';
+import { PresetNote } from './app/presetNote.ts';
 import { radioGroup } from './app/radioGroup.ts';
 import { say } from './app/liveText.ts';
 import { SteadyForce, SteadyProfile, drawForceChart, drawHillChart, slabRatio, slabReference, type ForceChartData, type StandStart } from './app/slabOverlay.ts';
@@ -112,27 +113,10 @@ const panel = buildPanel($('panel'), () => {
   $('reset').classList.add('pending');
 });
 panel.show(params);
-const showNote = () => {
-  const note = $('preset-note');
-  note.textContent = presetById(presetId)?.note ?? '';
-  note.title = note.textContent;
-};
+// the preset's note shows three lines; its button 続きを読む shows the rest
+const presetNote = new PresetNote($('preset-note'));
+const showNote = () => presetNote.show(presetById(presetId)?.note ?? '');
 showNote();
-// the preset's note shows three lines; a click (or Enter) shows the rest
-{
-  const note = $('preset-note');
-  note.tabIndex = 0;
-  note.setAttribute('role', 'button');
-  note.setAttribute('aria-expanded', 'false');
-  const toggle = () => note.setAttribute('aria-expanded', String(note.classList.toggle('open')));
-  note.addEventListener('click', toggle);
-  note.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' || e.key === ' ') {
-      e.preventDefault();
-      toggle();
-    }
-  });
-}
 
 // the plan view (板幅方向): its own worker and picture; the shared buttons go to it while it is shown.
 // Both views run the same conditions (params): 「条件を反映してやり直す」 and a preset restart both, and

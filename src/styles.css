@@ -180,16 +180,28 @@ button.pending {
   color: var(--ink-soft);
   border-left: 3px solid var(--steel);
   padding-left: 8px;
-  /* three lines until clicked (the whole note is in its title too) */
+  /* three lines until 続きを読む (the whole note is in its title too) */
   display: -webkit-box;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 3;
   overflow: hidden;
-  cursor: pointer;
 }
 
 .preset-note.open {
   display: block;
+}
+
+/* 続きを読む / たたむ under the note (presetNote.ts) */
+.note-more {
+  display: block;
+  min-height: 24px;
+  margin: -4px 0 8px 11px;
+  padding: 1px 8px;
+  font-size: var(--fs-xs);
+}
+
+.note-more[hidden] {
+  display: none;
 }
 
 .group {
