@@ -9,7 +9,8 @@
 // screen (700 px) stacks the pictures without a sideways scroll; a strip broken through the thickness
 // stops the tandem with the reason in the table and the status; a crack grown over the stands is in the table
 // by stand; at a stand's end the old sheet is not drawn in the new rolls and a point picked just then is
-// followed to its child; five stands' table fits the record column at
+// followed to its child; the friction hill keeps every stand's steady mean in its colour, with an entry mark per
+// stand; five stands' table fits the record column at
 // 1600 and 700 px; the stands field is the section view's only; and back
 // to one stand, the page is as before (no slots, no table). Not a `@check` (it needs the dev server and
 // Chrome).
@@ -36,6 +37,7 @@ import { join } from 'node:path';
 import { connect } from './cdp.mjs';
 import { ok, near, done } from '../checks/lib.mjs';
 import { DAMAGE_4340 } from '../../src/mpm/params.ts';
+import { standColor } from '../../src/app/explorer.ts';
 
 const [target, dir] = process.argv.slice(2);
 if (!target || !dir || !process.env.CDP_PORT) {
@@ -122,8 +124,31 @@ try {
   const labels = await c.evaluate(`[...document.querySelectorAll('.stand-label')].map((e) => e.textContent)`);
   ok(labels.join('|') === '#1（計算中）|#2（まだ）|#3（まだ）', 'the slots are labelled', labels.join(' '));
   await click('#run');
-  await c.waitFor('__mpm.done', 600000);
+  // while it runs, each stand's steady friction hill as last seen on show (it stops changing when the steady phase ends,
+  // well before the stand does)
+  const seen = [];
+  const t0 = Date.now();
+  while (!(await c.evaluate('__mpm.done')) && Date.now() - t0 < 600000) {
+    const now = await c.evaluate('({ stand: __mpm.stand, steady: __mpm.hill.steady })');
+    if (now.steady) seen[now.stand] = now.steady;
+    await c.sleep(200);
+  }
+  await c.waitFor('__mpm.done', 10000);
   await painted();
+
+  // ── the friction hill after the pass: a steady hill per stand, each the one that stand ended with, in its colour
+  {
+    const hill = await c.evaluate('__mpm.hill');
+    const chart = await c.evaluate('__mpm.hillChart');
+    const same = (a, b) => !!a && !!b && ['x', 'p', 'tau'].every((k) => a[k].length === b[k].length && a[k].every((v, i) => v === b[k][i]));
+    ok(hill.stands.length === STANDS && hill.stands.every((h, k) => h.label === `#${k + 1}` && same(h, seen[k])),
+      `the friction hill keeps ${STANDS} stands' steady hills, each the one its stand ended with`, hill.stands.map((h, k) => `${h.label} ${same(h, seen[k]) ? 'same' : 'differs'}`).join(', '));
+    ok(hill.stands.every((h, k) => h.color === standColor(k)) && hill.stands.every((_, i) => chart.series.some((s) => s.label === `#${i + 1} p（定常の平均）` && s.color === standColor(i))),
+      "each in its stand's colour (the loading path's)", hill.stands.map((h) => h.color).join(' '));
+    const entries = chart.marks.filter((m) => m.label.startsWith('入口'));
+    ok(entries.length === STANDS && entries.every((m, k) => m.color === standColor(k) && Math.abs(m.x + hill.stands[k].contactLength * 1e3) < 1e-9),
+      'an entry mark per stand, in its colour, at its own contact length', entries.map((m) => `${m.label} ${m.x.toFixed(2)} mm`).join(', '));
+  }
 
   const page3 = await c.evaluate('__mpm.standResults');
   ok(page3.length === STANDS && page3.every((r) => r.phase === 'done'), `all ${STANDS} stands end 'done'`, page3.map((r) => r.phase).join(', '));

@@ -17,8 +17,9 @@ export interface ChartSpec {
   xLabel: string;
   yLabel: string;
   series: Series[];
-  /** vertical guide lines at these x values, with their labels */
-  marks?: { x: number; label: string }[];
+  /** vertical guide lines at these x values, with their labels; color: the line's and label's (ink by default), row: the
+   *  label's line from the top (0 by default), for marks close enough to overlap */
+  marks?: { x: number; label: string; color?: string; row?: number }[];
   /** horizontal guide lines at these y values, with their labels (at the right end) */
   hmarks?: { y: number; label: string }[];
   /** filled (or ringed) points on top of the lines */
@@ -108,16 +109,16 @@ export function drawChart(canvas: HTMLCanvasElement, spec: ChartSpec): void {
     if (m.x < x0 || m.x > x1) continue;
     ctx.save();
     ctx.setLineDash([3, 4]);
-    ctx.strokeStyle = 'rgba(29,42,58,0.5)';
+    ctx.strokeStyle = m.color ?? 'rgba(29,42,58,0.5)';
     ctx.beginPath();
     ctx.moveTo(X(m.x), Tm);
     ctx.lineTo(X(m.x), H - B);
     ctx.stroke();
     ctx.restore();
-    ctx.fillStyle = ink;
+    ctx.fillStyle = m.color ?? ink;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'top';
-    ctx.fillText(m.label, X(m.x), Tm);
+    ctx.fillText(m.label, X(m.x), Tm + (m.row ?? 0) * 13);
   }
   for (const m of spec.hmarks ?? []) {
     if (m.y < y0 || m.y > y1) continue;

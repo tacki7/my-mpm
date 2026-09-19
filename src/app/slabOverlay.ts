@@ -339,9 +339,26 @@ export function drawForceChart(
   return { t: t.slice(), raw: F.slice(), smooth, windowMs: window * 1e3 };
 }
 
+/** what the friction hill chart last drew (the headless checks read it): its guide marks and its lines */
+export interface HillChartData {
+  marks: { x: number; label: string; color?: string }[];
+  series: { label: string; color: string }[];
+}
+
+/** a tandem stand's friction hill kept on the chart: its steady mean profile, in its colour, with its entry mark */
+export interface HillStand {
+  /** `#k` */
+  label: string;
+  color: string;
+  profile: Profile;
+  contactLength: number;
+}
+
 /**
  * The friction hill: the MPM's contact pressure and friction stress, with the slab method's
  * p(x) and τ(x) as thin dashed lines and its neutral point as a ring (or why they are left out).
+ * A tandem: every stand's steady mean in its colour (p solid, τ thin and dashed) with its own entry mark, the stand
+ * on show's moment on top; the slab method of the stand on show only (all of them overlaid would not read).
  */
 export function drawHillChart(
   canvas: HTMLCanvasElement,
@@ -354,11 +371,19 @@ export function drawHillChart(
   ep0 = 0,
   /** the steady phase's mean profile (SteadyProfile), drawn broad and pale behind the moment's; null before it */
   steady: Profile | null = null,
-): void {
+  /** a tandem: the finished stands' steady hills, and the stand on show's label and colour (one stand: omitted) */
+  tandem?: { finished: HillStand[]; shown: { label: string; color: string } },
+): HillChartData {
   const slab = slabReference(P, ep0);
   const xs = pr ? Array.from(pr.x, (x) => x * 1e3) : [];
   const series: Series[] = [];
-  if (steady) {
+  const stands: HillStand[] = tandem ? [...tandem.finished, ...(steady ? [{ ...tandem.shown, profile: steady, contactLength }] : [])] : [];
+  for (const k of stands) {
+    const sx = Array.from(k.profile.x, (x) => x * 1e3);
+    series.push({ x: sx, y: Array.from(k.profile.p, (v) => v * 1e-6), color: k.color, label: `${k.label} p（定常の平均）`, width: 2 });
+    series.push({ x: sx, y: Array.from(k.profile.tau, (v) => v * 1e-6), color: k.color, label: `${k.label} τ（定常の平均）`, width: 1.2, dash: [4, 3] });
+  }
+  if (steady && !tandem) {
     const sx = Array.from(steady.x, (x) => x * 1e3);
     series.push({ x: sx, y: Array.from(steady.p, (v) => v * 1e-6), color: BLUE_PALE, label: '圧力 p（定常の平均）', width: 5 });
     series.push({ x: sx, y: Array.from(steady.tau, (v) => v * 1e-6), color: COPPER_PALE, label: '摩擦応力 τ（定常の平均）', width: 5 });
@@ -377,23 +402,28 @@ export function drawHillChart(
     while (i < slab.x.length - 1 && slab.x[i + 1] < slab.xNeutral) i++;
     dots.push({ x: slab.xNeutral * 1e3, y: slab.p[i] * 1e-6, color: STEEL, r: 4, ring: true });
   }
-  drawChart(canvas, {
-    xLabel: '圧延方向の位置 [mm]（出口 = 0）',
-    yLabel: '[MPa]',
-    series,
-    dots,
-    marks: [
-      { x: -contactLength * 1e3, label: '入口' },
-      { x: 0, label: '出口' },
-      ...(diag?.neutralX != null ? [{ x: diag.neutralX * 1e3, label: '中立点' }] : []),
-    ],
-  });
+  const marks = [
+    // a tandem: each stand's entry in its colour (the contact lengths differ), the labels on alternate lines (three
+    // lines from four stands on: their entries come within half a millimetre)
+    ...(tandem
+      ? [...tandem.finished, { ...tandem.shown, contactLength }].map((k, i, all) => ({ x: -k.contactLength * 1e3, label: `入口 ${k.label}`, color: k.color, row: i % (all.length > 3 ? 3 : 2) }))
+      : [{ x: -contactLength * 1e3, label: '入口' }]),
+    { x: 0, label: '出口' },
+    ...(diag?.neutralX != null ? [{ x: diag.neutralX * 1e3, label: '中立点', row: tandem ? 3 : 0 }] : []),
+  ];
+  drawChart(canvas, { xLabel: '圧延方向の位置 [mm]（出口 = 0）', yLabel: '[MPa]', series, dots, marks });
+  const slabOf = tandem ? `（${tandem.shown.label}）` : '';
   setLegend(legend, [
     item(BLUE, '圧力 p'),
     item(COPPER, '摩擦応力 τ', 'dashed'),
-    ...(steady ? [item(BLUE_PALE, 'p（定常の平均）', 'band'), item(COPPER_PALE, 'τ（定常の平均）', 'band')] : []),
+    ...(tandem
+      ? stands.map((k) => item(k.color, `${k.label} p・τ（定常の平均）`))
+      : steady
+        ? [item(BLUE_PALE, 'p（定常の平均）', 'band'), item(COPPER_PALE, 'τ（定常の平均）', 'band')]
+        : []),
     ...(slab.outside
       ? [`<span class="note">${slab.outside}</span>`]
-      : [item(STEEL, 'スラブ法 p', 'dashed'), item(STEEL, 'スラブ法 τ', 'dotted'), item(STEEL, 'スラブ法の中立点', 'ring')]),
+      : [item(STEEL, `スラブ法 p${slabOf}`, 'dashed'), item(STEEL, `スラブ法 τ${slabOf}`, 'dotted'), item(STEEL, 'スラブ法の中立点', 'ring')]),
   ]);
+  return { marks: marks.map((m) => ({ x: m.x, label: m.label, ...('color' in m ? { color: m.color } : {}) })), series: series.map((s) => ({ label: s.label, color: s.color })) };
 }
