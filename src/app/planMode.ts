@@ -3,26 +3,22 @@
 // plan keys. The section model's page is left as it is; main.ts only routes the shared buttons here
 // while the plan view is shown.
 import { cloneParams, type SimParams } from '../mpm/params.ts';
-import { PLAN_DEFAULTS, type PlanSettings } from '../mpm/planview/condition.ts';
+import type { PlanSettings } from '../mpm/planview/condition.ts';
 import type { PlanPhase } from '../mpm/planview/sim.ts';
 import { TAIL_GAP } from '../mpm/planview/steady.ts';
 import { css, split, temper } from './colormap.ts';
 import { checkRange } from './fieldCheck.ts';
 import { edited, showNumber } from './numberInput.ts';
 import type { FromPlanWorker, PlanFieldName, PlanFrame, PlanGeometry, ToPlanWorker } from './planProtocol.ts';
+import { PLAN_SETTINGS, checkedSettings, maxNotch, planSettingsOf, planSettingsQuery } from './planQuery.ts';
 import { PLAN_FIELDS, PlanView, planFieldInfo } from './planView.ts';
 import { conditionsQuery } from './query.ts';
 
 export type ViewMode = 'section' | 'plan';
 
 const mm = 1e-3;
-
-/** the width settings: panel field, URL key, range (in the panel's units) */
-const SETTINGS: { key: keyof PlanSettings; query: string; label: string; unit: string; step: number; min: number; max: number; scale: number; hint?: string }[] = [
-  { key: 'width', query: 'W', label: '板幅', unit: 'mm', step: 1, min: 2, max: 200, scale: mm },
-  { key: 'cells', query: 'wcells', label: '板幅方向のセル数（半幅）', unit: '', step: 1, min: 4, max: 100, scale: 1, hint: '多いほど細かいが遅い（10 セル・板長 28 mm で 1 回 10 秒ほど）' },
-  { key: 'notch', query: 'notch', label: '端の切り欠き（半径）', unit: 'mm', step: 0.1, min: 0, max: 5, scale: mm, hint: '板の長さの中ほどの端に半円の切り欠き。0 で無し' },
-];
+/** a strip shorter than this has no steady looks (the tail comes within 8 mm of the entry before the steady phase) [m] */
+const STEADY_LENGTH = 28e-3;
 
 const phaseText: Record<PlanPhase, string> = {
   approach: 'ロールに向かっている',
@@ -32,24 +28,11 @@ const phaseText: Record<PlanPhase, string> = {
   done: '圧延が終わった',
 };
 
-/** The width settings a URL asks for (out-of-range or malformed values are ignored). */
-export function planSettingsOf(q: URLSearchParams): PlanSettings {
-  const s: PlanSettings = { ...PLAN_DEFAULTS };
-  for (const f of SETTINGS) {
-    const raw = q.get(f.query);
-    if (raw === null || raw.trim() === '') continue;
-    const v = Number(raw);
-    if (!Number.isFinite(v) || v < f.min || v > f.max) continue;
-    s[f.key] = f.key === 'cells' ? Math.round(v) : v * f.scale;
-  }
-  return s;
-}
-
 export interface PlanModeOptions {
   query: URLSearchParams;
   /** where the width settings go (the conditions panel) */
   panelRoot: HTMLElement;
-  /** the conditions as they would run now (the panel's edits applied) */
+  /** the conditions the section model runs (the panel's unapplied edits stay pending: both views run the same) */
   conditions(): SimParams;
   presetId(): string;
   preset(): SimParams;
@@ -89,7 +72,8 @@ export class PlanMode {
   constructor(o: PlanModeOptions, stopAfter: number | null) {
     this.o = o;
     this.stopAfter = stopAfter;
-    this.settings = planSettingsOf(o.query);
+    const p0 = o.conditions();
+    this.settings = planSettingsOf(o.query, p0.rolling.sheetLength, p0.numerics.ppc);
     this.field = (PLAN_FIELDS.find((f) => f.id === o.query.get('pfield'))?.id ?? 'sxx') as PlanFieldName;
     this.view = new PlanView(this.$<HTMLCanvasElement>('plan-canvas'));
     this.buildSwitch();
@@ -109,6 +93,11 @@ export class PlanMode {
 
   get active(): boolean {
     return this.mode === 'plan';
+  }
+
+  /** the plan view has been started (it has a worker and conditions) */
+  get started(): boolean {
+    return this.worker !== null;
   }
 
   // ── building ───────────────────────────────────────────────────────────────
@@ -135,7 +124,7 @@ export class PlanMode {
   private buildSettings(): void {
     const fs = el('fieldset', 'group plan-only');
     fs.append(el('legend', undefined, '板幅（平面図）'));
-    for (const f of SETTINGS) {
+    for (const f of PLAN_SETTINGS) {
       const row = el('label', 'field');
       row.append(el('span', 'field-label', f.label));
       const box = el('span', 'field-input');
@@ -145,12 +134,20 @@ export class PlanMode {
       inp.step = String(f.step);
       inp.min = String(f.min);
       inp.max = String(f.max);
-      inp.addEventListener('input', () => this.o.onEdit());
+      inp.addEventListener('input', () => {
+        this.o.onEdit();
+        for (const c of this.checks) c(); // the notch's range follows the width
+      });
       box.append(inp);
       if (f.unit) box.append(el('span', 'unit', f.unit));
       row.append(box);
       if (f.hint) row.append(el('span', 'hint', f.hint));
-      this.checks.push(checkRange(inp, row, () => [f.min, f.max], f.unit));
+      const range = (): [number, number] => {
+        if (f.key !== 'notch') return [f.min, f.max];
+        const w = parseFloat(this.inputs.get('width')?.value ?? '');
+        return [f.min, Math.min(f.max, maxNotch(Number.isFinite(w) ? w : this.settings.width / mm))];
+      };
+      this.checks.push(checkRange(inp, row, range, f.unit));
       fs.append(row);
       this.inputs.set(f.key, inp);
     }
@@ -164,14 +161,14 @@ export class PlanMode {
 
   private showSettings(s: PlanSettings): void {
     this.shownSettings = { ...s };
-    for (const f of SETTINGS) showNumber(this.inputs.get(f.key)!, s[f.key] / f.scale);
+    for (const f of PLAN_SETTINGS) showNumber(this.inputs.get(f.key)!, s[f.key] / f.scale);
     for (const c of this.checks) c();
   }
 
-  /** the panel's width settings (clamped); an input not edited keeps the value it showed */
-  private readSettings(): PlanSettings {
+  /** the panel's width settings (clamped, then checked together for this condition); an input not edited keeps the value it showed */
+  private readSettings(params: SimParams): PlanSettings {
     const s = { ...(this.shownSettings ?? this.settings) };
-    for (const f of SETTINGS) {
+    for (const f of PLAN_SETTINGS) {
       const inp = this.inputs.get(f.key)!;
       if (!edited(inp)) continue;
       const v = parseFloat(inp.value);
@@ -179,7 +176,7 @@ export class PlanMode {
       const c = Math.min(f.max, Math.max(f.min, v));
       s[f.key] = f.key === 'cells' ? Math.round(c) : c * f.scale;
     }
-    return s;
+    return checkedSettings(s, params.rolling.sheetLength, params.numerics.ppc);
   }
 
   private buildTabs(): void {
@@ -231,7 +228,8 @@ export class PlanMode {
   query(): URLSearchParams {
     const q = conditionsQuery(this.o.presetId(), this.o.preset(), this.params ?? this.o.conditions());
     q.set('view', 'plan');
-    for (const f of SETTINGS) if (this.settings[f.key] !== PLAN_DEFAULTS[f.key]) q.set(f.query, String(+(this.settings[f.key] / f.scale).toPrecision(12)));
+    for (const [k, v] of planSettingsQuery(this.settings)) q.set(k, v);
+    if (this.field !== 'sxx') q.set('pfield', this.field);
     return q;
   }
 
@@ -242,7 +240,8 @@ export class PlanMode {
     document.body.dataset.view = mode;
     for (const b of this.switchButtons) b.setAttribute('aria-pressed', String(b.dataset.mode === mode));
     if (mode === 'plan') {
-      if (!this.worker) this.restart(this.o.conditions());
+      if (!this.worker) this.restart(this.o.conditions(), false);
+      this.showClock();
       this.view.resize();
       this.dirty = true;
       this.updateButtons();
@@ -271,10 +270,13 @@ export class PlanMode {
     this.worker.onerror = (e) => this.showError(e.message);
   }
 
-  /** start over with these conditions and the panel's width settings */
-  restart(params: SimParams): void {
+  /**
+   * Start over with these conditions (the ones the section model runs) and the width settings: the
+   * panel's (its edits applied) or, with readPanel false, the ones shown (the edits stay pending).
+   */
+  restart(params: SimParams, readPanel = true): void {
     if (!this.worker) this.startWorker();
-    this.settings = this.readSettings();
+    this.settings = checkedSettings(readPanel ? this.readSettings(params) : this.settings, params.rolling.sheetLength, params.numerics.ppc);
     this.showSettings(this.settings);
     this.params = cloneParams(params);
     this.last = null;
@@ -286,6 +288,16 @@ export class PlanMode {
     this.awaitingReady = true;
     this.send({ type: 'init', params: this.params, plan: { ...this.settings }, field: this.field, stopAfter: this.stopAfter });
     this.updateButtons();
+  }
+
+  /**
+   * 「条件を反映してやり直す」 or a new preset: restart with these conditions and the panel's width
+   * settings, or, before the plan view has ever run, only take the settings (it starts with them).
+   */
+  applyConditions(params: SimParams): void {
+    if (this.started) return this.restart(params);
+    this.settings = this.readSettings(params);
+    this.showSettings(this.settings);
   }
 
   run(): void {
@@ -319,6 +331,13 @@ export class PlanMode {
     this.$('run').textContent = this.frames > 1 && !this.finished ? '続ける' : '圧延を始める';
   }
 
+  /** the shared clock, from this view's last frame (0 before its first), while this view is shown */
+  showClock(): void {
+    if (!this.active) return;
+    const d = this.last?.diag;
+    this.$('clock').textContent = `t = ${((d?.t ?? 0) * 1e3).toFixed(2)} ms　${(d?.step ?? 0).toLocaleString()} step`;
+  }
+
   private showError(msg: string): void {
     this.$('plan-phase').textContent = `計算が止まった: ${msg}`;
     this.running = false;
@@ -342,12 +361,14 @@ export class PlanMode {
     const d = f.diag;
     const st = d.steady;
     const steady = st.samples > 0;
+    // finished without a steady look: the last look is the tail leaving, not a value to read
+    const none = !steady && d.phase === 'done';
     const hw = g.halfWidth0;
     // steady means once there are looks in the window, otherwise the last look (marked)
-    const mid = steady ? st.forcePerWidthByZ[0] : d.now?.forceMid;
-    const half = steady ? st.forceHalfWidth : d.now?.forceHalfWidth;
-    const spread = steady ? st.spread : d.now?.spread;
-    const thick = steady ? st.centreExitThickness : d.now?.centreThick;
+    const mid = steady ? st.forcePerWidthByZ[0] : none ? undefined : d.now?.forceMid;
+    const half = steady ? st.forceHalfWidth : none ? undefined : d.now?.forceHalfWidth;
+    const spread = steady ? st.spread : none ? undefined : d.now?.spread;
+    const thick = steady ? st.centreExitThickness : none ? undefined : d.now?.centreThick;
     const num = (v: number | undefined, k: number, digits: number) => (v != null && Number.isFinite(v) ? (v * k).toFixed(digits) : '—');
     const c0 = f.cracks[0];
     const rows: [string, string, string, boolean][] = [
@@ -375,11 +396,18 @@ export class PlanMode {
       }),
     );
     // a strip too short for the window: the tail comes within reach of the entry before the steady phase
-    const tooShort = !steady && d.phase === 'done';
+    const L = this.params!.rolling.sheetLength;
+    const short = L < STEADY_LENGTH - 1e-12;
     this.$('plan-results-note').textContent =
       `定常の値は、尾端が入口より ${TAIL_GAP * 1e3} mm 以上手前にある間の平均（${SAMPLE_NOTE}）。` +
-      (steady ? '' : tooShort ? 'この板の長さでは定常の読みが無かった。薄い字はロールに接していた最後の読み。板の長さを 28 mm 以上にする。' : 'まだ無いので、薄い字は直前の読み。');
-    if (this.active) this.$('clock').textContent = `t = ${(d.t * 1e3).toFixed(2)} ms　${d.step.toLocaleString()} step`;
+      (steady
+        ? ''
+        : none
+          ? `この板の長さ（${+(L * 1e3).toFixed(3)} mm）では定常の読みが無かった。板の長さを ${STEADY_LENGTH * 1e3} mm 以上にする。`
+          : short
+            ? `板の長さ ${+(L * 1e3).toFixed(3)} mm では定常の読みが出ない見込み（${STEADY_LENGTH * 1e3} mm 以上に）。薄い字は直前の読み。`
+            : 'まだ無いので、薄い字は直前の読み。');
+    this.showClock();
     this.$('plan-phase').textContent = phaseText[d.phase];
   }
 

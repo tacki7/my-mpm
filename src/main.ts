@@ -80,15 +80,14 @@ panel.show(params);
 const showNote = () => ($('preset-note').textContent = presetById(presetId)?.note ?? '');
 showNote();
 
-// the plan view (板幅方向): its own worker and picture; the shared buttons go to it while it is shown
+// the plan view (板幅方向): its own worker and picture; the shared buttons go to it while it is shown.
+// Both views run the same conditions (params): 「条件を反映してやり直す」 and a preset restart both, and
+// switching views never applies the panel's pending edits.
 const plan = new PlanMode(
   {
     query,
     panelRoot: $('panel'),
-    conditions: () => {
-      readConditions();
-      return params;
-    },
+    conditions: () => params,
     presetId: () => presetId,
     preset: () => presetById(presetId)!.build(),
     onEdit: () => {
@@ -100,6 +99,7 @@ const plan = new PlanMode(
         running = false;
         send({ type: 'pause' });
       }
+      if (mode === 'section') showClock();
       updateButtons();
       dirty = true;
     },
@@ -113,7 +113,7 @@ presetSel.addEventListener('change', () => {
   panel.show(params);
   showNote();
   restart();
-  if (plan.active) plan.restart(params);
+  plan.applyConditions(params);
 });
 
 // ── field tabs ──────────────────────────────────────────────────────────────
@@ -202,9 +202,9 @@ $('pause').addEventListener('click', () => {
   updateButtons();
 });
 $('reset').addEventListener('click', () => {
-  // the new conditions go to both models; only the one shown runs
+  // the new conditions go to both views; only the one shown runs
   restart();
-  if (plan.active) plan.restart(params);
+  plan.applyConditions(params);
 });
 
 function updateButtons() {
@@ -279,8 +279,15 @@ function updateResults(d: Diagnostics, f: Frame) {
       return tr;
     }),
   );
-  $('clock').textContent = `t = ${(d.t * 1e3).toFixed(2)} ms　${d.step.toLocaleString()} step`;
+  showClock();
   $('phase').textContent = phaseText[d.phase];
+}
+
+/** the shared clock, from the section model's last frame, while the section view is shown */
+function showClock() {
+  if (plan.active) return;
+  const d = last?.diag;
+  $('clock').textContent = `t = ${((d?.t ?? 0) * 1e3).toFixed(2)} ms　${(d?.step ?? 0).toLocaleString()} step`;
 }
 
 let crackSeen = 0;

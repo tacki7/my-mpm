@@ -814,6 +814,12 @@ body[data-view='plan'] .section-only {
   border-radius: 0 3px 3px 0;
 }
 
+.view-switch button:focus-visible {
+  /* the focus ring stays above the neighbouring button */
+  position: relative;
+  z-index: 1;
+}
+
 .view-switch button[aria-pressed='true'] {
   background: var(--ink);
   color: var(--sheet);

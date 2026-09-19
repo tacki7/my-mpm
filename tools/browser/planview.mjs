@@ -2,16 +2,19 @@
 // the end, and compare its steady values with `node tools/planview.mjs` for the same condition; run
 // it again and get the same numbers bit for bit; press every field tab (no exceptions, a redraw under
 // 16 ms); a brittle strip cracks and the crack record and the legend say where and when; the
-// conditions URL opens the same plan condition; the section view still works after switching back;
+// conditions URL opens the same plan condition; the section view still works after switching back and
+// pauses when 平面図 is shown; the shared clock follows the view on screen; a panel edit not applied
+// yet reaches neither view on a switch, and 「条件を反映してやり直す」 gives it to both;
 // and a narrow screen (700 px) keeps the plan picture and has no sideways scroll. Not a `@check`.
 //
 //   CDP_PORT=<cdp> node tools/browser/planview.mjs <url> [out-prefix]
 //
 // Writes <out-prefix>-plan.png, -crack.png, -narrow.png when a prefix is given; look at them.
 //
-// The page and the tool agree to about 1e-7, not bit for bit: Chrome's V8 and Node's V8 round a few
-// Math functions (exp, log, atan2) differently in the last bit, and that grows over thousands of steps.
-// The number of looks and steady samples must match exactly; the values within 1e-5.
+// The page and the tool agree to about 2e-6 (the spread; the forces to about 1e-7), not bit for bit:
+// Chrome's V8 and Node's V8 round a few Math functions (exp, log, atan2) differently in the last bit,
+// and that grows over thousands of steps. The looks and steady samples must match exactly; the values
+// within 1e-5.
 import { execFileSync } from 'node:child_process';
 import { connect } from './cdp.mjs';
 import { ok, near, done } from '../checks/lib.mjs';
@@ -94,6 +97,16 @@ try {
   const reopened = await c.evaluate('__mpm.plan.settings');
   ok(url.includes('view=plan') && reopened.width === 16e-3 && reopened.cells === 8 && Math.abs(reopened.notch - 0.5e-3) < 1e-12, 'the URL keys view=plan, W, wcells and notch set the plan view', JSON.stringify(reopened));
 
+  // ── a strip too short for the steady window (16 mm): the note says so before the run, and at the end
+  //    the load rows are empty rather than the tail's last look
+  await c.navigate(page('?view=plan&L=16&damage=none'));
+  await c.waitFor('__mpm.plan.ready && __mpm.plan.frames >= 1', 30000);
+  const before = await c.evaluate(`document.getElementById('plan-results-note').textContent`);
+  await click('#run');
+  await c.waitFor('__mpm.plan.done', 120000);
+  const after = await c.evaluate(`({ note: document.getElementById('plan-results-note').textContent, mid: [...document.querySelectorAll('#plan-results tr')].map((r) => r.textContent).find((t) => t.startsWith('中央の単位幅荷重')) })`);
+  ok(before.includes('28 mm') && after.note.includes('28 mm') && after.mid?.includes('—'), 'a 16 mm strip: the note asks for 28 mm before and after the run, and the load rows stay empty', `${after.mid} / ${after.note.slice(-40)}`);
+
   // ── a brittle strip (CL 0.1): it cracks, the record and the legend show it (where it cracks on this
   //    coarse grid is docs/validation.md's business, not this check's)
   await c.navigate(page(`?view=plan&L=16&W=20&wcells=10&damage=cockcroft-latham&cond=${b64({ damage: { clCrit: 0.1 } })}&autorun=1`));
@@ -114,7 +127,7 @@ try {
   await c.evaluate('__mpm.plan.setMode("section")');
   // (the crack run goes on in the worker; switching away pauses it)
 
-  // ── back to the section view: it runs as before
+  // ── back to the section view: it runs as before; switching to 平面図 pauses it
   await c.navigate(page('?view=plan&cells=6&L=8'));
   await c.waitFor('__mpm.plan.ready', 30000);
   await click('.view-switch button[data-mode="section"]');
@@ -123,6 +136,43 @@ try {
   await click('#run');
   await c.waitFor('__mpm.diag && __mpm.diag.step >= 2000', 120000);
   ok((await c.evaluate('__mpm.diag.step')) >= 2000 && !(await c.evaluate('__mpm.plan.running')), 'the section model runs from the shared button (the plan view is not running)');
+  await click('.view-switch button[data-mode="plan"]');
+  await c.waitFor('__mpm.plan.active && !__mpm.running', 10000);
+  await click('#run');
+  // the section worker sends the frame it was computing when the pause came, then stops: read it once
+  // the plan view has run a while, and again later
+  await c.waitFor(`__mpm.plan.diag && __mpm.plan.diag.step >= 1500`, 120000);
+  const sectionAt = await c.evaluate('__mpm.diag.step');
+  await c.waitFor(`__mpm.plan.diag && __mpm.plan.diag.step >= 2500`, 120000);
+  ok((await c.evaluate('__mpm.diag.step')) === sectionAt, 'switching to 平面図 pauses the section model (its step stays while the plan view runs 1000 steps)', `section at step ${sectionAt}`);
+
+  // ── the shared clock shows the view on screen
+  const clock = () => c.evaluate(`document.getElementById('clock').textContent`);
+  const stepText = (expr) => c.evaluate(`(${expr}).toLocaleString() + ' step'`);
+  ok((await clock()).includes(await stepText('__mpm.plan.diag.step')), 'the clock shows the plan view while it runs', await clock());
+  await click('.view-switch button[data-mode="section"]');
+  await c.waitFor('!__mpm.plan.active', 10000);
+  await painted();
+  ok((await clock()).includes(await stepText('__mpm.diag.step')), "back to 断面 in the middle of a plan run: the clock shows the section model's step", `${await clock()} (section ${sectionAt}, plan ${await c.evaluate('__mpm.plan.diag.step')})`);
+
+  // ── the panel's pending edit: switching views (the first switch starts the plan view) does not apply
+  //    it; 「条件を反映してやり直す」 applies it to both
+  await c.navigate(page('?cells=6&L=8'));
+  await c.waitFor('window.__mpm?.ready && !__mpm.plan.ready', 30000);
+  const mu0 = await c.evaluate('__mpm.params.rolling.mu');
+  await c.evaluate(`(() => { const i = document.querySelector('input[name="mu"]'); i.value = '0.12'; i.dispatchEvent(new Event('input', { bubbles: true })); })()`);
+  await click('.view-switch button[data-mode="plan"]');
+  await c.waitFor('__mpm.plan.active', 10000);
+  await click('.view-switch button[data-mode="section"]');
+  await c.waitFor('!__mpm.plan.active', 10000);
+  const kept = await c.evaluate(`({ mu: __mpm.params.rolling.mu, planMu: __mpm.plan.params.rolling.mu, pending: document.getElementById('reset').classList.contains('pending') })`);
+  ok(kept.mu === mu0 && kept.planMu === mu0 && kept.pending, 'an edit not applied yet: switching to 平面図 and back applies it nowhere and it stays pending', JSON.stringify(kept));
+  // another edit, the plan view started now: 「条件を反映してやり直す」 in the section view reaches both
+  await c.evaluate(`(() => { const i = document.querySelector('input[name="mu"]'); i.value = '0.14'; i.dispatchEvent(new Event('input', { bubbles: true })); })()`);
+  await click('#reset');
+  await c.waitFor('__mpm.ready && __mpm.plan.ready', 30000);
+  const applied = await c.evaluate(`({ mu: __mpm.params.rolling.mu, planMu: __mpm.plan.params.rolling.mu, planFrames: __mpm.plan.frames, pending: document.getElementById('reset').classList.contains('pending') })`);
+  ok(applied.mu === 0.14 && applied.planMu === 0.14 && !applied.pending, '「条件を反映してやり直す」 in the section view: both views take the new conditions', JSON.stringify(applied));
 
   // ── a narrow screen: the plan picture keeps its size, nothing scrolls sideways
   await c.evaluate('__mpm.plan.setMode("plan")');

@@ -14,8 +14,12 @@ export interface PlanSettings {
 
 export const PLAN_DEFAULTS: PlanSettings = { width: 20e-3, cells: 10, notch: 0 };
 
+/**
+ * The section model's defects are not carried over (their y is a thickness position, not a place
+ * across the width); the plan view's only defect is the edge notch.
+ */
 export function planCondition(base: SimParams, s: PlanSettings): PlanSimParams {
   const P = planParams(base, s.width, s.cells);
-  if (s.notch > 0) P.defects = [{ kind: 'void', x: base.rolling.sheetLength / 2, y: s.width / 2, ax: s.notch, ay: s.notch }];
+  P.defects = s.notch > 0 ? [{ kind: 'void', x: base.rolling.sheetLength / 2, y: s.width / 2, ax: s.notch, ay: s.notch }] : [];
   return P;
 }
