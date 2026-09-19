@@ -68,10 +68,14 @@ export class StandTable {
     thead.append(head);
     const tbody = document.createElement('tbody');
     tbody.append(...body);
-    const stalled = results.find((r) => r.phase === 'stalled');
+    // a stand that did not end 'done' stops the pass there
+    const stopped = results.find((r) => r.phase !== 'done');
     const caption = document.createElement('caption');
     caption.className = 'table-note';
-    if (stalled) caption.textContent = `#${stalled.stand + 1} で板が止まった（噛み込めない）。その先のスタンドは計算していない`;
-    this.table.replaceChildren(...(stalled ? [caption] : []), thead, tbody);
+    if (stopped) {
+      const why = stopped.phase === 'stalled' ? '板が止まった（噛み込めない）' : `計算を止めた（${stopped.phase}）`;
+      caption.textContent = `#${stopped.stand + 1} で${why}。その先のスタンドは計算していない`;
+    }
+    this.table.replaceChildren(...(stopped ? [caption] : []), thead, tbody);
   }
 }

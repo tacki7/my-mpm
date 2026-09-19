@@ -112,7 +112,10 @@ function restOf(s: Sim, tr: Tracker | null): Picture['rest'] {
     profile: { x: Array.from(prof.x), p: Array.from(prof.p), tau: Array.from(prof.tau) },
     cracks: s.cracks.map((c, i) => {
       const j = c.stand ?? k; // a crack of the stand still running has no stand yet
-      return { ...c, cx: cent[i].x, cy: cent[i].y, stand: j, tPass: tBefore(j) + c.t, stepPass: stepsBefore(j) + c.step };
+      // a record with no points left (a tandem carries the records on; their points may be gone): where it began
+      const e = cent[i];
+      const at = Number.isFinite(e.x) && Number.isFinite(e.y);
+      return { ...c, cx: at ? e.x : c.x, cy: at ? e.y : c.y, stand: j, tPass: tBefore(j) + c.t, stepPass: stepsBefore(j) + c.step };
     }),
     tracks: tr ? tr.tracks(selected) : [],
     running,
