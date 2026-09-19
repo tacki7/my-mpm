@@ -21,7 +21,7 @@ export const LIMITS: Record<string, [number, number]> = {
   fc: [0.001, 0.5],
 };
 
-const DAMAGE: DamageModel[] = ['johnson-cook', 'hancock-mackenzie', 'cockcroft-latham', 'gtn', 'none'];
+const DAMAGE: DamageModel[] = ['johnson-cook', 'hancock-mackenzie', 'cockcroft-latham', 'gtn', 'localization', 'none'];
 const YIELD: YieldModel[] = ['von-mises', 'gtn'];
 const NUCLEATION: GtnParams['nucleation'][] = ['tension', 'always'];
 

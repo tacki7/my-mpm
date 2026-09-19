@@ -2,6 +2,7 @@
 // sampled by plastic strain (so the point that fails first, or the most damaged
 // one, has its whole history when it is picked), and the state of the points
 // being followed. Reads the simulation only.
+import { localization } from '../mpm/bifurcation.ts';
 import { homologousTemperature } from '../mpm/material.ts';
 import type { Sim } from '../mpm/solver.ts';
 import type { PointState, Track } from './protocol.ts';
@@ -111,6 +112,8 @@ export class Tracker {
       dHM: s.dHM[p],
       dCL: s.dCL[p],
       por: s.por[p],
+      loc: localization(s.el, s.hardening(p), s.sxx[p], s.syy[p], s.sxy[p], s.szz[p]).ratio,
+      locHit: s.locHit[p] === 1,
       damage: s.governingDamage(p),
       failed: s.failed[p] === 1,
       sheetX: s.xHead0 - s.x0[p],

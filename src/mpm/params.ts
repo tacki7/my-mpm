@@ -6,8 +6,10 @@ export type HardeningModel = 'johnson-cook' | 'swift';
 /**
  * Which damage indicator decides failure. All of them are always accumulated for display.
  * 'gtn': the porosity reaches the critical porosity fc (it evolves only with the GTN yield condition).
+ * 'localization': the acoustic tensor of the J2 tangent turns singular (a shear band can form;
+ * needs H ≤ 0, so a hardening material never fails by it).
  */
-export type DamageModel = 'johnson-cook' | 'hancock-mackenzie' | 'cockcroft-latham' | 'gtn' | 'none';
+export type DamageModel = 'johnson-cook' | 'hancock-mackenzie' | 'cockcroft-latham' | 'gtn' | 'localization' | 'none';
 
 /** Yield condition: pressure-independent von Mises (J2), or Gurson-Tvergaard-Needleman with porosity. */
 export type YieldModel = 'von-mises' | 'gtn';

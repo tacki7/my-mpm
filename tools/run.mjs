@@ -1,7 +1,7 @@
 // Run one rolling simulation headless and print its diagnostics.
 //
 //   node tools/run.mjs [--h0 1] [--r 0.25] [--R 100] [--L 16] [--mu 0.08] [--cells 10]
-//                      [--mat spcc|s4340|al6061] [--damage johnson-cook|hancock-mackenzie|cockcroft-latham|gtn|none]
+//                      [--mat spcc|s4340|al6061] [--damage johnson-cook|hancock-mackenzie|cockcroft-latham|gtn|localization|none]
 //                      [--yield von-mises|gtn] [--preset <id>]
 //                      [--tb 0] [--tf 0] [--every 2000] [--max 400000] [--json]
 //

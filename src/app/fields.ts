@@ -27,6 +27,15 @@ export const FIELDS: FieldInfo[] = [
   { id: 'lagrange', label: 'メタルフロー', unit: '', scale: 'lattice', range: [0, 1] },
   // 0 everywhere unless the yield condition is GTN
   { id: 'porosity', label: '空孔率 f', unit: '', scale: 'sequential' },
+  // min det of the acoustic tensor / elastic: 1 where the point does not flow, ≤ 0 where a shear band can form
+  // (drawn red). Flowing points in the bite (standard, 6 cells): p05 3.4e-3, p50 0.043, p95 0.30 (H/3G is 0.001–0.02;
+  // the out-of-plane deviator raises it), so about half of them saturate like the elastic points: the range resolves
+  // the ones closest to a band. Not evaluated with the GTN yield condition.
+  { id: 'loc', label: '局所化の指標 det A / 弾性の値', unit: '', scale: 'diverging', range: [-0.05, 0.05], flip: true },
+  // Drucker: σ̇ : Dp / ε̇p², the slope of the flow stress along the path; negative is unstable (drawn red).
+  // Medians over eighths of the bite (standard, 6 cells): 1650, 700, 540, 455, 570, 360, 240, −1130 MPa.
+  // Fixed range: the entry and exit have outliers of ±10⁵ MPa
+  { id: 'drucker', label: 'Drucker の指標 σ̇:Dp / ε̇p²', unit: 'MPa', scale: 'diverging', range: [-2000, 2000], flip: true },
 ];
 
 export function fieldInfo(id: FieldName): FieldInfo {
