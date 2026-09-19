@@ -168,7 +168,7 @@ export function drawForceChart(canvas: HTMLCanvasElement, legend: HTMLElement, t
     slab.outside
       ? `<span class="note">${slab.outside}</span>`
       : item(STEEL, `スラブ法（Kármán）${(slab.force * 1e-6).toFixed(2)} kN/mm`, 'dashed'),
-    `<span class="note">MPM の荷重はスラブ法より 3〜6 % 高い（標準条件で 6 セル 3.22・10 セル 3.10 対 スラブ法 3.03 kN/mm）</span>`,
+    `<span class="note">MPM の荷重はスラブ法より 3〜7 % 高い（標準条件で 6 セル 3.24・10 セル 3.11 対 スラブ法 3.03 kN/mm）</span>`,
   ]);
   // copies: t and F are the page's history, which grows between frames
   return { t: t.slice(), raw: F.slice(), smooth, windowMs: window * 1e3 };
