@@ -108,11 +108,16 @@ export class StandTable {
     });
     const thead = document.createElement('thead');
     thead.append(head);
-    // the tandem stopped before its last stand (src/mpm/tandem.ts, TandemStop)
+    // under the table: why the tandem stopped before its last stand (src/mpm/tandem.ts, TandemStop), and why a
+    // finished stand has no steady values
+    const notes: string[] = [];
+    const k = results.length; // the stand it stopped at (1 = the first)
+    if (stopped) notes.push(`${STOP_TEXT[stopped](k, results[k - 1])}。その先のスタンドは計算していない`);
+    const unsteady = results.filter((r) => r.steadyForce == null).map((r) => `#${r.stand + 1}`);
+    if (unsteady.length) notes.push(`${unsteady.join('・')} は定常の読みが無い（板が短く、頭端が出口の先に届く前に尾端がバイトに入る）ので、荷重・出側板厚・先進率は —`);
     const caption = document.createElement('caption');
     caption.className = 'table-note';
-    const k = results.length; // the stand it stopped at (1 = the first)
-    if (stopped) caption.textContent = `${STOP_TEXT[stopped](k, results[k - 1])}。その先のスタンドは計算していない`;
-    this.table.replaceChildren(...(stopped ? [caption] : []), thead, ...bodies);
+    caption.textContent = notes.join('。');
+    this.table.replaceChildren(...(notes.length ? [caption] : []), thead, ...bodies);
   }
 }

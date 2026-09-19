@@ -128,16 +128,19 @@ export function slabRatio(slab: SlabReference, steadyForce: number | null): numb
  * the ratio as a reference; otherwise the ratio against the standard condition's measured range
  * (docs/validation.md「スラブ法との比較」). The ratio appears once the steady phase has started.
  */
-export function forceNote(slab: SlabReference, steadyForce: number | null): string {
+export function forceNote(slab: SlabReference, steadyForce: number | null, stand?: number): string {
   if (slab.outside) return '';
   const ratio = slabRatio(slab, steadyForce);
   const r = ratio != null ? ratio.toFixed(2) : null;
+  // a tandem: the ratio of the stand on show (stand, 1 = the first); the standard condition's range is a single pass's
+  const of = stand != null ? `#${stand} の` : '';
   if (slab.delta > THICK_DELTA) {
     return (
       `板が厚い（Δ = 平均板厚 / 接触長 = ${slab.delta.toFixed(2)} > 1）。変形が板厚方向に一様でないので、スラブ法は荷重を低く見積もる。` +
-      (r != null ? `定常の MPM / スラブ法 = ${r}（参考）` : 'スラブ法の線は参考')
+      (r != null ? `${of}定常の MPM / スラブ法 = ${r}（参考）` : 'スラブ法の線は参考')
     );
   }
+  if (stand != null) return r != null ? `${of}定常の MPM / スラブ法 = ${r}` : '定常になると、表示中のスタンドの MPM / スラブ法 の比を出す';
   return (
     (r != null ? `定常の MPM / スラブ法 = ${r}。` : '定常になると MPM / スラブ法 の比を出す。') +
     '標準条件では 1.03〜1.07（格子で動く。6 セル 3.24・10 セル 3.11 対 スラブ法 3.03 kN/mm）'
@@ -272,7 +275,7 @@ export function drawForceChart(
     // where each stand after the first begins (the first begins at the chart's left edge)
     marks: tandem ? tandem.slice(1).map((sp, k) => ({ x: sp.t0, label: `#${k + 2}` })) : [],
   });
-  const note = forceNote(slab, steadyForce);
+  const note = forceNote(slab, steadyForce, tandem ? tandem.length : undefined);
   setLegend(legend, [
     item(INK, `移動平均（${fmtUs(window)}、揺れの周期の 2 倍）`),
     item(INK_FAINT, '1 フレームの平均', 'thin'),
