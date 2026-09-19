@@ -189,7 +189,7 @@ function run(mod) {
   for (let p = 0; p < sim.n; p++) {
     if (!sim.active[p]) continue;
     if (!Number.isFinite(loc[p]) || !Number.isFinite(dr[p])) bad++;
-    if (sim.hmod[p] < Infinity) {
+    if (sim.hardening(p) < Infinity) {
       flowing++;
       minLoc = Math.min(minLoc, loc[p]);
     } else {

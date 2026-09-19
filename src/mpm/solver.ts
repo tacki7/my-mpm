@@ -187,7 +187,7 @@ export class Sim {
   readonly dCL: Float64Array;
   readonly por: Float64Array; // porosity f (GTN)
   readonly ev: Float64Array; // plastic volume strain Σ tr Δεp (GTN): p = −K (ln J − ev)
-  readonly hmod: Float64Array; // hardening modulus dσy/dεp of the last step, ∞ when it did not flow (J2)
+  readonly flowRate: Float64Array; // equivalent strain rate [1/s] of the last step if the point flowed (J2), −1 if not
   // Drucker's σ̇ : Dp / ε̇p² = Σ Δσ:Δεp / Σ Δεp² over the recent plastic steps (weight 1 − 1/DRUCKER_STEPS per step):
   // one step alone is dominated by the noise of the elastic trial
   readonly drW: Float64Array;
@@ -350,7 +350,7 @@ export class Sim {
     this.dCL = F();
     this.por = F();
     this.ev = F();
-    this.hmod = F().fill(Infinity);
+    this.flowRate = F().fill(-1);
     this.drW = F();
     this.drE = F();
     this.locHit = new Uint8Array(n);
@@ -765,7 +765,7 @@ export class Sim {
 
       let q = Math.sqrt(1.5 * (sx * sx + sy * sy + sz * sz + 2 * sh * sh));
       let dep = 0;
-      let H = Infinity; // hardening modulus when the point flows (J2)
+      let flowRate = -1;
       const isFailed = this.failed[p] === 1;
       if (isFailed) {
         sx = sy = sz = sh = 0;
@@ -799,12 +799,12 @@ export class Sim {
           q -= 3 * G * dep;
           this.ep[p] += dep;
           this.plasticWork += q * dep * this.vol0[p] * J;
-          H = flowStress(mat, this.ep[p], epsDot, this.temp[p]).H;
+          flowRate = epsDot;
           this.drW[p] = DRUCKER_DECAY * this.drW[p] + druckerWork(sx - rx, sy - ry, sh - rh, sz - sz0, sx, sy, sh, sz, q, dep);
           this.drE[p] = DRUCKER_DECAY * this.drE[p] + dep * dep;
         }
       }
-      this.hmod[p] = H;
+      this.flowRate[p] = flowRate;
       this.sxx[p] = sx;
       this.syy[p] = sy;
       this.szz[p] = sz;
@@ -824,7 +824,7 @@ export class Sim {
       this.s1[p] = s1;
 
       if (dep > 0) {
-        if (dmg.model === 'localization' && localization(this.el, H, sx, sy, sh, sz).ratio <= 0) this.locHit[p] = 1;
+        if (dmg.model === 'localization' && localization(this.el, this.hardening(p), sx, sy, sh, sz).ratio <= 0) this.locHit[p] = 1;
         const du = 1 / this.duct[p];
         const Ts = homologousTemperature(mat, this.temp[p]);
         const epsDotStar = epsDot / mat.epsDot0;
@@ -836,6 +836,12 @@ export class Sim {
         if (dmg.model !== 'none' && this.governingDamage(p) >= 1) this.fail(p);
       }
     }
+  }
+
+  /** Hardening modulus dσy/dεp [Pa] if the point flowed in the last step (J2), otherwise ∞. */
+  hardening(p: number): number {
+    const rate = this.flowRate[p];
+    return rate < 0 ? Infinity : flowStress(this.params.material, this.ep[p], rate, this.temp[p]).H;
   }
 
   governingDamage(p: number): number {
@@ -1147,10 +1153,10 @@ export class Sim {
           v = this.por[p];
           break;
         case 'loc':
-          v = localization(this.el, this.hmod[p], this.sxx[p], this.syy[p], this.sxy[p], this.szz[p]).ratio;
+          v = localization(this.el, this.hardening(p), this.sxx[p], this.syy[p], this.sxy[p], this.szz[p]).ratio;
           break;
         case 'drucker':
-          v = this.hmod[p] < Infinity && this.drE[p] > 0 ? (this.drW[p] / this.drE[p]) * MPa : 0;
+          v = this.flowRate[p] >= 0 && this.drE[p] > 0 ? (this.drW[p] / this.drE[p]) * MPa : 0;
           break;
         case 'sxx':
           v = (this.sxx[p] - this.pres[p]) * MPa;
