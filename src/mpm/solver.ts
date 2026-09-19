@@ -880,6 +880,30 @@ export class Sim {
       if (bx + 2 < c0 || bx > c1 + 2) continue;
       const by = Math.floor((py[p] - oy) * invH - 0.5);
       if (by + 2 < r0 || by > r1 + 2) continue;
+      if (byCentroid) {
+        // the side needs no weights: the point beyond C_i along G_i, at each node where G_i ≠ 0
+        const b = bx * nyN + by;
+        let far = 0;
+        for (let i = 0; i < 3; i++) {
+          for (let j = 0; j < 3; j++) {
+            const idx = b + i * nyN + j;
+            const Gx = gGx[idx];
+            const Gy = gGy[idx];
+            let f = 0;
+            if (Gx !== 0 || Gy !== 0) {
+              const w = gCw[idx];
+              f = (px[p] - gCx[idx] / w) * Gx + (py[p] - gCy[idx] / w) * Gy > 0 ? 1 : 0;
+            }
+            pf[9 * p + 3 * i + j] = f;
+            far |= f;
+          }
+        }
+        if (far) {
+          this.pfAny[p] = 1;
+          any = true;
+        }
+        continue;
+      }
       const base = weights(p);
       let gpx = 0;
       let gpy = 0;

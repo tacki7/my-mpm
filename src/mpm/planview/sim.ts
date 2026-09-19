@@ -584,6 +584,30 @@ export class PlanSim {
       if (bx + 3 <= lo || bx >= hi) continue;
       const bz = Math.floor((pz[p] - oz) * invH - 0.5);
       if (bz + 2 < zLo || bz > zHi) continue;
+      if (byCentroid) {
+        // the side needs no weights: the point beyond C_i along G_i, at each node where G_i ≠ 0
+        const b = bx * nzN + bz;
+        let far = 0;
+        for (let i = 0; i < 3; i++) {
+          for (let j = 0; j < 3; j++) {
+            const idx = b + i * nzN + j;
+            const Gx = gGx[idx];
+            const Gz = gGz[idx];
+            let f = 0;
+            if (Gx !== 0 || Gz !== 0) {
+              const w = gCw[idx];
+              f = (px[p] - gCx[idx] / w) * Gx + (pz[p] - gCz[idx] / w) * Gz > 0 ? 1 : 0;
+            }
+            pf[9 * p + 3 * i + j] = f;
+            far |= f;
+          }
+        }
+        if (far) {
+          this.pfAny[p] = 1;
+          any = true;
+        }
+        continue;
+      }
       const base = weights(p);
       let gpx = 0;
       let gpz = 0;
