@@ -5,6 +5,7 @@ import { flowStress } from '../mpm/material.ts';
 import type { HardeningModel, MaterialParams } from '../mpm/params.ts';
 import { drawChart } from './charts.ts';
 import { checkRange } from './fieldCheck.ts';
+import { edited, showNumber } from './numberInput.ts';
 
 interface Constant {
   key: keyof MaterialParams;
@@ -105,7 +106,9 @@ export function buildMaterialEditor(onEdit: () => void): MaterialEditor {
     if (!base) return null;
     const m: MaterialParams = { ...base, hardening: law.value as HardeningModel };
     for (const { input, c } of inputs.values()) {
-      const v = parseFloat(input.value);
+      // not edited: keep the value loaded (the text is rounded), unless it is out of range
+      const v = edited(input) ? parseFloat(input.value) : (base[c.key] as number) * c.scale;
+      if (!edited(input) && v >= c.range[0] && v <= c.range[1]) continue;
       if (Number.isFinite(v)) (m[c.key] as number) = Math.min(c.range[1], Math.max(c.range[0], v)) / c.scale;
     }
     return m;
@@ -149,7 +152,7 @@ export function buildMaterialEditor(onEdit: () => void): MaterialEditor {
       base = { ...m };
       law.value = m.hardening;
       for (const { input, c, check } of inputs.values()) {
-        input.value = String(+((m[c.key] as number) * c.scale).toPrecision(6));
+        showNumber(input, (m[c.key] as number) * c.scale);
         check();
       }
       refresh();
