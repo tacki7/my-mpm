@@ -3,6 +3,7 @@
 // end backwards and from the mid-plane — with its half sizes. Shown in mm.
 import type { Defect, SimParams } from '../mpm/params.ts';
 import { checkRange } from './fieldCheck.ts';
+import { edited, showNumber } from './numberInput.ts';
 
 const mm = 1e-3;
 
@@ -22,6 +23,8 @@ export interface DefectEditor {
 
 interface Row {
   el: HTMLElement;
+  /** the defect as shown (an input not edited keeps its value) */
+  shown: Defect;
   kind: HTMLSelectElement;
   num: Record<'x' | 'y' | 'ax' | 'ay' | 'ductility', HTMLInputElement>;
   checks: (() => void)[];
@@ -89,7 +92,7 @@ export function buildDefectEditor(onEdit: () => void): DefectEditor {
       input.type = 'number';
       input.name = `defect-${k}`;
       input.step = String(step);
-      input.value = String(+value.toPrecision(6));
+      showNumber(input, value);
       box.append(input);
       if (unit) box.append(el('span', 'unit', unit));
       row.append(box);
@@ -104,6 +107,7 @@ export function buildDefectEditor(onEdit: () => void): DefectEditor {
     const fd = field('ductility', '延性の倍率', '', d.ductility ?? 0.3, 0.05);
     const row: Row = {
       el: li,
+      shown: d,
       kind,
       num: { x: fx.input, y: fy.input, ax: fax.input, ay: fay.input, ductility: fd.input },
       checks: [fx.check, fy.check, fax.check, fay.check, fd.check],
@@ -143,18 +147,22 @@ export function buildDefectEditor(onEdit: () => void): DefectEditor {
     read(p) {
       sheet = { L: p.rolling.sheetLength, h0: p.rolling.h0 };
       return rows.map((r) => {
-        const v = (k: keyof Row['num'], fallback: number) => {
-          const x = parseFloat(r.num[k].value);
-          return clamp(k, Number.isFinite(x) ? x : fallback);
+        // in SI; an input not edited keeps the value shown (the text is rounded), unless it is out of range
+        const v = (k: keyof Row['num'], shown: number, unit: number, fallback: number) => {
+          const input = r.num[k];
+          const x = edited(input) ? parseFloat(input.value) : shown / unit;
+          if (!edited(input) && x === clamp(k, x)) return shown;
+          return clamp(k, Number.isFinite(x) ? x : fallback) * unit;
         };
+        const s = r.shown;
         const d: Defect = {
           kind: r.kind.value as Defect['kind'],
-          x: v('x', sheet.L / 2 / mm) * mm,
-          y: v('y', 0) * mm,
-          ax: v('ax', 0.4) * mm,
-          ay: v('ay', 0.12) * mm,
+          x: v('x', s.x, mm, sheet.L / 2 / mm),
+          y: v('y', s.y, mm, 0),
+          ax: v('ax', s.ax, mm, 0.4),
+          ay: v('ay', s.ay, mm, 0.12),
         };
-        if (d.kind === 'weak') d.ductility = v('ductility', 0.3);
+        if (d.kind === 'weak') d.ductility = v('ductility', s.ductility ?? 0.3, 1, 0.3);
         return d;
       });
     },

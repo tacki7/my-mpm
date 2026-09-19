@@ -4,6 +4,7 @@ import { MATERIALS, hasBite, type SimParams } from '../mpm/params.ts';
 import { buildDefectEditor } from './defectEditor.ts';
 import { checkRange } from './fieldCheck.ts';
 import { buildMaterialEditor } from './materialEditor.ts';
+import { edited, showNumber } from './numberInput.ts';
 import { LIMITS } from './query.ts';
 
 interface NumField {
@@ -87,7 +88,7 @@ const GROUPS: Group[] = RAW.map((g) => ({
 export interface Panel {
   /** write the params into the inputs */
   show(p: SimParams): void;
-  /** read the inputs into a copy of `base` */
+  /** read the inputs into a copy of `base`; an input not edited since `show(base)` keeps base's value */
   read(base: SimParams): SimParams;
 }
 
@@ -204,9 +205,12 @@ export function buildPanel(root: HTMLElement, onEdit: () => void): Panel {
     materialEditor.compareWith(m);
   });
 
+  let shownFrom: SimParams | null = null;
+
   return {
     show(p) {
-      for (const g of GROUPS) for (const f of g.fields) inputs.get(f.key)!.value = String(+f.get(p).toPrecision(6));
+      shownFrom = p;
+      for (const g of GROUPS) for (const f of g.fields) showNumber(inputs.get(f.key)!, f.get(p));
       for (const c of checks) c();
       const matKey = Object.entries(MATERIALS).find(([, m]) => m.name === p.material.name)?.[0] ?? 'spcc';
       selects.get('material')!.value = matKey;
@@ -228,7 +232,11 @@ export function buildPanel(root: HTMLElement, onEdit: () => void): Panel {
       p.damage.failure = selects.get('failure')!.value as SimParams['damage']['failure'];
       for (const g of GROUPS) {
         for (const f of g.fields) {
-          const v = parseFloat(inputs.get(f.key)!.value);
+          const input = inputs.get(f.key)!;
+          // not edited: keep the value (the text is rounded), unless it is out of range
+          const kept = base === shownFrom && !edited(input);
+          const v = kept ? f.get(p) : parseFloat(input.value);
+          if (kept && v >= f.min && v <= f.max) continue;
           if (Number.isFinite(v)) f.set(p, Math.min(f.max, Math.max(f.min, v)));
         }
       }
