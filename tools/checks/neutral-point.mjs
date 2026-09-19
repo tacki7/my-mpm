@@ -4,9 +4,12 @@
 //   and moved the window one column back, so it ended 4.5 cells past the exit
 // - the neutral point is the zero of the friction inside the bite (−Lc < x < 0), or null with
 //   the reason. On a thick plate (h0 4 mm, R 25 mm, 8 %, μ 0.1, 6 cells) the zero was taken at the
-//   edge of the window, past the exit (2 of 5 steady samples). The reasons are checked on made-up
-//   bins: a real arc hardly ever sticks whole (p → 0 at the ends, where the nodes slide), and the
-//   'sticking' this plate showed came from sliding nodes carrying 0.9875 μ before T31
+//   edge of the window, past the exit (2 of 5 steady samples). Since T31 that plate's runs no longer
+//   give a zero outside the bite, so the made-up bins below are now what guards "inside the bite
+//   only"; the plate itself only checks that the point is never outside. The reasons are checked on
+//   the made-up bins too: a real arc hardly ever sticks whole (p → 0 at the ends, where the nodes
+//   slide), and on 6 cells each bin mixes sliding and sticking nodes, so the bins' 0.99 μ reads
+//   'sticking' when there is no zero (the plate carried 0.93 μ on its sliding nodes before T31)
 // - tools/run.mjs gives null for the neutral point when it had no sample (it gave 0: "at the exit")
 // @check
 import { execFileSync } from 'node:child_process';

@@ -999,8 +999,10 @@ export class Sim {
         ty = (-ds * sy) / sl;
         gvx[idx] += tx;
         gvy[idx] += ty;
-        this.gslipX[kIdx] = sx + tx;
-        this.gslipY[kIdx] = sy + ty;
+        // down to sticking: exactly 0, or a rounding residue (1e-20) would count the node as sliding
+        const stuck = ds >= sl;
+        this.gslipX[kIdx] = stuck ? 0 : sx + tx;
+        this.gslipY[kIdx] = stuck ? 0 : sy + ty;
         this.contactJt[idx] += mi * ds;
       }
       const f = mi * dv * invDt; // on the sheet, along n
