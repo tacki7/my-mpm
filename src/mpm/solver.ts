@@ -1754,7 +1754,8 @@ export class Sim {
       sy[id] += this.py[p];
       c[id]++;
     }
-    return this.cracks.map((k) => ({ id: k.id, x: sx[k.id] / c[k.id], y: sy[k.id] / c[k.id], count: k.count }));
+    // a record whose points are all gone (a tandem's next stand only takes the points on the grid) stays where it started
+    return this.cracks.map((k) => ({ id: k.id, x: c[k.id] ? sx[k.id] / c[k.id] : k.x, y: c[k.id] ? sy[k.id] / c[k.id] : k.y, count: k.count }));
   }
 
   /** Per-particle values of a display field (MPa for stresses). */

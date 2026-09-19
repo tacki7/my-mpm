@@ -39,13 +39,15 @@ const report = (sim, d, res) => {
     sheetLength_mm: sim.params.rolling.sheetLength * 1e3,
     thicknessOut_mm: res ? res.thicknessOut * 1e3 : null,
     ...summary,
-    cracks: summary.cracks.map((c) => ({ ...c, stand: (c.stand ?? stand) + 1 })),
+    // one stand: the records as run.mjs prints them (no stand field)
+    cracks: stands > 1 ? summary.cracks.map((c) => ({ ...c, stand: (c.stand ?? stand) + 1 })) : summary.cracks,
   };
   out.push(entry);
   log(
     `stand ${stand + 1}/${stands}: h0 ${entry.h0_mm.toFixed(4)} mm, L ${entry.sheetLength_mm.toFixed(2)} mm, ${summary.particles} points, ${summary.steps} steps (${secs.toFixed(1)} s), ` +
       `F ${summary.steadyForce_kN_per_mm.toFixed(3)} kN/mm, exit ${summary.exitThickness_mm.toFixed(4)} mm, out ${entry.thicknessOut_mm?.toFixed(4) ?? '-'} mm, ` +
-      `slip ${(summary.forwardSlip * 100).toFixed(2)} %, Dmax ${summary.maxDamage.toFixed(3)}, failed ${summary.failed}, cracks ${summary.cracks.length}, ${d.phase}`,
+      `slip ${(summary.forwardSlip * 100).toFixed(2)} %, Dmax ${summary.maxDamage.toFixed(3)}, failed ${summary.failed}, cracks ${summary.cracks.length}, ${d.phase}` +
+      (res ? `, mass lost ${(res.massLost * 100).toFixed(2)} %${res.separated ? ', separated' : ''}` : ''),
   );
   hist = [];
   t0 = performance.now();
@@ -66,4 +68,5 @@ while (!tandem.done) {
     break;
   }
 }
-if (json) console.log(JSON.stringify({ stands, every, results: out, stand: tandem.results }));
+if (tandem.stopped) log(`stopped after stand ${tandem.results.length}: ${tandem.stopped}`);
+if (json) console.log(JSON.stringify({ stands, every, stopped: tandem.stopped, results: out, stand: tandem.results }));

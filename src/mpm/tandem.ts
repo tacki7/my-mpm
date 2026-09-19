@@ -5,9 +5,10 @@
 // stand has the same condition: rolls, μ, tensions, material, grid (cells through the thickness), and the
 // reduction taken on its own entry thickness. Stand k + 1 starts with the sheet that came out of stand k:
 // its entry thickness is that sheet's measured thickness (with the elastic recovery), its length is set
-// by the mass, and the state of every new point comes from the nearest point of the stand before
-// ("remap"). The lattice is rebuilt because the sheet thins and lengthens: carried as they are, the points
-// would sit 1/(1 − r)² times further apart along x than the grid (h = h0 / cells) is made for.
+// by the mass, and every new point takes the state of an old point of the same lattice row, shared out
+// by the material along the row ("remap"). The lattice is rebuilt because the sheet thins and lengthens:
+// carried as they are, the points would sit 1/(1 − r)² times further apart along x than the grid
+// (h = h0 / cells) is made for. The tandem stops early at a stall, a strip break or points lost off the grid.
 import { cloneParams, type SimParams } from './params.ts';
 import { Sim, type Crack, type Diagnostics } from './solver.ts';
 
@@ -20,6 +21,13 @@ export const MAX_STANDS = 5;
 export const READ_STEPS = 2000;
 
 export type StandCrack = Crack & { stand: number };
+
+/**
+ * Why a tandem stopped before its last stand: the rolls could not draw the sheet in ('stalled'), a crack
+ * went through the thickness and the sheet came apart ('separated': a mill stops at a strip break), or
+ * points left the grid ('lost': there would be no whole sheet to carry over).
+ */
+export type TandemStop = 'stalled' | 'separated' | 'lost';
 
 /** One finished stand. Lengths [m], force [N/m], torque [N·m/m], time [s] within the stand. */
 export interface StandResult {
@@ -39,6 +47,10 @@ export interface StandResult {
   forwardSlip: number | null;
   /** thickness of the sheet that came out (area over length of its middle half; the next stand's h0) */
   thicknessOut: number;
+  /** the fraction of the stand's mass on points that left the grid (0 normally) */
+  massLost: number;
+  /** a crack goes through the thickness: three neighbouring lattice columns have a failed point in every row */
+  separated: boolean;
   maxDamage: number;
   nFailed: number;
   /** crack records so far, this stand's and the stands' before */
@@ -80,6 +92,8 @@ export class TandemSim {
   stepOffset = 0;
   /** called when a stand ends, inside advance(), before the remap replaces sim */
   onStandDone: ((e: StandDone) => void) | null = null;
+  /** why the tandem stopped before its last stand; null while it runs and after a normal end */
+  stopped: TandemStop | null = null;
   private steady: Reading[] = [];
   private finished = false;
 
@@ -93,16 +107,20 @@ export class TandemSim {
   }
 
   /**
-   * One step of the current stand; every `every` steps its own reading, and when that reading finds the
-   * stand 'done' (or stalled) the stand ends here: its result, onStandDone, and the remap into the next
-   * stand (sim is then a new Sim at step 0). After the last stand, sim keeps stepping as a single pass does.
+   * One step of the current stand; every `every` steps its own reading. A stand with another after it ends
+   * at the first step it is 'done' (or stalled): later, a front tension would pull the rolled sheet on and
+   * out of the grid. The last stand ends at the reading that finds it done, as tools/run.mjs reads a
+   * single pass. Ending here: the stand's result, onStandDone, and the remap into the next stand (sim is
+   * then a new Sim at step 0), or the stop. After the end, sim keeps stepping as a single pass does.
    */
   advance(): void {
     const sim = this.sim;
     sim.advance();
-    if (this.finished || sim.step % this.every !== 0) return;
-    const w = sim.readWindow();
+    if (this.finished) return;
+    const read = sim.step % this.every === 0;
+    if (!read && this.stand + 1 >= this.stands) return;
     const phase = sim.phase();
+    const w = read ? sim.readWindow() : null;
     if (phase === 'steady' && w) {
       const ex = sim.exitMeasure();
       this.steady.push({
@@ -135,8 +153,12 @@ export class TandemSim {
     const result = this.close(old, phase);
     this.results.push(result);
     for (const c of old.cracks) if (c.stand === undefined) c.stand = this.stand;
-    const more = phase === 'done' && this.stand + 1 < this.stands;
-    const [next, parentOf] = more ? remap(old, this.base, result.thicknessOut) : [null, null];
+    const more = this.stand + 1 < this.stands;
+    if (more) {
+      this.stopped =
+        phase === 'stalled' ? 'stalled' : result.separated ? 'separated' : result.massLost > 0 || !(result.thicknessOut > 0) ? 'lost' : null;
+    }
+    const [next, parentOf] = more && !this.stopped ? remap(old, this.base, result.thicknessOut) : [null, null];
     this.onStandDone?.({ stand: this.stand, sim: old, next, parentOf, result });
     if (!next) {
       this.finished = true;
@@ -156,10 +178,14 @@ export class TandemSim {
     const mean = (a: number[]) => (a.length ? a.reduce((x, v) => x + v, 0) / Math.max(1, a.length) : null);
     let maxDamage = 0;
     let nFailed = 0;
+    let mass = 0;
+    let lost = 0;
     for (let p = 0; p < sim.n; p++) {
       const D = sim.governingDamage(p);
       if (D > maxDamage) maxDamage = D;
       if (sim.failed[p]) nFailed++;
+      mass += sim.mass[p];
+      if (!sim.active[p]) lost += sim.mass[p];
     }
     const r = sim.params.rolling;
     return {
@@ -175,6 +201,8 @@ export class TandemSim {
       exitThickness: mean(s.filter((d) => d.exitThickness).map((d) => d.exitThickness as number)),
       forwardSlip: mean(s.filter((d) => d.forwardSlip != null).map((d) => d.forwardSlip as number)),
       thicknessOut: thicknessOut(sim),
+      massLost: lost / mass,
+      separated: separated(sim),
       maxDamage,
       nFailed,
       cracks: sim.cracks.length,
@@ -213,15 +241,36 @@ export function thicknessOut(sim: Sim): number {
     }
   }
   const length = ((meanX(i1 - 1) - meanX(i0)) * (i1 - i0)) / (i1 - 1 - i0);
+  // NaN when an end column of the middle half has no point on the grid (the caller stops: 'lost')
   return area / length;
+}
+
+/** A crack through the thickness: three neighbouring lattice columns that have a failed point in every row between them. */
+export function separated(sim: Sim): boolean {
+  const { NI, NJ, lattice, failed } = sim;
+  const rows = (i: number) => {
+    const hit = new Uint8Array(NJ);
+    for (let j = 0; j < NJ; j++) {
+      const p = lattice[i * NJ + j];
+      if (p >= 0 && failed[p]) hit[j] = 1;
+    }
+    return hit;
+  };
+  for (let i = 0; i + 2 < NI; i++) {
+    const [a, b, c] = [rows(i), rows(i + 1), rows(i + 2)];
+    let all = true;
+    for (let j = 0; j < NJ && all; j++) all = a[j] === 1 || b[j] === 1 || c[j] === 1;
+    if (all) return true;
+  }
+  return false;
 }
 
 /**
  * The next stand's Sim with the sheet that came out of `old` (docs/model.md「タンデム」):
  * - entry thickness h1 (measured), length M / (ρ h1) with M the old sheet's mass (so the density stays), no
  *   defects (the old points carry their ductility), a new regular lattice
- * - each new point takes the state of the nearest old point in the same lattice row (the rows stay rows
- *   through a pass), along the row with the head and tail columns lined up: stresses and pressure, εp,
+ * - each new point takes the state of an old point in the same lattice row (the rows stay rows through a
+ *   pass), shared out by the material along the row (every old point gets NI'/NI new ones ± 1): stresses and pressure, εp,
  *   temperature, the damage indicators, porosity and plastic volume, Drucker's sums, the localization flag,
  *   ductility, failure and crack
  * - the new point starts undeformed up to its volume: F = √J I with ln J = ev − p / K, so the pressure

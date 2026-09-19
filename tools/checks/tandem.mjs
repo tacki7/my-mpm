@@ -8,6 +8,8 @@
 //   √J I would drop the pressure at the first step)
 // - the same with the rows sheared by high friction
 // - damage adds up over the stands, and a crack of the first stand is still there in the second
+// - a stand ends at the first step it is done, with the whole sheet on the grid; a crack through the
+//   thickness stops the tandem; a crack record with no point left keeps its start as the centroid
 // @check
 import { ok, between, near, done } from './lib.mjs';
 import { Sim } from '../../src/mpm/solver.ts';
@@ -81,11 +83,12 @@ function remapCheck(name, P) {
     `${name}: stand 1 done, the next stand set up at step 0, onStandDone told`);
   const sim = t.sim;
   const par = t.parentOf;
+  // against the first stand's whole mass (every point, on the grid or not)
   let mOld = 0;
   let mNew = 0;
-  for (let p = 0; p < old.n; p++) if (old.active[p]) mOld += old.mass[p];
+  for (let p = 0; p < old.n; p++) mOld += old.mass[p];
   for (let q = 0; q < sim.n; q++) mNew += sim.mass[q];
-  near(mNew, mOld, 1e-12, `${name}: the total mass is kept`);
+  near(mNew, mOld, 1e-12, `${name}: the total mass is kept (no point left the grid: ${ev.result.massLost})`);
   const kids = new Int32Array(old.n);
   for (let q = 0; q < sim.n; q++) kids[par[q]]++;
   let orphans = 0;
@@ -162,6 +165,7 @@ ok(two.done && two.results.length === 2 && two.results[1].maxDamage >= two.resul
 // end their stands at the same steps with the same results, and stand 2's points are the same bit for bit
 {
   const P = short(defaultParams());
+  P.rolling.sheetLength = 3e-3;
   const a = new TandemSim(P, 2);
   const b = new TandemSim(P, 2);
   let k = 0;
@@ -174,6 +178,50 @@ ok(two.done && two.results.length === 2 && two.results[1].maxDamage >= two.resul
   ok(JSON.stringify(a.results) === JSON.stringify(b.results) && same && a.stepOffset === b.stepOffset,
     'two stands: read every 100 steps or never, the stands end at the same steps with the same results and points',
     a.results.map((r) => `${r.steps} steps, F ${(r.steadyForce ?? 0) * 1e-6}`).join('; '));
+}
+
+// ── the end of a stand: at the first step it is done (a front tension pulls the rolled sheet on and off the
+// grid, and a short sheet leaves it within the 2000 steps to the next reading), not at a reading
+for (const [name, mod] of [
+  ['standard, 3 mm', (P) => (P.rolling.sheetLength = 3e-3)],
+  ['front tension 200 MPa, 6 mm', (P) => ((P.rolling.sheetLength = 6e-3), (P.rolling.frontTension = 200e6))],
+]) {
+  const P = short(defaultParams());
+  mod(P);
+  const plain = new Sim(P);
+  while (plain.phase() !== 'done' && plain.step < 100000) plain.advance();
+  const t = new TandemSim(P, 2);
+  let old = null;
+  t.onStandDone = (e) => (old = e.sim);
+  toEnd(t);
+  const r = t.results[0];
+  let m0 = 0;
+  for (let p = 0; p < old.n; p++) m0 += old.mass[p];
+  let m1 = 0;
+  for (let q = 0; q < t.sim.n; q++) m1 += t.sim.mass[q];
+  ok(r.steps === plain.step && r.massLost === 0 && t.stopped === null, `${name}: stand 1 ends at the first step it is done (${plain.step}), no point lost`, `${r.steps} steps, lost ${r.massLost}`);
+  ok(t.stand === 1 && Number.isFinite(t.sim.params.rolling.h0) && t.sim.n > 0 && Math.abs(m1 / m0 - 1) < 1e-12, `${name}: stand 2 has the whole sheet`, `h0 ${t.sim.params.rolling.h0}, ${t.sim.n} points, mass ${m1 / m0}`);
+}
+
+// ── a crack through the thickness: the strip is broken, the tandem stops there (a mill stops at a strip break)
+{
+  const P = short(defaultParams());
+  P.damage = { ...DAMAGE_4340, etaCutoff: -10 };
+  P.defects = [{ kind: 'weak', x: 2e-3, y: 0, ax: 0.15e-3, ay: 0.6e-3, ductility: 1e-3 }];
+  const t = new TandemSim(P, 2);
+  let ev = null;
+  t.onStandDone = (e) => (ev = e);
+  toEnd(t);
+  ok(t.done && t.stopped === 'separated' && t.results.length === 1 && t.results[0].separated && ev.next === null && t.stand === 0,
+    'a crack through the thickness in stand 1: the tandem stops, separated', `${t.stopped}, ${t.results.length} results`);
+}
+
+// ── a crack record with no point left (it would be one whose points left the grid): its centroid is where it started
+{
+  const s = new Sim(short(defaultParams()));
+  s.cracks.push({ id: 0, t: 0, step: 0, x: 1e-3, y: 2e-4, sheetX: 0, sheetY: 0, eta: 0, s1: 0, seq: 0, ep: 0, criterion: 'johnson-cook', count: 0 });
+  const [c] = s.crackCentroids();
+  ok(c.x === 1e-3 && c.y === 2e-4, 'a crack record without points: the centroid is its start, not NaN', `${c.x}, ${c.y}`);
 }
 
 // high friction: the rows shear in the bite
