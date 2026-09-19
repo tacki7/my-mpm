@@ -89,6 +89,25 @@ export class PlanSim {
   readonly gfx: Float64Array;
   readonly gfz: Float64Array;
   private readonly gpush: Uint8Array;
+  /** length of the node arrays: the nodes, and with crackFields 'dfg' the second field's nodes after them */
+  readonly NN: number;
+  // 'dfg' (as the section model, solver.ts): the failed points' field φ at the nodes — its gradient G (toward the
+  // failed side) and the mass-weighted centre of the failed points around each node; per point and stencil node
+  // (9 p + 3 i + j) the field it is on (1: the second, at nNodes + node) and whether it has any node on the second
+  // (null / 0 when no point failed)
+  private readonly gGx: Float64Array;
+  private readonly gGz: Float64Array;
+  private readonly gCx: Float64Array;
+  private readonly gCz: Float64Array;
+  private readonly gCw: Float64Array;
+  private pf: Uint8Array | null = null;
+  private pfBuf = new Uint8Array(0);
+  private readonly pfAny: Uint8Array;
+  // the node columns [lo, hi) assignFields wrote last step
+  private gGLo = 0;
+  private gGHi = 0;
+  /** 'dfg': node-steps this step where the two fields came together (contact) */
+  fieldContacts = 0;
 
   // particles (lattice order: index = i * NK + k, i from the tail, k from the mid-width)
   readonly n: number;
@@ -187,13 +206,21 @@ export class PlanSim {
     // room for the width to spread
     this.nzN = Math.ceil((W2 * 1.3 + 6 * h - this.oz) / h) + 1;
     const nNodes = this.nxN * this.nzN;
-    this.gm = new Float64Array(nNodes);
-    this.gvx = new Float64Array(nNodes);
-    this.gvz = new Float64Array(nNodes);
-    this.gcap = new Float64Array(nNodes);
-    this.gfx = new Float64Array(nNodes);
-    this.gfz = new Float64Array(nNodes);
-    this.gpush = new Uint8Array(nNodes);
+    const NN = (num.crackFields ?? 'none') === 'dfg' ? 2 * nNodes : nNodes;
+    this.NN = NN;
+    this.gm = new Float64Array(NN);
+    this.gvx = new Float64Array(NN);
+    this.gvz = new Float64Array(NN);
+    this.gcap = new Float64Array(NN);
+    this.gfx = new Float64Array(NN);
+    this.gfz = new Float64Array(NN);
+    this.gpush = new Uint8Array(NN);
+    const nG = NN > nNodes ? nNodes : 0;
+    this.gGx = new Float64Array(nG);
+    this.gGz = new Float64Array(nG);
+    this.gCx = new Float64Array(nG);
+    this.gCz = new Float64Array(nG);
+    this.gCw = new Float64Array(nG);
     this.xExitProbe = Math.max(3 * r.h0, 6 * h);
 
     const NI = Math.round(r.sheetLength / dp);
@@ -266,6 +293,7 @@ export class PlanSim {
     this.active = new Uint8Array(n).fill(1);
     this.failed = new Uint8Array(n);
     this.crackId = new Int32Array(n).fill(-1);
+    this.pfAny = new Uint8Array(NN > nNodes ? n : 0);
 
     this.vIn = r.rollSpeed * (1 - r.reduction);
     const rho = P.material.rho * num.massScale;
@@ -312,6 +340,7 @@ export class PlanSim {
 
   advance(): void {
     this.updateTension();
+    this.pf = this.NN > this.nxN * this.nzN ? this.assignFields() : null;
     this.p2g();
     this.gridUpdate();
     this.g2p();
@@ -321,16 +350,19 @@ export class PlanSim {
   }
 
   private p2g(): void {
-    const { n, active, px, pz, dt, h, invH, ox, oz, nzN, gm, gvx, gvz, gcap, gpush } = this;
+    const { n, active, px, pz, dt, h, invH, ox, oz, nzN, gm, gvx, gvz, gcap, gpush, pf } = this;
+    const nNodes = this.nxN * nzN;
     const r = this.params.rolling;
     const R = r.rollRadius;
-    gm.fill(0);
-    gvx.fill(0);
-    gvz.fill(0);
-    gcap.fill(0);
-    this.gfx.fill(0);
-    this.gfz.fill(0);
-    gpush.fill(0);
+    // the second field's nodes only when it is used this step (nothing reads them otherwise)
+    const end = pf !== null ? this.NN : nNodes;
+    gm.fill(0, 0, end);
+    gvx.fill(0, 0, end);
+    gvz.fill(0, 0, end);
+    gcap.fill(0, 0, end);
+    this.gfx.fill(0, 0, end);
+    this.gfz.fill(0, 0, end);
+    gpush.fill(0, 0, end);
     const k4 = 4 * invH * invH;
     const grip = this.gripCols;
     const NI = this.NI;
@@ -385,6 +417,7 @@ export class PlanSim {
       if (backForce !== 0 && i < grip) mvx -= dt * backForce * this.gripWeight(i, 1) * this.section(p);
       else if (frontForce !== 0 && i >= NI - grip) mvx += dt * frontForce * this.gripWeight(i, 2) * this.section(p);
       const pushMark = pushing && i === 0;
+      const fb = pf !== null && this.pfAny[p] ? 9 * p : -1;
 
       for (let ii = 0; ii < 3; ii++) {
         const wx = ii === 0 ? wx0 : ii === 1 ? wx1 : wx2;
@@ -393,7 +426,7 @@ export class PlanSim {
         for (let jj = 0; jj < 3; jj++) {
           const w = wx * (jj === 0 ? wz0 : jj === 1 ? wz1 : wz2);
           const dz = (jj - fz) * h;
-          const idx = col + jj;
+          const idx = fb >= 0 && pf![fb + 3 * ii + jj] ? col + jj + nNodes : col + jj;
           gm[idx] += w * m;
           gvx[idx] += w * (mvx + a00 * dx + a01 * dz);
           gvz[idx] += w * (mvz + a10 * dx + a11 * dz);
@@ -404,6 +437,190 @@ export class PlanSim {
     }
     this.accForce += force;
     this.accSteps++;
+  }
+
+  /**
+   * 'dfg': which velocity field each point is on at each of its 9 stencil nodes (1: the second), or null when no
+   * point has failed (then everything is the single field, bit for bit). As the section model (solver.ts): φ = 1
+   * on failed points; at the nodes its gradient G_i = Σ V_p φ_p ∇w(x_i − x_p) points toward the failed points and
+   * C_i is their centre (weights w m); where |G_i| > 0 a point is on the far side (the second field) when it lies
+   * beyond C_i along G_i ('centroid'), or when its own interpolated gradient opposes G_i ('gradient'). V is the
+   * in-plane area (the thickness does not change the side). The mid-width symmetry plane: the failed points'
+   * mirror images count too — the ghost nodes' G and C are folded onto their mirrors (z negated), the plane's own
+   * nodes have G_z = C_z = 0, and the ghosts take the mirrored values back, so a point near the plane is on the
+   * same side at a ghost node as its mirror image is at the real one. Only the node columns the failed points'
+   * stencils cover, and the points whose stencils reach them, are visited.
+   */
+  private assignFields(): Uint8Array | null {
+    const { n, active, failed, px, pz, mass, invH, ox, oz, nzN, gGx, gGz, gCx, gCz, gCw } = this;
+    let lo = Infinity;
+    let hi = -Infinity;
+    for (let p = 0; p < n; p++) {
+      if (!active[p] || !failed[p]) continue;
+      const bx = Math.floor((px[p] - ox) * invH - 0.5);
+      if (bx < lo) lo = bx;
+      if (bx > hi) hi = bx;
+    }
+    // last step's columns are cleared first (what it wrote), then this step's
+    gGx.fill(0, this.gGLo * nzN, this.gGHi * nzN);
+    gGz.fill(0, this.gGLo * nzN, this.gGHi * nzN);
+    gCx.fill(0, this.gGLo * nzN, this.gGHi * nzN);
+    gCz.fill(0, this.gGLo * nzN, this.gGHi * nzN);
+    gCw.fill(0, this.gGLo * nzN, this.gGHi * nzN);
+    if (lo === Infinity) {
+      this.gGLo = this.gGHi = 0;
+      return null;
+    }
+    hi += 3;
+    this.gGLo = lo;
+    this.gGHi = hi;
+    const pf = this.pfBuf.length === 9 * n ? this.pfBuf : (this.pfBuf = new Uint8Array(9 * n));
+    this.pfAny.fill(0);
+    const wx = [0, 0, 0];
+    const wz = [0, 0, 0];
+    const dx = [0, 0, 0];
+    const dz = [0, 0, 0];
+    const weights = (p: number): number => {
+      const gx = (px[p] - ox) * invH;
+      const gz = (pz[p] - oz) * invH;
+      const bx = Math.floor(gx - 0.5);
+      const bz = Math.floor(gz - 0.5);
+      const fx = gx - bx;
+      const fz = gz - bz;
+      wx[0] = 0.5 * (1.5 - fx) * (1.5 - fx);
+      wx[1] = 0.75 - (fx - 1) * (fx - 1);
+      wx[2] = 0.5 * (fx - 0.5) * (fx - 0.5);
+      wz[0] = 0.5 * (1.5 - fz) * (1.5 - fz);
+      wz[1] = 0.75 - (fz - 1) * (fz - 1);
+      wz[2] = 0.5 * (fz - 0.5) * (fz - 0.5);
+      // d w / d(x_i) = −d w / d(x_p): the weight falls off as the node moves away from the point
+      dx[0] = (1.5 - fx) * invH;
+      dx[1] = 2 * (fx - 1) * invH;
+      dx[2] = -(fx - 0.5) * invH;
+      dz[0] = (1.5 - fz) * invH;
+      dz[1] = 2 * (fz - 1) * invH;
+      dz[2] = -(fz - 0.5) * invH;
+      return bx * nzN + bz;
+    };
+    for (let p = 0; p < n; p++) {
+      if (!active[p] || !failed[p]) continue;
+      const V = this.dp * this.dp * (this.f00[p] * this.f11[p] - this.f01[p] * this.f10[p]);
+      const m = mass[p];
+      const base = weights(p);
+      for (let i = 0; i < 3; i++) {
+        for (let j = 0; j < 3; j++) {
+          const idx = base + i * nzN + j;
+          gGx[idx] += V * dx[i] * wz[j];
+          gGz[idx] += V * wx[i] * dz[j];
+          const wm = wx[i] * wz[j] * m;
+          gCx[idx] += wm * px[p];
+          gCz[idx] += wm * pz[p];
+          gCw[idx] += wm;
+        }
+      }
+    }
+    // the mirror images across z = 0 (see gridUpdate for the same fold of the momenta)
+    const kSym = Math.round((0 - oz) / this.h);
+    for (let i = lo; i < hi; i++) {
+      const col = i * nzN;
+      for (let k = 0; k < kSym; k++) {
+        const g = col + k;
+        const q = col + 2 * kSym - k;
+        gGx[q] += gGx[g];
+        gGz[q] -= gGz[g];
+        gCx[q] += gCx[g];
+        gCz[q] -= gCz[g];
+        gCw[q] += gCw[g];
+      }
+      gGz[col + kSym] = 0;
+      gCz[col + kSym] = 0;
+      for (let k = 0; k < kSym; k++) {
+        const g = col + k;
+        const q = col + 2 * kSym - k;
+        gGx[g] = gGx[q];
+        gGz[g] = -gGz[q];
+        gCx[g] = gCx[q];
+        gCz[g] = -gCz[q];
+        gCw[g] = gCw[q];
+      }
+    }
+    const byCentroid = (this.params.numerics.crackSide ?? 'centroid') === 'centroid';
+    let any = false;
+    for (let p = 0; p < n; p++) {
+      if (!active[p]) continue;
+      const bx = Math.floor((px[p] - ox) * invH - 0.5);
+      if (bx + 3 <= lo || bx >= hi) continue;
+      const base = weights(p);
+      let gpx = 0;
+      let gpz = 0;
+      let split = false;
+      for (let i = 0; i < 3; i++) {
+        for (let j = 0; j < 3; j++) {
+          const idx = base + i * nzN + j;
+          if (gGx[idx] !== 0 || gGz[idx] !== 0) split = true;
+          gpx += wx[i] * wz[j] * gGx[idx];
+          gpz += wx[i] * wz[j] * gGz[idx];
+        }
+      }
+      if (!split) continue;
+      let far = 0;
+      for (let i = 0; i < 3; i++) {
+        for (let j = 0; j < 3; j++) {
+          const idx = base + i * nzN + j;
+          const Gx = gGx[idx];
+          const Gz = gGz[idx];
+          let f = 0;
+          if (Gx !== 0 || Gz !== 0) {
+            if (byCentroid) {
+              const w = gCw[idx];
+              f = (px[p] - gCx[idx] / w) * Gx + (pz[p] - gCz[idx] / w) * Gz > 0 ? 1 : 0;
+            } else f = gpx * Gx + gpz * Gz < 0 ? 1 : 0;
+          }
+          pf[9 * p + 3 * i + j] = f;
+          far |= f;
+        }
+      }
+      if (far) {
+        this.pfAny[p] = 1;
+        any = true;
+      }
+    }
+    return any ? pf : null;
+  }
+
+  /**
+   * 'dfg': the two fields at the real nodes [from, to) of a node column (after the fold across the symmetry plane)
+   * meet by frictionless contact before anything else acts on them. The normal n = G/|G| points from the node's
+   * side of the crack (first field) to the far side (second); when they approach, (v1 − v2)·n > 0, their normal
+   * velocities are made equal, keeping the momentum; when they separate they are left alone. On momenta.
+   */
+  private fieldContact(from: number, to: number, mMin: number): void {
+    const { gm, gvx, gvz, gGx, gGz } = this;
+    const N = this.nxN * this.nzN;
+    for (let node = from; node < to; node++) {
+      const i2 = node + N;
+      const m1 = gm[node];
+      const m2 = gm[i2];
+      if (m1 <= mMin || m2 <= mMin) continue;
+      const Gx = gGx[node];
+      const Gz = gGz[node];
+      const G = Math.hypot(Gx, Gz);
+      if (G === 0) continue;
+      const nx = Gx / G;
+      const nz = Gz / G;
+      const v1n = (gvx[node] * nx + gvz[node] * nz) / m1;
+      const v2n = (gvx[i2] * nx + gvz[i2] * nz) / m2;
+      if (v1n - v2n <= 0) continue;
+      this.fieldContacts++;
+      // the common normal velocity (centre of mass); each field's normal momentum is set to it
+      const vc = (m1 * v1n + m2 * v2n) / (m1 + m2);
+      const d1 = m1 * (vc - v1n);
+      const d2 = m2 * (vc - v2n);
+      gvx[node] += d1 * nx;
+      gvz[node] += d1 * nz;
+      gvx[i2] += d2 * nx;
+      gvz[i2] += d2 * nz;
+    }
   }
 
   private gridUpdate(): void {
@@ -417,64 +634,76 @@ export class PlanSim {
     // folded onto their mirror images (z-momentum negated), the plane's own nodes get v_z = 0 (v_x
     // free), and the ghosts take the mirrored velocity back for the transfer to the points
     const kSym = Math.round((0 - oz) / h);
+    // 'dfg': each field is folded, updated and mirrored back on its own nodes; the two meet on the real nodes first
+    const nNodes = nxN * nzN;
+    const two = this.pf !== null;
+    const halves = two ? 2 : 1;
+    this.fieldContacts = 0;
     for (let i = 0; i < nxN; i++) {
-      const col = i * nzN;
-      for (let k = 0; k < kSym; k++) {
-        const g = col + k;
-        const q = col + 2 * kSym - k;
-        gm[q] += gm[g];
-        gvx[q] += gvx[g];
-        gvz[q] -= gvz[g];
-        gcap[q] += gcap[g];
-      }
-      for (let k = kSym; k < nzN; k++) {
-        const idx = col + k;
-        const m = gm[idx];
-        if (m <= mMin) {
-          gvx[idx] = 0;
-          gvz[idx] = 0;
-          continue;
+      for (let half = 0; half < halves; half++) {
+        const col = i * nzN + half * nNodes;
+        for (let k = 0; k < kSym; k++) {
+          const g = col + k;
+          const q = col + 2 * kSym - k;
+          gm[q] += gm[g];
+          gvx[q] += gvx[g];
+          gvz[q] -= gvz[g];
+          gcap[q] += gcap[g];
         }
-        // trial velocity: the internal and the other external forces
-        let vx = gvx[idx] / m;
-        let vz = gvz[idx] / m;
-        if (k === kSym) vz = 0;
-        // Coulomb friction with the rolls: bring the trial velocity towards the roll speed (vRoll, 0)
-        // by at most capacity · Δt / m — stick if that is enough, slide at the capacity if not
-        const c = gcap[idx];
-        if (c > 0) {
-          const sx = vRoll - vx;
-          const sz = -vz;
-          const slip = Math.sqrt(sx * sx + sz * sz);
-          if (slip > 0) {
-            const dv = Math.min((c * dt) / m, slip);
-            const f = dv / slip;
-            vx += f * sx;
-            vz += f * sz;
-            const fx = (m * f * sx) / dt; // the friction force on the node [N]
-            gfx[idx] = fx / c;
-            gfz[idx] = (m * f * sz) / dt / c;
-            friction += fx;
+      }
+      if (two) this.fieldContact(i * nzN + kSym, (i + 1) * nzN, mMin);
+      for (let half = 0; half < halves; half++) {
+        const col = i * nzN + half * nNodes;
+        for (let k = kSym; k < nzN; k++) {
+          const idx = col + k;
+          const m = gm[idx];
+          if (m <= mMin) {
+            gvx[idx] = 0;
+            gvz[idx] = 0;
+            continue;
           }
+          // trial velocity: the internal and the other external forces
+          let vx = gvx[idx] / m;
+          let vz = gvz[idx] / m;
+          if (k === kSym) vz = 0;
+          // Coulomb friction with the rolls: bring the trial velocity towards the roll speed (vRoll, 0)
+          // by at most capacity · Δt / m — stick if that is enough, slide at the capacity if not
+          const c = gcap[idx];
+          if (c > 0) {
+            const sx = vRoll - vx;
+            const sz = -vz;
+            const slip = Math.sqrt(sx * sx + sz * sz);
+            if (slip > 0) {
+              const dv = Math.min((c * dt) / m, slip);
+              const f = dv / slip;
+              vx += f * sx;
+              vz += f * sz;
+              const fx = (m * f * sx) / dt; // the friction force on the node [N]
+              gfx[idx] = fx / c;
+              gfz[idx] = (m * f * sz) / dt / c;
+              friction += fx;
+            }
+          }
+          if (pushing && gpush[idx] && vx < vPush) vx = vPush;
+          gvx[idx] = vx;
+          gvz[idx] = vz;
         }
-        if (pushing && gpush[idx] && vx < vPush) vx = vPush;
-        gvx[idx] = vx;
-        gvz[idx] = vz;
-      }
-      for (let k = 0; k < kSym; k++) {
-        const g = col + k;
-        const q = col + 2 * kSym - k;
-        gvx[g] = gvx[q];
-        gvz[g] = -gvz[q];
-        gfx[g] = gfx[q];
-        gfz[g] = -gfz[q];
+        for (let k = 0; k < kSym; k++) {
+          const g = col + k;
+          const q = col + 2 * kSym - k;
+          gvx[g] = gvx[q];
+          gvz[g] = -gvz[q];
+          gfx[g] = gfx[q];
+          gfz[g] = -gfz[q];
+        }
       }
     }
     this.frictionNow = friction;
   }
 
   private g2p(): void {
-    const { n, active, px, pz, gvx, gvz, gfx, gfz, dt, h, invH, ox, oz, nzN, nxN } = this;
+    const { n, active, px, pz, gvx, gvz, gfx, gfz, dt, h, invH, ox, oz, nzN, nxN, pf } = this;
+    const nNodes = nxN * nzN;
     const k4 = 4 * invH * invH;
     const xMax = (nxN - 3) * h + ox;
     const zMax = (nzN - 3) * h + oz;
@@ -504,6 +733,7 @@ export class PlanSim {
       let rx = 0;
       let rz = 0;
       const cap = this.fcap[p];
+      const fb = pf !== null && this.pfAny[p] ? 9 * p : -1;
       for (let ii = 0; ii < 3; ii++) {
         const wx = ii === 0 ? wx0 : ii === 1 ? wx1 : wx2;
         const dx = (ii - fx) * h;
@@ -511,7 +741,7 @@ export class PlanSim {
         for (let jj = 0; jj < 3; jj++) {
           const w = wx * (jj === 0 ? wz0 : jj === 1 ? wz1 : wz2);
           const dz = (jj - fz) * h;
-          const idx = col + jj;
+          const idx = fb >= 0 && pf![fb + 3 * ii + jj] ? col + jj + nNodes : col + jj;
           const ux = gvx[idx];
           const uz = gvz[idx];
           vx += w * ux;

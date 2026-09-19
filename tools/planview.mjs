@@ -7,11 +7,12 @@
 //   node tools/planview.mjs [--W 20] [--cells 20] [--L 28] [--gap 8] [--h0 1] [--r 0.25] [--R 100]
 //                           [--mu 0.08] [--ms 10000] [--cfl 0.4] [--tb 0] [--tf 0]
 //                           [--damage none|johnson-cook|hancock-mackenzie|cockcroft-latham] [--cl 0.6]
-//                           [--notch <radius mm>] [--max 4000000] [--json]
+//                           [--notch <radius mm>] [--crack none|dfg] [--max 4000000] [--json]
 //
 // Lengths in mm, tensions in MPa; --W is the full width, --cells the grid cells across the
 // half width. --notch cuts a semicircular notch of that radius into the edge half-way along
-// the strip. Steady values are means over the samples (every 250 steps) in the steady phase while
+// the strip. --crack dfg splits the points near a crack into two velocity fields (docs/model.md
+// 「亀裂の面」). Steady values are means over the samples (every 250 steps) in the steady phase while
 // the head is at least a gap past the exit and the tail at least a gap before the entry: the gap is
 // 8 mm or the half width, whichever is more (--gap sets it): the middle's load settles only a half
 // width past the exit and falls again within about a half width of the entry. A strip too short for
@@ -45,6 +46,9 @@ base.numerics.massScale = +opt('ms', base.numerics.massScale);
 base.numerics.cfl = +opt('cfl', base.numerics.cfl);
 base.damage.model = opt('damage', 'none');
 base.damage.clCrit = +opt('cl', base.damage.clCrit);
+const crack = opt('crack', 'none');
+if (crack !== 'none' && crack !== 'dfg') throw new Error(`--crack ${crack}: none or dfg`);
+base.numerics.crackFields = crack;
 const W = +opt('W', 20) * 1e-3;
 const notch = +opt('notch', 0) * 1e-3;
 const P = planCondition(base, { width: W, cells: +opt('cells', 20), notch });
@@ -69,6 +73,7 @@ const out = {
   cells: P.plan.cellsHalfWidth,
   points: sim.n,
   secs,
+  steps: sim.step,
   steadySamples: m.samples,
   steadyLooks: m.looks,
   gap_mm: gap * 1e3,
