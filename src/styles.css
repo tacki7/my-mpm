@@ -572,15 +572,22 @@ button.pending {
   white-space: nowrap;
 }
 
-.stand-results tbody td {
-  font-size: var(--fs-xs);
-  padding-left: 6px;
+/* a quantity: its name on a line of its own (no rule under it), its values on the next */
+.stand-results tr.name th {
+  text-align: left;
+  padding: 6px 0 0;
+  border-bottom: 0;
 }
 
-.stand-results tbody th .unit {
+.stand-results tr.name .unit {
   margin-left: 2px;
   font-size: var(--fs-xs);
   color: var(--ink-soft);
+}
+
+.stand-results tr.values td {
+  font-size: var(--fs-xs);
+  padding: 1px 0 4px 6px;
 }
 
 .stand-results thead th.current {

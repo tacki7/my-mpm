@@ -7,14 +7,16 @@
 // stand; the CSV files are downloaded with a stand column on the whole pass's clock, and the PNG holds
 // the three pictures; real mouse events on the running stand's slot zoom, reset and pick a point; moving a boundary between the panes resizes the slots with the roll bite; a narrow
 // screen (700 px) stacks the pictures without a sideways scroll; a strip broken through the thickness
-// stops the tandem with the reason in the table; and back
+// stops the tandem with the reason in the table and the status; five stands' table fits the record column at
+// 1600 and 700 px; the stands field is the section view's only; and back
 // to one stand, the page is as before (no slots, no table). Not a `@check` (it needs the dev server and
 // Chrome).
 //
 //   CDP_PORT=<cdp> node tools/browser/tandem.mjs <url> <out-dir>
 //
-// <out-dir> (a new, empty directory) gets the downloads and tandem.png, tandem-eta.png, tandem-narrow.png;
-// look at the pictures. About a minute.
+// <out-dir> (a new, empty directory) gets the downloads and tandem.png, tandem-eta.png, tandem-narrow.png,
+// tandem-5-1600.png and tandem-5-700.png (five stands' table);
+// look at the pictures. About 5.5 minutes: run it with the CPU lock.
 //
 // The page and the tool do not agree bit for bit: Chrome's and Node's V8 round exp, log and atan2 differently
 // in the last bit (tools/browser/planview.mjs). Over the first stand that grows to about 1e-7 in its results,
@@ -57,15 +59,26 @@ async function mouseChecks(c) {
   await c.waitFor(`__mpm.view.zoom > ${z0} * 1.3`, 5000).catch(() => {});
   const z1 = await c.evaluate('__mpm.view.zoom');
   ok(z1 > z0 * 1.3, 'a real wheel on the slot zooms', `${z0.toFixed(2)} → ${z1.toFixed(2)}`);
-  for (const type of ['mousePressed', 'mouseReleased']) await c.send('Input.dispatchMouseEvent', { type, x: centre.x, y: centre.y, button: 'left', clickCount: 2 });
-  await c.waitFor('__mpm.view.zoom === 1', 5000).catch(() => {});
-  ok(z1 > z0 * 1.3 && (await c.evaluate('__mpm.view.zoom')) === 1, 'a real double click resets the zoomed view');
-  // an intact point near the slot's centre, clicked where it is drawn
-  const pick = await c.evaluate(`(() => { const b = document.getElementById('bite').getBoundingClientRect(); for (let id = 0; id < 20000; id++) { const s = __mpm.screenOf(id); if (s && Math.abs(s.x - (b.x + b.width / 2)) < b.width / 5 && Math.abs(s.y - (b.y + b.height / 2)) < b.height / 5) return { id, x: s.x, y: s.y }; } return null; })()`);
+  // while zoomed in: a point near the slot's centre with no other point within 4 px on screen (the points of a later
+  // stand can sit 1–2 px apart, and a click lands on whole pixels), clicked where it is drawn
+  const pick = await c.evaluate(`(() => {
+    const b = document.getElementById('bite').getBoundingClientRect();
+    const all = [];
+    for (let id = 0; ; id++) { const s = __mpm.screenOf(id); if (!s) break; all.push(s); }
+    for (let id = 0; id < all.length; id++) {
+      const s = all[id];
+      if (Math.abs(s.x - (b.x + b.width / 2)) > b.width / 5 || Math.abs(s.y - (b.y + b.height / 2)) > b.height / 5) continue;
+      if (all.every((o, j) => j === id || Math.hypot(o.x - s.x, o.y - s.y) >= 4)) return { id, x: s.x, y: s.y };
+    }
+    return null;
+  })()`);
   if (pick) for (const type of ['mousePressed', 'mouseReleased']) await c.send('Input.dispatchMouseEvent', { type, x: pick.x, y: pick.y, button: 'left', clickCount: 1 });
   let shown = !!pick;
   if (pick) await c.waitFor(`__mpm.explorer.role === 'selected' && __mpm.explorer.id === ${pick.id}`, 5000).catch(() => (shown = false));
-  ok(shown, 'a real click on a point of the slot shows that point in the explorer', pick ? `point ${pick.id}, explorer ${JSON.stringify(await c.evaluate('__mpm.explorer'))}` : 'no point near the centre');
+  ok(shown, 'a real click on a point of the slot shows that point in the explorer', pick ? `point ${pick.id}, explorer ${JSON.stringify(await c.evaluate('__mpm.explorer'))}` : 'no point on its own near the centre');
+  for (const type of ['mousePressed', 'mouseReleased']) await c.send('Input.dispatchMouseEvent', { type, x: centre.x, y: centre.y, button: 'left', clickCount: 2 });
+  await c.waitFor('__mpm.view.zoom === 1', 5000).catch(() => {});
+  ok(z1 > z0 * 1.3 && (await c.evaluate('__mpm.view.zoom')) === 1, 'a real double click resets the zoomed view');
 }
 
 let c;
@@ -135,7 +148,7 @@ try {
   }
 
   // ── the table: a column per stand, its force
-  const table = await c.evaluate(`({ hidden: document.getElementById('stand-results-section').hidden, head: [...document.querySelectorAll('#stand-results thead th')].map((e) => e.textContent), force: [...document.querySelectorAll('#stand-results tbody tr')].find((r) => r.firstChild.textContent === '圧延荷重')?.textContent ?? '' })`);
+  const table = await c.evaluate(`({ hidden: document.getElementById('stand-results-section').hidden, head: [...document.querySelectorAll('#stand-results thead th')].map((e) => e.textContent), force: [...document.querySelectorAll('#stand-results tbody')].find((g) => g.querySelector('tr.name th').textContent.startsWith('圧延荷重'))?.querySelector('tr.values')?.textContent ?? '' })`);
   const forces = page3.map((r) => (r.steadyForce * 1e-6).toFixed(2));
   ok(!table.hidden && table.head.filter(Boolean).join(' ') === '#1 #2 #3' && forces.every((f) => table.force.includes(f)), 'the table has a column per stand with its steady force', `${table.head.filter(Boolean).join(' ')}: ${table.force}`);
 
@@ -240,12 +253,56 @@ try {
   await c.navigate(page(`?stands=2&cells=4&L=4&autorun=1&cond=${cond}`));
   await c.waitFor('__mpm.done', 120000);
   await painted();
-  const broke = await c.evaluate(`({ stopped: __mpm.stopped, results: __mpm.standResults.map((r) => r.separated), note: document.querySelector('#stand-results caption')?.textContent ?? '', labels: [...document.querySelectorAll('.stand-label')].map((e) => e.textContent) })`);
+  const broke = await c.evaluate(`({ stopped: __mpm.stopped, results: __mpm.standResults.map((r) => r.separated), note: document.querySelector('#stand-results caption')?.textContent ?? '', phase: document.getElementById('phase').textContent, labels: [...document.querySelectorAll('.stand-label')].map((e) => e.textContent) })`);
   ok(
-    broke.stopped === 'separated' && broke.results.join() === 'true' && broke.note.includes('#1 の後で止めた: 板が破断した') && broke.labels.join('|') === '#1|#2（計算しない）',
-    'a break through the thickness in stand 1: the tandem stops there, the table says why, the second slot stays uncomputed',
-    `${broke.stopped}; ${broke.note.slice(0, 40)}; ${broke.labels.join(' ')}`,
+    broke.stopped === 'separated' && broke.results.join() === 'true' && broke.note.includes('#1 の後で止めた: 板が破断した') && broke.phase === '#1 の後で止めた（板が破断した）' && broke.labels.join('|') === '#1|#2（計算しない）',
+    'a break through the thickness in stand 1: the tandem stops there, the table and the status say why, the second slot stays uncomputed',
+    `${broke.stopped}; ${broke.phase}; ${broke.note.slice(0, 30)}; ${broke.labels.join(' ')}`,
   );
+
+  // ── five stands, the input's most, with the table full of real values (4 cells, a 4 mm strip: about 85 s):
+  //    nothing in the record column scrolls sideways and no row head wraps, at 1600 and at 700 px
+  await c.navigate(page('?stands=5&cells=4&L=4&autorun=1'));
+  await c.waitFor('__mpm.done', 600000);
+  for (const [w, h] of [[1600, 1000], [700, 1600]]) {
+    await c.setViewport(w, h);
+    await painted();
+    const t = await c.evaluate(`(() => {
+      const rec = document.querySelector('.record'), wrap = document.querySelector('.stand-results .table-scroll');
+      const heads = [...document.querySelectorAll('#stand-results tr.name th')].map((e) => e.getBoundingClientRect().height);
+      const top = document.querySelector('#stand-results thead th').getBoundingClientRect().height;
+      const force = [...document.querySelectorAll('#stand-results tbody')].find((g) => g.querySelector('tr.name th').textContent.startsWith('圧延荷重'));
+      return { recOver: rec.scrollWidth - rec.clientWidth, wrapOver: wrap.scrollWidth - wrap.clientWidth, heads, top, values: force ? [...force.querySelectorAll('tr.values td')].map((d) => d.textContent) : [] };
+    })()`);
+    ok(
+      t.values.length === 5 && t.values.filter((v) => /^\d/.test(v)).length >= 3 && t.recOver <= 0 && t.wrapOver <= 0 && Math.max(...t.heads) <= 1.5 * t.top,
+      `five stands' table at ${w} px: the forces filled (the first two stands of a 4 mm strip have no steady phase), no sideways scroll, every quantity's name on one line`,
+      `forces ${t.values.join(' ')}; overflow record ${t.recOver} / table ${t.wrapOver} px; row heads ${Math.min(...t.heads).toFixed(0)}–${Math.max(...t.heads).toFixed(0)} px (a head line ${t.top.toFixed(0)})`,
+    );
+    await c.screenshot(join(dir, `tandem-5-${w}.png`));
+    console.log(`shot  ${join(dir, `tandem-5-${w}.png`)}`);
+    // the widest the numbers get: every value filled with its longest usual form (a table of its own, from the
+    // page's module through the dev server, on the same section)
+    const worst = await c.evaluate(`(async () => {
+      const { StandTable } = await import('/src/app/standTable.ts');
+      const t = new StandTable(document.getElementById('stand-results-section'), document.getElementById('stand-results'));
+      const res = [1e-3, 0.748e-3, 0.561e-3, 0.42e-3, 0.315e-3].map((h, k) => ({ stand: k, h0: h, sheetLength: 0, particles: 0, steps: 0, t: 0, phase: 'done', steadyForce: 13.72e6, steadyTorque: 0, exitThickness: h * 0.75, forwardSlip: 0.1044, thicknessOut: h * 0.75, massLost: 0.0123, separated: false, maxDamage: 0.9123, nFailed: 12345, cracks: 0, cracksBorn: 0, crackGrowth: 0 }));
+      t.update(5, res, 4, true, null, 'lost');
+      await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+      const rec = document.querySelector('.record'), wrap = document.querySelector('.stand-results .table-scroll');
+      return { recOver: rec.scrollWidth - rec.clientWidth, wrapOver: wrap.scrollWidth - wrap.clientWidth, rows: document.querySelectorAll('#stand-results tr.name').length };
+    })()`);
+    ok(worst.recOver <= 0 && worst.wrapOver <= 0 && worst.rows === 8, `five stands' table at ${w} px, every value at its widest and the lost-mass line: no sideways scroll`, `overflow record ${worst.recOver} / table ${worst.wrapOver} px, ${worst.rows} quantities`);
+  }
+  await c.setViewport(1600, 1000);
+
+  // ── the plan view has one stand: the stands field is hidden there
+  await c.evaluate(`document.querySelector('.view-switch button[data-mode="plan"]').click()`);
+  await c.waitFor('__mpm.plan.active', 30000);
+  const planField = await c.evaluate(`document.querySelector('input[name="stands"]').closest('.field').getBoundingClientRect().height`);
+  await c.evaluate(`document.querySelector('.view-switch button[data-mode="section"]').click()`);
+  const sectionField = await c.evaluate(`document.querySelector('input[name="stands"]').closest('.field').getBoundingClientRect().height`);
+  ok(planField === 0 && sectionField > 0, 'the stands field shows in the section view only', `plan ${planField} px, section ${sectionField} px`);
 
   // ── one stand again: nothing of the tandem left on the page
   await c.navigate(page('?cells=6&L=8'));

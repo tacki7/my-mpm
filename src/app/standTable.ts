@@ -1,8 +1,9 @@
 // A tandem's results, one column per stand (the column heads in the stand's colour, the running one
 // underlined): entry and exit thickness, reduction, roll force, forward slip, damage and failed points of
 // each finished stand. The stand running now shows its entry thickness only; the ones to come, dashes.
-// Five stands must fit the record column: the row heads carry their units and do not wrap, the numbers are
-// small (styles.css), and the table alone scrolls sideways if the column is made narrower still.
+// Five stands must fit the record column (about 264 px wide by default): each quantity is a line of its own,
+// its name and unit across the stands' columns, with its values on the line below, so the width is the numbers'
+// alone; the table scrolls sideways by itself if the column is made narrower still.
 // One stand: the section stays hidden and the page is as before.
 import type { StandResult, TandemStop } from '../mpm/tandem.ts';
 import { standColor } from './explorer.ts';
@@ -43,17 +44,21 @@ function cell(tag: 'th' | 'td', text: string, cls?: string): HTMLElement {
   return e;
 }
 
-/** a row head with its unit after it, small */
-function rowHead(name: string, unit: string): HTMLElement {
+/** a quantity's own line: its name and unit, across the stands' columns (it heads the values' line below) */
+function nameRow(name: string, unit: string, stands: number): HTMLElement {
+  const tr = document.createElement('tr');
+  tr.className = 'name';
   const th = cell('th', name);
-  th.setAttribute('scope', 'row');
+  th.setAttribute('scope', 'rowgroup');
+  th.setAttribute('colspan', String(stands));
   if (unit) {
     const u = document.createElement('span');
     u.className = 'unit';
     u.textContent = unit;
     th.append(' ', u);
   }
-  return th;
+  tr.append(th);
+  return tr;
 }
 
 export class StandTable {
@@ -75,7 +80,6 @@ export class StandTable {
     this.section.hidden = stands <= 1;
     if (stands <= 1) return;
     const head = document.createElement('tr');
-    head.append(cell('th', ''));
     for (let k = 0; k < stands; k++) {
       const th = cell('th', `#${k + 1}`, k === current && !passDone ? 'current' : undefined);
       th.style.color = standColor(k);
@@ -84,26 +88,27 @@ export class StandTable {
     }
     // points that left the grid: only when a stand lost any
     const rows = results.some((r) => r.massLost > 0) ? [...ROWS, LOST] : ROWS;
-    const body = rows.map(([name, value, unit], i) => {
+    const bodies = rows.map(([name, value, unit], i) => {
       const tr = document.createElement('tr');
-      tr.append(rowHead(name, unit));
+      tr.className = 'values';
       for (let k = 0; k < stands; k++) {
         const r = results[k];
         // the stand running now: only its entry thickness is known yet
         const now = k !== current ? '—' : i === 0 && h0Now != null ? mm(h0Now) : '…';
         tr.append(cell('td', r ? value(r) : now));
       }
-      return tr;
+      // a quantity is a group of its two lines
+      const tbody = document.createElement('tbody');
+      tbody.append(nameRow(name, unit, stands), tr);
+      return tbody;
     });
     const thead = document.createElement('thead');
     thead.append(head);
-    const tbody = document.createElement('tbody');
-    tbody.append(...body);
     // the tandem stopped before its last stand (src/mpm/tandem.ts, TandemStop)
     const caption = document.createElement('caption');
     caption.className = 'table-note';
     const k = results.length; // the stand it stopped at (1 = the first)
     if (stopped) caption.textContent = `${STOP_TEXT[stopped](k, results[k - 1])}。その先のスタンドは計算していない`;
-    this.table.replaceChildren(...(stopped ? [caption] : []), thead, tbody);
+    this.table.replaceChildren(...(stopped ? [caption] : []), thead, ...bodies);
   }
 }
