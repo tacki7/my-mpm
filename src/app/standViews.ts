@@ -1,8 +1,9 @@
 // The stands of a tandem side by side in the roll-bite area. The current stand is drawn in the live canvas
 // (#bite: zoom, pan, clicks and the overview stay with it), moved into that stand's slot; a finished stand
-// keeps its last frame; a stand still to come is an empty slot with its number. All the views share the
-// live view's state (zoom, pan, exaggeration mode), one scale (the first stand's) and one colour range.
-// One stand: nothing here is used and the page is as before.
+// shows the picture the worker kept from its steady phase; a stand still to come is an empty slot with its
+// number. Once the pass is over the live canvas shows the last stand's kept picture too (the page's numbers
+// stay those of the end). All the views share the live view's state (zoom, pan, exaggeration mode), one
+// scale (the first stand's) and one colour range. One stand: nothing here is used and the page is as before.
 import type { Frame, Geometry } from './protocol.ts';
 import { BiteView, fieldRange } from './view.ts';
 
@@ -73,7 +74,12 @@ export class StandViews {
     this.place();
   }
 
-  /** stand k is over: its slot keeps this frame */
+  /** what the live canvas draws for the live frame f: the last stand's kept picture once it is over, else f */
+  liveFrame(f: Frame | null): Frame | null {
+    return (this.active && this.slots[this.current]?.view.frame) || f;
+  }
+
+  /** stand k is over: its slot keeps this frame (the last stand's is drawn in the live canvas) */
   hold(k: number, frame: Frame, g: Geometry): void {
     const s = this.slots[k];
     if (!s) return;
@@ -126,12 +132,12 @@ export class StandViews {
   }
 
   /** for the checks: what each slot shows */
-  hook(): { stand: number; live: boolean; field: string | null; step: number | null; dirs: boolean; width: number }[] {
+  hook(): { stand: number; live: boolean; field: string | null; step: number | null; phase: string | null; dirs: boolean; width: number }[] {
     return this.slots.map((s, k) => {
       const live = k === this.current;
       const f = live ? this.live.frame : s.view.frame;
       const c = live ? this.liveCanvas : s.canvas;
-      return { stand: k, live, field: f?.field ?? null, step: f ? f.diag.step : null, dirs: !!f?.dirs, width: c.getBoundingClientRect().width };
+      return { stand: k, live, field: f?.field ?? null, step: f ? f.diag.step : null, phase: f?.diag.phase ?? null, dirs: !!f?.dirs, width: c.getBoundingClientRect().width };
     });
   }
 

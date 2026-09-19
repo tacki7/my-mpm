@@ -1,11 +1,15 @@
 // Runs the MPM in its own thread and streams frames to the page (~30 per second). A tandem of several stands
-// runs one stand after the other (TandemSim): when a stand is done the worker sends its last frame and its
-// geometry (the page keeps that picture), and follows the points on into the next stand.
+// runs one stand after the other (TandemSim). Each stand's picture is kept from its steady phase, when the
+// sheet fills the default window (every field and the principal directions, so it can be drawn again in any
+// of them); when a stand is done the worker sends that picture and the stand's geometry (the page shows it
+// in the stand's slot), and follows the points on into the next stand.
 import type { SimParams } from '../mpm/params.ts';
 import type { Sim, FieldName } from '../mpm/solver.ts';
 import type { FromWorker, ToWorker, Frame, Geometry } from './protocol.ts';
 import { READ_STEPS, TandemSim, type StandDone } from '../mpm/tandem.ts';
 import { Tracker } from './tracker.ts';
+import { FIELDS } from './fields.ts';
+import { windowCentre, windowWidth } from './biteWindow.ts';
 
 let tandem: TandemSim | null = null;
 let sim: Sim | null = null;
@@ -18,8 +22,20 @@ let stopAfter: number | null = null;
 let timer: ReturnType<typeof setTimeout> | null = null;
 let msPerStep = 0;
 let dirsOn = false;
-/** the finished stands, kept to draw their pictures again with another field */
-let held: { stand: number; sim: Sim; tracker: Tracker | null; result: StandDone['result'] }[] = [];
+/** a tandem: each stand's picture (null until taken), and the first stand's sheet, which sets the window */
+let pictures: (Picture | null)[] = [];
+let scale: { contactLength: number; h0: number } | null = null;
+
+/** a stand's picture kept for later: every field and the principal directions, so that it can be drawn again in any */
+interface Picture {
+  geometry: Geometry;
+  pos: Float32Array;
+  F: Float32Array;
+  flags: Uint8Array;
+  dirs: Float32Array;
+  vals: Map<FieldName, Float32Array>;
+  rest: Omit<Frame, 'pos' | 'F' | 'dirs' | 'val' | 'field' | 'flags'>;
+}
 
 const FRAME_MS = 33;
 /** steps between the tandem's own reads (tools/tandem.mjs reads at the same steps, so the results agree) */
@@ -44,12 +60,11 @@ function geometryOf(s: Sim): Geometry {
   };
 }
 
-/** a frame of sim s (the current stand, or one just finished) with its tracker; its buffers go with it */
-function makeFrame(s: Sim, tr: Tracker | null): [Frame, Transferable[]] {
+/** positions, deformation gradients and flags of sim s */
+function arraysOf(s: Sim): { pos: Float32Array; F: Float32Array; flags: Uint8Array } {
   const n = s.n;
   const pos = new Float32Array(2 * n);
   const F = new Float32Array(4 * n);
-  const val = new Float32Array(n);
   const flags = new Uint8Array(n);
   for (let p = 0; p < n; p++) {
     pos[2 * p] = s.px[p];
@@ -60,22 +75,29 @@ function makeFrame(s: Sim, tr: Tracker | null): [Frame, Transferable[]] {
     F[4 * p + 3] = s.f11[p];
     flags[p] = (s.active[p] ? 1 : 0) | (s.failed[p] ? 2 : 0);
   }
-  s.readField(field, val);
-  let dirs: Float32Array | null = null;
-  if (dirsOn) {
-    dirs = new Float32Array(3 * n);
-    for (let p = 0; p < n; p++) {
-      const pr = s.pres[p];
-      const sxx = s.sxx[p] - pr;
-      const syy = s.syy[p] - pr;
-      const sxy = s.sxy[p];
-      const c = 0.5 * (sxx + syy);
-      const r = Math.sqrt(0.25 * (sxx - syy) * (sxx - syy) + sxy * sxy);
-      dirs[3 * p] = 0.5 * Math.atan2(2 * sxy, sxx - syy);
-      dirs[3 * p + 1] = (c + r) * 1e-6;
-      dirs[3 * p + 2] = (c - r) * 1e-6;
-    }
+  return { pos, F, flags };
+}
+
+/** in-plane principal stresses: angle of σI from x, σI, σII [MPa] */
+function dirsOf(s: Sim): Float32Array {
+  const n = s.n;
+  const dirs = new Float32Array(3 * n);
+  for (let p = 0; p < n; p++) {
+    const pr = s.pres[p];
+    const sxx = s.sxx[p] - pr;
+    const syy = s.syy[p] - pr;
+    const sxy = s.sxy[p];
+    const c = 0.5 * (sxx + syy);
+    const r = Math.sqrt(0.25 * (sxx - syy) * (sxx - syy) + sxy * sxy);
+    dirs[3 * p] = 0.5 * Math.atan2(2 * sxy, sxx - syy);
+    dirs[3 * p + 1] = (c + r) * 1e-6;
+    dirs[3 * p + 2] = (c - r) * 1e-6;
   }
+  return dirs;
+}
+
+/** the rest of a frame of sim s with its tracker */
+function restOf(s: Sim, tr: Tracker | null): Picture['rest'] {
   const diag = s.diagnostics();
   const prof = s.pressureProfile();
   const cent = s.crackCentroids();
@@ -84,14 +106,8 @@ function makeFrame(s: Sim, tr: Tracker | null): [Frame, Transferable[]] {
   // the stands before stand j, on the pass's clock
   const tBefore = (j: number) => t.results.slice(0, j).reduce((a, r) => a + r.t, 0);
   const stepsBefore = (j: number) => t.results.slice(0, j).reduce((a, r) => a + r.steps, 0);
-  const msg: Frame = {
+  return {
     type: 'frame',
-    pos,
-    F,
-    dirs,
-    val,
-    field,
-    flags,
     diag,
     profile: { x: Array.from(prof.x), p: Array.from(prof.p), tau: Array.from(prof.tau) },
     cracks: s.cracks.map((c, i) => {
@@ -108,7 +124,54 @@ function makeFrame(s: Sim, tr: Tracker | null): [Frame, Transferable[]] {
     results: t.results.map((r) => ({ ...r })),
     passDone: s === sim && finished(),
   };
+}
+
+/** a frame of sim s (the current stand) with its tracker; its buffers go with it */
+function makeFrame(s: Sim, tr: Tracker | null): [Frame, Transferable[]] {
+  const { pos, F, flags } = arraysOf(s);
+  const val = new Float32Array(s.n);
+  s.readField(field, val);
+  const dirs = dirsOn ? dirsOf(s) : null;
+  const msg: Frame = { ...restOf(s, tr), pos, F, dirs, val, field, flags };
   return [msg, [pos.buffer, F.buffer, val.buffer, flags.buffer, ...(dirs ? [dirs.buffer] : [])]];
+}
+
+/** sim s as it is now, kept: every field and the principal directions */
+function snapshot(s: Sim, tr: Tracker | null): Picture {
+  const vals = new Map<FieldName, Float32Array>();
+  for (const f of FIELDS) {
+    const v = new Float32Array(s.n);
+    s.readField(f.id, v);
+    vals.set(f.id, v);
+  }
+  const rest = restOf(s, tr);
+  rest.running = false;
+  rest.passDone = false;
+  return { geometry: geometryOf(s), ...arraysOf(s), dirs: dirsOf(s), vals, rest };
+}
+
+/** a frame of a kept picture, in the field (and directions) now asked for; copies go with it */
+function pictureFrame(pic: Picture): [Frame, Transferable[]] {
+  const pos = pic.pos.slice();
+  const F = pic.F.slice();
+  const flags = pic.flags.slice();
+  const val = pic.vals.get(field)!.slice();
+  const dirs = dirsOn ? pic.dirs.slice() : null;
+  const msg: Frame = { ...pic.rest, pos, F, dirs, val, field, flags };
+  return [msg, [pos.buffer, F.buffer, val.buffer, flags.buffer, ...(dirs ? [dirs.buffer] : [])]];
+}
+
+/**
+ * The moment to keep a stand's picture: in the steady phase once the tail has passed the left edge of the default
+ * window (the sheet then fills the window as far as it ever will, and the bite is full), or as soon as the steady
+ * phase is over without that (a short sheet).
+ */
+function wantsPicture(s: Sim): boolean {
+  const ph = s.phase();
+  if (ph === 'approach' || ph === 'bite') return false;
+  if (ph !== 'steady') return true;
+  const w = windowWidth(scale!);
+  return s.tailX() >= windowCentre(s.contactLength, w) - w / 2;
 }
 
 function frame(): void {
@@ -120,13 +183,13 @@ function frame(): void {
 /** the whole pass's step count (the stands before and this one's) */
 const passStep = () => tandem!.stepOffset + sim!.step;
 
-/** one stand is past: hold its last picture, and follow the points into the next stand */
+/** one stand is past: send its picture (the last state if none was taken), and follow the points into the next stand */
 function onStandDone(e: StandDone): void {
   tracker?.record();
-  const [last, transfer] = makeFrame(e.sim, tracker);
-  last.running = false;
-  post({ type: 'stand', stand: e.stand, frame: last, geometry: geometryOf(e.sim), result: { ...e.result }, next: e.next ? geometryOf(e.next) : null }, transfer);
-  held.push({ stand: e.stand, sim: e.sim, tracker, result: e.result });
+  const pic = pictures[e.stand] ?? snapshot(e.sim, tracker);
+  pictures[e.stand] = pic;
+  const [f, transfer] = pictureFrame(pic);
+  post({ type: 'stand', stand: e.stand, frame: f, geometry: pic.geometry, result: { ...e.result }, next: e.next ? geometryOf(e.next) : null }, transfer);
   if (!e.next || !e.parentOf) return;
   const next = new Tracker(e.next, { tracker: tracker!, parentOf: e.parentOf });
   if (selected !== null) {
@@ -140,12 +203,13 @@ function onStandDone(e: StandDone): void {
 
 /** the finished stands' pictures again, in the field (and directions) now asked for */
 function refreshHeld(): void {
-  for (const h of held) {
-    const [f, transfer] = makeFrame(h.sim, h.tracker);
-    f.running = false;
-    f.stand = h.stand;
-    post({ type: 'stand', stand: h.stand, frame: f, geometry: geometryOf(h.sim), result: { ...h.result }, next: null, refresh: true }, transfer);
-  }
+  if (!tandem || tandem.stands === 1) return;
+  tandem.results.forEach((result, k) => {
+    const pic = pictures[k];
+    if (!pic) return;
+    const [f, transfer] = pictureFrame(pic);
+    post({ type: 'stand', stand: k, frame: f, geometry: pic.geometry, result: { ...result }, next: null, refresh: true }, transfer);
+  });
 }
 
 /** the pass is over: one stand as before (its phase), a tandem when the last stand has been closed */
@@ -167,6 +231,9 @@ function loop(): void {
     const chunk = stopAfter === null ? 20 : Math.min(20, stopAfter - passStep());
     for (let k = 0; k < chunk; k++) tandem!.advance();
     tracker?.record();
+    // a tandem keeps each stand's picture (checked every chunk of 20 steps, so the moment is the same every run)
+    const t = tandem!;
+    if (t.stands > 1 && !t.done && !pictures[t.stand] && wantsPicture(sim)) pictures[t.stand] = snapshot(sim, tracker);
     steps += Math.max(0, chunk);
     if (stopAfter !== null && passStep() >= stopAfter) break;
     if (tandem!.stands > 1 && tandem!.done) break;
@@ -195,7 +262,8 @@ self.onmessage = (e: MessageEvent<ToWorker>) => {
         tandem.onStandDone = onStandDone;
         sim = tandem.sim;
         tracker = new Tracker(sim);
-        held = [];
+        pictures = [];
+        scale = { contactLength: sim.contactLength, h0: sim.params.rolling.h0 };
         selected = null;
         // headless checks read the simulation itself through the worker target (tools/browser/explorer.mjs)
         (self as unknown as { __sim: Sim }).__sim = sim;

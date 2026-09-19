@@ -223,4 +223,20 @@ for (const r of [std, with_({ mu: 0.15, backTension: 60e6, frontTension: 120e6 }
   ok(b.crossed, 'standard condition: the branches cross (the strip is drawn in)');
   between(b.force * 1e-6, 2.5, 3.5, 'standard condition roll force [kN/mm] (hand estimate ≈ 2.9, the slab method 3.03)');
 }
+
+// ── 6. a strain brought in (a tandem's later stand): the flow stress along the bite at ep0 + (2/√3) ln(h0/h).
+//       For the Swift law σ = K(ε0 + εp)ⁿ that is the same as a material whose ε0 is larger by ep0
+{
+  const m = P.material;
+  const ep0 = 0.33;
+  const b = karman(std, m);
+  ok(karman(std, m, undefined, 0).force === b.force, 'ep0 = 0: the same result as without it, bit for bit');
+  ok(karman(std, rigid, undefined, ep0).force === karman(std, rigid).force, 'no hardening: a strain brought in changes nothing');
+  if (m.hardening === 'swift') {
+    const pre = karman(std, m, undefined, ep0);
+    const shifted = karman(std, { ...m, swE0: m.swE0 + ep0 }, undefined, 0);
+    near(pre.force, shifted.force, 1e-12, `Swift: ep0 = ${ep0} equals ε0 + ${ep0} in the law (force ${(pre.force * 1e-6).toFixed(3)} kN/mm)`);
+    ok(pre.force > b.force && pre.twoKMean > b.twoKMean, 'a hardened strip takes more load', `${(b.force * 1e-6).toFixed(3)} → ${(pre.force * 1e-6).toFixed(3)} kN/mm`);
+  } else ok(false, 'the default material follows the Swift law (this section assumes it)', m.hardening);
+}
 done();

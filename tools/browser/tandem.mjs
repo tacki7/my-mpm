@@ -1,8 +1,8 @@
 // A tandem on the page, in a headless Chrome: `?stands=3` rolls the sheet through three stands with a
 // real click on the run button, to the end; the page's per-stand results equal `node tools/tandem.mjs`
 // for the same condition (the steps and points exactly, the values to 1e-5); the three pictures sit side
-// by side, each holding its own stand's last frame, and a field tab or the principal directions redraw
-// the finished ones too; the stress explorer's loading path runs through the three stands (numbered, a
+// by side, each showing its own stand in the steady phase, and a field tab or the principal directions
+// redraw the finished ones too; the stress explorer's loading path runs through the three stands (numbered, a
 // colour each, in the legend); the force chart has a slab level per stand; the table has a column per
 // stand; the CSV files are downloaded with a stand column on the whole pass's clock, and the PNG holds
 // the three pictures; a narrow screen (700 px) stacks the pictures without a sideways scroll; and back
@@ -99,7 +99,12 @@ try {
 
   // ── the pictures side by side
   const after = await slots();
-  ok(after.every((s, k) => s.field === 'seq' && s.step === page3[k].steps) && after[STANDS - 1].live, "every slot holds its own stand's last frame (the last one live)", after.map((s) => `#${s.stand + 1} step ${s.step}`).join(', '));
+  ok(
+    after.every((s, k) => s.field === 'seq' && s.phase === 'steady' && s.step < page3[k].steps) && after[STANDS - 1].live,
+    "every slot shows its own stand's picture from the steady phase (the last one in the live canvas)",
+    after.map((s, k) => `#${s.stand + 1} ${s.phase} step ${s.step} of ${page3[k].steps}`).join(', '),
+  );
+  ok((await c.evaluate('__mpm.diag.phase')) === 'done', "the page's numbers stay those of the end", await c.evaluate('__mpm.diag.phase'));
   const widths = after.map((s) => s.width);
   const biteW = await c.evaluate(`document.querySelector('.bite').getBoundingClientRect().width`);
   ok(widths.every((w) => Math.abs(w - biteW / STANDS) < 4), 'the pictures share the width of the roll bite', `${widths.map((w) => w.toFixed(0)).join(' / ')} px of ${biteW.toFixed(0)}`);
