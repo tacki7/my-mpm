@@ -88,10 +88,14 @@ Math.exp・log の最後の 1 ビットが違うのでビット一致はしな�
 時計が表示中のビュー・未反映の編集は切り替えで反映しない・やり直すは両方、700 px。`pv-*.png` を自分で見る）。
 荷重・フリクションヒルのグラフ（スラブ法の重ね描き・移動平均・凡例）を触ったら `CDP_PORT=<cdp> node tools/browser/slab-overlay.mjs http://localhost:<dev>/ <作業用ディレクトリ>/ov`
 （約 40 秒。スラブ法の値を node の `karman()` と比べ、方法の外の条件の凡例、定常の移動平均の揺れ、狭い幅の凡例。`ov-*.png` を自分で見る）。
+タンデムの画面（スタンドの枠・スタンドごとの表・負荷経路の色分け）を触ったら `CDP_PORT=<cdp> node tools/browser/tandem.mjs http://localhost:<dev>/ <作業用ディレクトリ>/tan`
+（約 5.5 分、CPU ロックを取って回す。3 スタンドを実クリックで最後まで回して `node tools/tandem.mjs` と比べる（#1 は相対 1e-5、#2 以降は h0 を 1e-7 ずらしたときの揺れの 2 倍まで）、
+枠・表・CSV・PNG・実マウス・5 スタンドの表の幅・700 px・板の破断で止まる・1 スタンドに戻す。`tandem*.png` を自分で見る）。
 
 ポートは必ず渡す（既定値は無い）。`window.__mpm` は `frames` `running` `ready` `done` `diag` `cracks`
 `geometry` `params` `history` `slab`（スラブ法の荷重・中立点・方法の外の理由、`delta` = 平均板厚 / 接触長、`steadyForce` = 定常の荷重をステップ数で重み付けした平均 [N/m]、`ratio` = MPM / スラブ法。定常の前と方法の外では null）`forceChart`（荷重のグラフに描いた生の値と移動平均）`explorer`（表示中の点）`tracks`（追っている点と経路）`view`（拡大率・パン・倍率・主応力の向き）
-`plan`（平面図: `active` `ready` `running` `done` `diag`（`steady` が定常の平均、SI）`cracks` `settings` `url` `setMode()` `setField()` `drawMs()`）と
+`plan`（平面図: `active` `ready` `running` `done` `diag`（`steady` が定常の平均、SI）`cracks` `settings` `url` `setMode()` `setField()` `drawMs()`）
+`stand` `stands` `standResults` `standFrames` `stopped`（タンデム: 表示中のスタンド（0 始まり）・スタンド数・済んだスタンドの結果・並んだ枠の状態・最後のスタンドまで行かずに止まった理由 'stalled' | 'separated' | 'lost'、ふだんは null）と
 `run()` `restart()` `setField(id)` `screenOf(id)`（粒子の画面座標）`drawMs(n)`（今のフレームを n 回描いた 1 回の ms）、
 `pressing`（亀裂の印が押されている最中）`pressAgain()`（印をもう一度押す。瞬間を撮る用）を持つ。
 凡例の `data-field` が今の色の量（タブの名前は短いことがあるので、待つならこちら）。
@@ -103,6 +107,7 @@ Math.exp・log の最後の 1 ビットが違うのでビット一致はしな�
 `&yield=von-mises|gtn&nucleation=tension|always&f0=0.005&fc=0.05`
 `&field=seq|eta|s1|pres|ep|damage|sxx|syy|sxy|dT|lagrange|porosity|loc|drucker&autorun=1&stopafter=<step>`
 `&view=plan&W=20&wcells=10&notch=0&pfield=sxx|szz|seq|eta|damage|spread`（平面図。板幅 mm・半幅のセル数・端の切り欠きの半径 mm）
+`&stands=1..5`（タンデムのスタンド数。どのスタンドも同じ条件で、圧下率は各スタンドの入側板厚に対して。断面の画面だけ）
 `&cond=<base64url JSON>`（「条件の URL をコピー」が書く。読みやすいキーに無い条件を、プリセットとの差分で。範囲外・型の合わないもの・知らないキーは無視）
 — 長さは mm、張力は MPa、`r` は %。不正な値は黙って無視される（`h0`・`r`・`R` はロールが噛めない組み合わせなら 3 つとも）。
 効いたかは `__mpm.params` で確かめる。`stopafter` はそのステップで 1 回止まり、「続ける」で先へ進む。
