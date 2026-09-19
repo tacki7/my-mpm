@@ -5,6 +5,7 @@
 import { hmFractureStrain, jcFractureStrain } from '../mpm/material.ts';
 import type { DamageModel, SimParams } from '../mpm/params.ts';
 import { drawChart, type Series } from './charts.ts';
+import { radioGroup } from './radioGroup.ts';
 import type { Frame, Track, TrackRole } from './protocol.ts';
 import { clFractureStrainPlaneStrain, lodeParameter, principal } from './stress.ts';
 
@@ -16,8 +17,9 @@ const ROLES: { role: TrackRole; label: string; color: string }[] = [
 const colorOf = (r: TrackRole) => ROLES.find((x) => x.role === r)!.color;
 
 /** a tandem's stands on the loading path of the point shown (the locus keeps its blue, cracks their vermilion; no
- * copper, which the most damaged point's brown is too near), neighbours well apart */
-const STAND_COLORS = ['#4b5a68', '#3d7a6a', '#6b3f7a', '#b08a2e', '#a8467a'];
+ * copper, which the most damaged point's brown is too near), neighbours well apart; each has 4.5:1 and more as
+ * words on the sheet and on the paper (the stand table's heads, the load paths' numbers) */
+const STAND_COLORS = ['#4b5a68', '#387262', '#6b3f7a', '#7a6518', '#a44478'];
 export const standColor = (k: number) => STAND_COLORS[k % STAND_COLORS.length];
 
 const MPa = 1e-6;
@@ -67,6 +69,7 @@ export class Explorer {
       roles.append(b);
       this.buttons.set(r.role, b);
     }
+    radioGroup(roles);
     root.append(roles);
     root.append(el('p', 'explorer-hint', 'ロールバイトの粒子をクリックすると、その点を追う'));
     this.table = el('table', 'explorer-state');
@@ -198,7 +201,9 @@ export class Explorer {
         }
         const td = el('td', undefined, text);
         if (key === 'failed' && s.failed) td.classList.add('failed');
-        tr.append(el('th', undefined, label), td, el('td', 'unit', unit));
+        const th = el('th', undefined, label);
+        th.setAttribute('scope', 'row');
+        tr.append(th, td, el('td', 'unit', unit));
         return tr;
       }),
     );

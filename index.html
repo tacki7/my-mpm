@@ -41,10 +41,12 @@
         <div class="field-tabs" id="field-tabs" role="radiogroup" aria-label="色で表す量"></div>
         <div class="bite">
           <canvas id="bite"></canvas>
-          <div class="view-tools" id="view-tools" aria-label="表示の操作"></div>
+          <div class="view-tools" id="view-tools" aria-label="表示の操作">
+            <!-- the status line ends the tools' row: on a narrow picture it wraps under them instead of lying over them -->
+            <div class="phase" id="phase" aria-live="polite"></div>
+          </div>
           <canvas class="overview" id="overview" aria-label="板の全長。クリックでそこを表示"></canvas>
           <div class="legend" id="legend"></div>
-          <div class="phase" id="phase" aria-live="polite"></div>
         </div>
         <div class="splitter split-charts" data-size="charts" aria-label="グラフの高さ（ドラッグか矢印キー、ダブルクリックで元に戻す）"></div>
         <div class="charts">

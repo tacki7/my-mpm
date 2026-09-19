@@ -13,6 +13,8 @@ import type { FromPlanWorker, PlanFieldName, PlanFrame, PlanGeometry, ToPlanWork
 import { PLAN_SETTINGS, checkedSettings, maxNotch, planSettingsOf, planSettingsQuery } from './planQuery.ts';
 import { PLAN_FIELDS, PlanView, planFieldInfo } from './planView.ts';
 import { conditionsQuery } from './query.ts';
+import { radioGroup } from './radioGroup.ts';
+import { say } from './liveText.ts';
 
 export type ViewMode = 'section' | 'plan';
 
@@ -188,6 +190,7 @@ export class PlanMode {
       tabs.append(b);
     }
     this.markTabs();
+    radioGroup(tabs);
   }
 
   private markTabs(): void {
@@ -390,7 +393,9 @@ export class PlanMode {
       ...rows.map(([k, v, u, provisional]) => {
         const tr = el('tr');
         if (provisional) tr.className = 'provisional';
-        tr.append(el('th', undefined, k), el('td', undefined, v), el('td', 'unit', u));
+        const th = el('th', undefined, k);
+        th.setAttribute('scope', 'row');
+        tr.append(th, el('td', undefined, v), el('td', 'unit', u));
         return tr;
       }),
     );
@@ -410,7 +415,7 @@ export class PlanMode {
             ? `板の長さ ${mmOf(L)} mm では定常の読みが出ない見込み（${mmOf(enough)} mm 以上に）。薄い字は直前の読み。`
             : 'まだ無いので、薄い字は直前の読み。');
     this.showClock();
-    this.$('plan-phase').textContent = phaseText[d.phase];
+    say(this.$('plan-phase'), phaseText[d.phase]);
   }
 
   private updateCracks(f: PlanFrame): void {

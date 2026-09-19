@@ -7,6 +7,8 @@
   --ink-soft: #4b5a68;
   --rule: #c1c8c6;
   --steel: #8a949c;
+  /* steel for words: #8a949c has 2.8:1 on the sheet, too faint to read; this keeps the grey at 5.0:1 */
+  --steel-ink: #5f6b75;
   --stamp: #c23b22;
   --temper-straw: #e3cf86;
   --temper-blue: #2c4a8c;
@@ -211,7 +213,7 @@ button.pending {
 }
 
 .group.fold summary::marker {
-  color: var(--steel);
+  color: var(--ink-soft);
 }
 
 .group.fold[open] summary {
@@ -347,6 +349,9 @@ button.pending {
   width: min(380px, 60%);
   font-size: var(--fs-xs);
   color: var(--ink);
+  /* words on the picture sit on the sheet's colour, as the view tools do: the far side of a roll is dark steel */
+  padding: 4px 6px 2px;
+  background: rgba(244, 245, 243, 0.9);
 }
 
 .legend .bar {
@@ -376,15 +381,25 @@ button.pending {
 .view-tools {
   position: absolute;
   left: 18px;
+  /* the whole width, so that the status line can end the row (and wrap under the tools, not over them) */
+  right: 18px;
   top: 10px;
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
   align-items: center;
   font-size: var(--fs-xs);
+  /* the gaps between the tools leave the picture under them to the mouse */
+  pointer-events: none;
 }
 
+.view-tools > * {
+  pointer-events: auto;
+}
+
+/* 24 px and more to press (WCAG 2.5.8: the roll bite under them takes clicks too) */
 .view-tools button {
+  min-height: 26px;
   padding: 2px 9px;
   font-size: var(--fs-s);
   background: rgba(244, 245, 243, 0.9);
@@ -394,15 +409,37 @@ button.pending {
   display: inline-flex;
   gap: 4px;
   align-items: center;
+  min-height: 26px;
   background: rgba(244, 245, 243, 0.9);
   border: 1px solid var(--rule);
   border-radius: 3px;
-  padding: 1px 6px;
+  padding: 0 6px;
 }
 
 .view-tools select {
-  padding: 1px 4px;
+  height: 24px;
+  padding: 0 4px;
   font-size: var(--fs-xs);
+}
+
+/* a focus ring on the picture gets a margin of the sheet's colour: the dark roll would swallow it (1.9:1) */
+.bite :focus-visible {
+  box-shadow: 0 0 0 5px var(--sheet);
+}
+
+/* the roll bite's own ring is drawn inside its frame: the handles on three sides would cover an outline outside it */
+.bite canvas#bite:focus-visible {
+  outline: none;
+  box-shadow: none;
+}
+
+.bite:has(canvas#bite:focus-visible)::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border: 2px solid var(--focus);
+  box-shadow: inset 0 0 0 2px var(--sheet);
+  pointer-events: none;
 }
 
 .bite canvas.overview {
@@ -420,6 +457,20 @@ button.pending {
   top: 12px;
   font-size: var(--fs-s);
   color: var(--ink-soft);
+  padding: 1px 6px;
+  background: rgba(244, 245, 243, 0.9);
+}
+
+.phase:empty {
+  display: none;
+}
+
+/* the section's status line ends the view tools' row */
+.view-tools .phase {
+  position: static;
+  order: 1;
+  margin-left: auto;
+  pointer-events: none;
 }
 
 .charts {
@@ -997,6 +1048,8 @@ details.group > summary {
   font-size: var(--fs-s);
   color: var(--ink-soft);
   pointer-events: none;
+  padding: 0 4px;
+  background: rgba(244, 245, 243, 0.9);
 }
 
 .stand-slot.current .stand-label {
@@ -1051,7 +1104,7 @@ body[data-view='plan'] .section-only {
 
 /* the last look, shown until the steady window has looks of its own */
 .certificate tr.provisional td {
-  color: var(--steel);
+  color: var(--steel-ink);
 }
 
 .table-note {
