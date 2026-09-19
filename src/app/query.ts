@@ -84,7 +84,12 @@ export function applyQuery(base: SimParams, q: URLSearchParams): SimParams {
     }
     if (!hasBite(p.rolling)) p.rolling = rolling;
   }
-  // a URL must not start a run too big for the page (whoever opens a shared link)
+  // a URL must not start a run too big for the page (whoever opens a shared link). A tandem too big keeps its
+  // stands if the preset's grid is enough, else goes back to one stand; then, as for one stand, the preset's size
+  if (points(p) > MAX_POINTS && (p.rolling.stands ?? 1) > 1) {
+    p.numerics.cellsThrough = base.numerics.cellsThrough;
+    if (points(p) > MAX_POINTS) p.rolling.stands = base.rolling.stands ?? 1;
+  }
   if (points(p) > MAX_POINTS) {
     p.rolling = { ...base.rolling };
     p.numerics = { ...base.numerics };
@@ -101,10 +106,18 @@ export function applyQuery(base: SimParams, q: URLSearchParams): SimParams {
 export const MAX_POINTS = 500_000;
 const MAX_DEFECTS = 20;
 
-/** Material points of a sheet on the lattice (spacing h0 / (cells × ppc)). */
+/**
+ * Material points of a pass on the lattice (spacing h0 / (cells × ppc)), over all its stands: each stand's sheet
+ * is about 1 − r times as thick and 1 / (1 − r) times as long as the one before, so it has 1 / (1 − r)² times its
+ * points (a tandem of 5 stands at r 25 % has 21.5 times the points of one).
+ */
 export function points(p: SimParams): number {
   const n = p.numerics.cellsThrough * p.numerics.ppc;
-  return (p.rolling.sheetLength / p.rolling.h0) * n * n;
+  const one = (p.rolling.sheetLength / p.rolling.h0) * n * n;
+  const grow = 1 / (1 - p.rolling.reduction) ** 2;
+  let stands = 0;
+  for (let k = 0, f = 1; k < (p.rolling.stands ?? 1); k++, f *= grow) stands += f;
+  return one * stands;
 }
 
 type Obj = Record<string, unknown>;
