@@ -907,10 +907,13 @@ export class Sim {
         const m = mass[p];
         const th = l00 + l11;
         this.dJ[p] = th;
-        // failed and inverted points take no part in the averages (they keep their own rate):
-        // a crack must not dilate its intact neighbours, and ln J needs J > 0
+        // inverted points take no part in the averages (ln J needs J > 0), nor do failed points in tension (they
+        // keep their own rate: an opening crack must not dilate its intact neighbours). A failed point under
+        // compression (a closed crack) does: on its own rate the grid's point-to-point scatter gave it 1 GPa spikes
+        // in the bite, and reading the averages without adding to them left nothing to resist its own volume
+        // modes (the pass blew up)
         const Jo = f00[p] * f11[p] - f01[p] * f10[p];
-        if (failed[p] || !(Jo > 0)) continue;
+        if ((failed[p] && !(pres[p] > 0)) || !(Jo > 0)) continue;
         const mth = m * th;
         // elastic log volume ln J − ev = −p/K for an intact point (p was set from this F last step)
         const mfe = -m * pres[p] * invK;
@@ -1176,8 +1179,8 @@ export class Sim {
           // smoothed rate (Jbar holds it here) plus the relaxation of the elastic log volume toward
           // its grid mean; J advances exactly by exp(Δt θ), so the volume follows the smoothed rate
           const Jold = f00[p] * f11[p] - f01[p] * f10[p];
-          if (failed[p] || !(Jold > 0)) {
-            // not in the averages: its own rate, F ← (I + ΔtL) F
+          if ((failed[p] && !(pres[p] > 0)) || !(Jold > 0)) {
+            // not in the averages (inverted, or failed in tension): its own rate, F ← (I + ΔtL) F
             th = l00 + l11;
           } else {
             th = Jbar + (rA + (rB * pres[p]) / K) / dt; // ln Jold − ev = −p/K
