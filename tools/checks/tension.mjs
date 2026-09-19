@@ -45,6 +45,17 @@ function sectionStress(sim, x0, x1) {
     s += sectionStress(sim, x0, x0 + 0.6e-3);
   }
   near(s / N / MPa, 100, 0.1, 'exit strip stress [MPa] under 100 MPa front tension');
+  // the grip's total load is the stress times the end column's height, however the grip's columns are shaped
+  let top = -Infinity;
+  let bot = Infinity;
+  for (let p = sim.n - 1; p >= 0 && sim.tag[p] === 2; p--) {
+    if (!sim.active[p]) continue;
+    const e = 0.5 * sim.dp * Math.hypot(sim.f01[p], sim.f11[p]);
+    top = Math.max(top, sim.py[p] + e);
+    bot = Math.min(bot, sim.py[p] - e);
+  }
+  const load = typeof sim.endLoad === 'function' ? sim.endLoad(2) : NaN;
+  near(load, sim.frontNow * (top - bot), 1e-3, 'front grip load = σf × the head column height (the scale is from the start of the step)');
 }
 
 // ── back tension: carried by the entry strip, released once the tail reaches the bite
@@ -61,9 +72,11 @@ function sectionStress(sim, x0, x1) {
   while (sim.step < 80000) {
     for (let i = 0; i < 50; i++) sim.advance();
     const tail = sim.tailX();
-    // the strip just ahead of the tail once the pusher has let go (from then on only the
-    // back tension and the rolls act on it), while the tail is still well before the bite
-    if (!sim.pusherActive && tail < -sim.contactLength - 1.5e-3) entry.push(sectionStress(sim, tail + 0.5e-3, tail + 1.1e-3));
+    // the strip just ahead of the gripped length at the tail (the tension is shared by the grip's
+    // columns, so the stress builds up across it) once the pusher has let go (from then on only
+    // the back tension and the rolls act on it), while the tail is still well before the bite
+    const grip = (sim.gripCols ?? 0) * sim.dp;
+    if (!sim.pusherActive && tail < -sim.contactLength - grip - 1e-3) entry.push(sectionStress(sim, tail + grip + 0.1e-3, tail + grip + 0.7e-3));
     // once the tail has left the rolls nothing pulls it back: it keeps the exit speed
     if (tail > 0 && tail < 1e3) {
       afterExit++;

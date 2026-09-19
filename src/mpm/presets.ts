@@ -24,11 +24,14 @@ export const PRESETS: Preset[] = [
   {
     id: 'front-tension',
     label: '前方張力が過大',
-    note: '出側の張力が加工硬化後の降伏応力に近い。出口の先で板が伸び、くびれて破断する。',
+    note: '前方張力 615 MPa が出側の板の平面ひずみ変形抵抗 2k（約 557 MPa）の 1.1 倍。出口の先で板が伸び、くびれて破断する（示すのは 2k を超えると切れること。切れる場所は格子や掴みで動く）。',
     build: () => {
       const p = defaultParams();
       p.material = { ...STEEL_SPCC };
-      p.rolling.frontTension = 480 * MPa;
+      // 35 % and μ 0.15 so the rolls still hold the strip (neutral point in the bite) at this tension
+      p.rolling.reduction = 0.35;
+      p.rolling.mu = 0.15;
+      p.rolling.frontTension = 615 * MPa;
       p.damage = { ...DAMAGE_4340, model: 'cockcroft-latham', clCrit: 0.35 };
       return p;
     },
@@ -70,7 +73,7 @@ export const PRESETS: Preset[] = [
   {
     id: 'high-friction',
     label: '高摩擦・低延性',
-    note: '潤滑切れ（μ = 0.25）の低延性アルミ。表層のせん断と入口の引張で表面から割れる。',
+    note: '潤滑切れ（μ = 0.25）の低延性アルミ。表層の三軸度はこのモデルでは負のままで、表面からは割れない（docs/presets.md）。',
     build: () => {
       const p = defaultParams();
       p.rolling.mu = 0.25;

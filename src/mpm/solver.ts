@@ -154,6 +154,9 @@ export class Sim {
   readonly n: number;
   readonly NI: number;
   readonly NJ: number;
+  /** lattice columns at each end that stand for the grip (coiler / pay-off reel), h0 long: a tension is shared by
+   *  them, and a point there does not fail (damage is still shown) */
+  readonly gripCols: number;
   readonly lattice: Int32Array; // lattice cell → particle index (−1: void)
   readonly li: Int32Array;
   readonly lj: Int32Array;
@@ -212,7 +215,7 @@ export class Sim {
   /** tension stresses applied at this step, after ramping [Pa] */
   backNow = 0;
   frontNow = 0;
-  /** column height / Σ|F e_y| dp of the tail and head columns (see endScale) */
+  /** end column height / Σ w |F e_y| dp over the tail's and the head's grips (see gripScale) */
   private backScale = 1;
   private frontScale = 1;
   /** time the front tension was switched on (head past the exit probe), and the back tension released (tail at the entry); −1: not yet */
@@ -294,6 +297,8 @@ export class Sim {
     const NI = Math.round(r.sheetLength / dp);
     const NJ = Math.round(r.h0 / dp);
     this.NI = NI;
+    // h0 of strip at each end, but never more than half the strip
+    this.gripCols = Math.max(1, Math.min(Math.round(r.h0 / dp), Math.floor(NI / 2)));
     this.NJ = NJ;
     const lattice = new Int32Array(NI * NJ).fill(-1);
     const keep: number[] = [];
@@ -441,9 +446,12 @@ export class Sim {
     const [r0, r1] = this.rolls;
     const k4 = 4 * invH * invH;
     this.updateTension();
-    // force per end point [N/m] per unit of its current height (a stress on the end face)
+    // force per gripped point [N/m] per unit of its current height and of its grip weight (see gripScale):
+    // the total is the end stress times the end column's height
+    const grip = this.gripCols;
     const tractionB = -this.backNow * this.dp * this.backScale;
     const tractionF = this.frontNow * this.dp * this.frontScale;
+    const { li, NI } = this;
     const pushing = this.pusherActive;
     for (let p = 0; p < n; p++) {
       if (!active[p]) continue;
@@ -474,8 +482,8 @@ export class Sim {
       let mvx = m * vx[p];
       const mvy = m * vy[p];
       const tg = tag[p];
-      if (tg === 1 && tractionB !== 0) mvx += dt * tractionB * Math.hypot(this.f01[p], this.f11[p]);
-      else if (tg === 2 && tractionF !== 0) mvx += dt * tractionF * Math.hypot(this.f01[p], this.f11[p]);
+      if (tractionB !== 0 && li[p] < grip) mvx += dt * tractionB * this.gripWeight(li[p], 1) * Math.hypot(this.f01[p], this.f11[p]);
+      else if (tractionF !== 0 && li[p] >= NI - grip) mvx += dt * tractionF * this.gripWeight(li[p], 2) * Math.hypot(this.f01[p], this.f11[p]);
 
       // penetration of this point into each roll (its half size along the deformed y edge)
       const rp = 0.5 * this.dp * Math.hypot(this.f01[p], this.f11[p]);
@@ -853,7 +861,7 @@ export class Sim {
           this.dHM[p] += (dep / hmFractureStrain(eta)) * du;
         }
         if (s1 > 0) this.dCL[p] += ((s1 / q) * dep * du) / dmg.clCrit;
-        if (dmg.model !== 'none' && this.governingDamage(p) >= 1) this.fail(p);
+        if (dmg.model !== 'none' && this.governingDamage(p) >= 1 && !this.inGrip(p)) this.fail(p);
       }
     }
     if (nl) this.addNonlocalDamage(nl);
@@ -942,6 +950,36 @@ export class Sim {
   hardening(p: number): number {
     const rate = this.flowRate[p];
     return rate < 0 ? Infinity : flowStress(this.params.material, this.ep[p], rate, this.temp[p]).H;
+  }
+
+  /** In the gripped length of an end while a tension is applied there: damage is shown there but does not fail the point. */
+  inGrip(p: number): boolean {
+    const i = this.li[p];
+    return (this.frontNow > 0 && i >= this.NI - this.gripCols) || (this.backNow > 0 && i < this.gripCols);
+  }
+
+  /** Total load the tail (1) or head (2) grip puts on the strip this step [N/m], signed along x. */
+  endLoad(tg: number): number {
+    const { n, active, li, NI, dp } = this;
+    const g = this.gripCols;
+    const t = tg === 1 ? -this.backNow * dp * this.backScale : this.frontNow * dp * this.frontScale;
+    let f = 0;
+    for (let p = 0; p < n; p++) {
+      if (!active[p] || (tg === 1 ? li[p] >= g : li[p] < NI - g)) continue;
+      f += t * this.gripWeight(li[p], tg) * Math.hypot(this.f01[p], this.f11[p]);
+    }
+    return f;
+  }
+
+  /**
+   * Share of the end load for a point of lattice column i in the grip of the tail (1) or the head (2):
+   * largest at the end column, falling linearly towards the inner end of the grip, so the load goes
+   * into the strip gradually instead of stepping up at the grip's inner edge.
+   */
+  gripWeight(i: number, end: number): number {
+    const g = this.gripCols;
+    const j = end === 1 ? g - 1 - i : i - (this.NI - g);
+    return (j + 0.5) / g;
   }
 
   governingDamage(p: number): number {
@@ -1044,36 +1082,41 @@ export class Sim {
       // let go within the time the tail takes to cross the bite, not the (possibly longer) ramp
       const release = Math.min(ramp, this.contactLength / this.vIn);
       if (this.backOffAt >= 0) back *= Math.max(0, 1 - (t - this.backOffAt) / release);
-      this.backScale = this.endScale(1);
+      this.backScale = this.gripScale(1);
       this.backNow = this.backScale > 0 ? back : 0;
     }
     if (r.frontTension !== 0) {
       if (this.frontOnAt < 0 && this.headX() > this.xExitProbe) this.frontOnAt = t;
       const front = this.frontOnAt >= 0 ? r.frontTension * Math.min(1, (t - this.frontOnAt) / ramp) : 0;
-      this.frontScale = this.endScale(2);
+      this.frontScale = this.gripScale(2);
       this.frontNow = this.frontScale > 0 ? front : 0;
     }
   }
 
   /**
-   * Height of an end column (tag 1 tail, 2 head) over the sum of its points' deformed y edges
-   * |F e_y| dp. Each point's end load is σ dp |F e_y| times this, so the total is σ × the
-   * column's actual height even when the column is sheared or its points have spread apart.
-   * 0 when the column has no active point left (it has left the grid).
+   * Height of an end column (tag 1 tail, 2 head) over Σ w |F e_y| dp of the points in that end's grip
+   * (w the grip weight). Each gripped point's load is σ w |F e_y| dp times this, so the total is σ × the
+   * end column's actual height whatever the heights of the grip's columns, sheared or with points missing.
+   * 0 when the end column has no active point left (it has left the grid).
    */
-  private endScale(tg: number): number {
-    const { n, tag, active, py, dp } = this;
+  private gripScale(tg: number): number {
+    const { n, tag, active, py, dp, li, NI } = this;
+    const g = this.gripCols;
     let top = -INF;
     let bot = INF;
-    let sum = 0;
     const from = tg === 1 ? 0 : n - 1;
     const step = tg === 1 ? 1 : -1;
     for (let p = from; p >= 0 && p < n && tag[p] === tg; p += step) {
       if (!active[p]) continue;
       const e = dp * Math.hypot(this.f01[p], this.f11[p]);
-      sum += e;
       if (py[p] + e / 2 > top) top = py[p] + e / 2;
       if (py[p] - e / 2 < bot) bot = py[p] - e / 2;
+    }
+    if (top <= bot) return 0;
+    let sum = 0;
+    for (let p = from; p >= 0 && p < n && (tg === 1 ? li[p] < g : li[p] >= NI - g); p += step) {
+      if (!active[p]) continue;
+      sum += this.gripWeight(li[p], tg) * dp * Math.hypot(this.f01[p], this.f11[p]);
     }
     return sum > 0 ? (top - bot) / sum : 0;
   }
