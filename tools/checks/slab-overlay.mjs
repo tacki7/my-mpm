@@ -4,7 +4,7 @@
 // grid-crossing ripple out of the roll force. tools/browser/slab-overlay.mjs checks the page.
 // @check
 import { ok, near, between, done } from './lib.mjs';
-import { movingAverage, slabReference, smoothingWindow } from '../../src/app/slabOverlay.ts';
+import { SteadyForce, forceNote, movingAverage, slabRatio, slabReference, smoothingWindow, thicknessRatio } from '../../src/app/slabOverlay.ts';
 import { karman } from '../../src/mpm/slab.ts';
 import { presetById } from '../../src/mpm/presets.ts';
 
@@ -85,6 +85,42 @@ for (const [id, mod, want] of [
   const ma = movingAverage(t, holed, wMs);
   const bad = ma.filter((v) => !Number.isFinite(v)).length;
   ok(bad === 0, 'NaN / Inf samples are left out of the moving average', `${bad} non-finite points`);
+}
+
+// ── the note under the force chart follows the condition: Δ = mean thickness / contact length decides
+// whether the slab method holds, and the ratio appears once the steady phase has started
+{
+  const std = slabReference(presetById('standard').build());
+  const lc = Math.sqrt(0.1 * 0.25e-3 - 0.25e-3 ** 2 / 4);
+  near(std.delta, 0.875e-3 / lc, 1e-12, 'standard: Δ = mean thickness / contact length (0.875 / 5.00 mm)');
+  const before = forceNote(std, null);
+  ok(before.includes('定常になると') && before.includes('標準条件では') && !before.includes('板が厚い'), 'standard, before the steady phase: no ratio, the standard range', before);
+  const steady = forceNote(std, 1.0712 * std.force);
+  ok(steady.includes('定常の MPM / スラブ法 = 1.07。') && steady.includes('標準条件では'), 'standard, steady: the ratio 1.07 and the standard range', steady);
+  near(slabRatio(std, 1.0712 * std.force), 1.0712, 1e-9, 'standard: MPM / slab = the steady force over the slab force');
+
+  const P = presetById('central-burst').build();
+  const thick = slabReference(P);
+  near(thick.delta, thicknessRatio(P.rolling), 1e-12, 'central-burst: Δ from the preset');
+  const d = thick.delta.toFixed(2);
+  const tb = forceNote(thick, null);
+  const ts = forceNote(thick, 1.47 * thick.force);
+  ok(thick.delta > 1 && tb.includes(`Δ = 平均板厚 / 接触長 = ${d} > 1`) && tb.includes('低く見積もる') && tb.includes('スラブ法の線は参考') && !tb.includes('標準条件'),
+    `central-burst (Δ ${d}), before the steady phase: the method underestimates a thick plate, the line is a reference`, tb);
+  ok(ts.includes('定常の MPM / スラブ法 = 1.47（参考）') && !ts.includes('標準条件'), 'central-burst, steady: the ratio as a reference', ts);
+
+  const ft = slabReference(presetById('front-tension').build());
+  ok(forceNote(ft, 3e6) === '' && slabRatio(ft, 3e6) === null, 'front-tension (outside the method): no note, no ratio, whatever the steady force');
+
+  // the steady mean: only the steady frames, each by the steps it covers, and a restart forgets them
+  const sf = new SteadyForce();
+  ok(sf.mean === null, 'steady mean: null before any frame');
+  for (const [phase, rollForce, step] of [['bite', 1e6, 100], ['steady', 3e6, 400], ['steady', 3.4e6, 500], ['tail-out', 1e6, 600], ['steady', NaN, 700]]) sf.add({ phase, rollForce, step });
+  near(sf.mean, 3.1e6, 1e-12, 'steady mean: the steady frames by their steps (300 × 3.0 and 100 × 3.4; bite, tail-out and NaN left out)');
+  sf.reset();
+  ok(sf.mean === null, 'steady mean: null again after a restart');
+  sf.add({ phase: 'steady', rollForce: 2e6, step: 50 });
+  near(sf.mean, 2e6, 1e-12, 'steady mean: counts the steps from 0 again after a restart');
 }
 
 // ── not crossing: the reason names the end the neutral point went to

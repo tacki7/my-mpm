@@ -13,9 +13,10 @@ import { Overview } from './app/overview.ts';
 import { PlanMode } from './app/planMode.ts';
 import { BiteView } from './app/view.ts';
 import { attachViewControls } from './app/viewControls.ts';
-import { drawForceChart, drawHillChart, slabReference, type ForceChartData } from './app/slabOverlay.ts';
+import { SteadyForce, drawForceChart, drawHillChart, slabRatio, slabReference, type ForceChartData } from './app/slabOverlay.ts';
 
 let forceChart: ForceChartData | null = null;
+const steadyForce = new SteadyForce();
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -175,6 +176,7 @@ function restart() {
   kineticN = 0;
   history.F.length = 0;
   history.T.length = 0;
+  steadyForce.reset();
   last = null;
   view.frame = null;
   running = false;
@@ -226,6 +228,7 @@ function onFrame(f: Frame) {
     history.t.push(d.t * 1e3);
     history.F.push(d.rollForce * 1e-6);
     history.T.push(d.rollTorque * 1e-3);
+    steadyForce.add(d);
     if (d.kineticRatio != null) {
       kineticSum += d.kineticRatio;
       kineticN++;
@@ -353,7 +356,7 @@ function drawLegend() {
 function drawCharts() {
   const g = geometry;
   if (!g) return;
-  forceChart = drawForceChart($<HTMLCanvasElement>('chart-force'), $('legend-force'), history.t, history.F, params);
+  forceChart = drawForceChart($<HTMLCanvasElement>('chart-force'), $('legend-force'), history.t, history.F, params, steadyForce.mean);
   drawHillChart($<HTMLCanvasElement>('chart-hill'), $('legend-hill'), last?.profile, g.contactLength, last?.diag, params);
   explorer.draw();
 }
@@ -409,10 +412,22 @@ window.__mpm = {
   get params() {
     return cloneParams(params);
   },
-  /** the slab method for the running condition, as drawn over the charts */
+  /** the slab method for the running condition, as drawn over the charts; Δ, and MPM / slab over the steady phase (null before it) */
   get slab() {
     const s = slabReference(params);
-    return { force: s.force, torque: s.torque, xNeutral: s.xNeutral, crossed: s.crossed, sticking: s.sticking, tensionAtYield: s.tensionAtYield, outside: s.outside, points: s.p.length };
+    return {
+      force: s.force,
+      torque: s.torque,
+      xNeutral: s.xNeutral,
+      crossed: s.crossed,
+      sticking: s.sticking,
+      tensionAtYield: s.tensionAtYield,
+      outside: s.outside,
+      points: s.p.length,
+      delta: s.delta,
+      steadyForce: steadyForce.mean,
+      ratio: slabRatio(s, steadyForce.mean),
+    };
   },
   /** what the force chart last drew: time [ms], one frame's means and the moving average [kN/mm], the window [ms] */
   get forceChart() {

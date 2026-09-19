@@ -3,7 +3,7 @@
 // point is one frame's mean, so the grid-crossing ripple of the MPM (period 2h/v_in,
 // docs/validation.md "準静的と荷重の振動") shows in it and hides the steady value.
 import { karman } from '../mpm/slab.ts';
-import type { SimParams } from '../mpm/params.ts';
+import { biteGeometry, type RollingParams, type SimParams } from '../mpm/params.ts';
 import { drawChart, type Series } from './charts.ts';
 import type { Diagnostics } from '../mpm/solver.ts';
 
@@ -28,7 +28,23 @@ export interface SlabReference {
   tau: Float64Array;
   /** why the slab method is not drawn for this condition; null when it holds */
   outside: string | null;
+  /** Δ = mean thickness / contact length (thicknessRatio) */
+  delta: number;
 }
+
+/**
+ * Δ = mean thickness / contact length, (h0 + h1) / 2 / Lc. The slab method takes the deformation as
+ * even through the thickness, which holds for Δ below about 1; a thicker plate deforms unevenly (the
+ * surface more than the centre) and needs more force than the method gives (h0 10 mm, R 15 mm, 5 %:
+ * Δ 3.6, and the MPM force at 12 cells is 1.47 times the method's).
+ */
+export function thicknessRatio(r: RollingParams): number {
+  const { gap, contactLength } = biteGeometry(r);
+  return (r.h0 + gap) / 2 / contactLength;
+}
+
+/** above this Δ the force note says the slab method underestimates */
+export const THICK_DELTA = 1;
 
 let cacheKey = '';
 let cache: SlabReference | null = null;
@@ -64,9 +80,65 @@ export function slabReference(P: SimParams): SlabReference {
     p: s.p,
     tau: s.tau,
     outside,
+    delta: thicknessRatio(P.rolling),
   };
   cacheKey = key;
   return cache;
+}
+
+/**
+ * The mean roll force over the steady phase [N/m], for the ratio to the slab method. Each frame's
+ * force is the mean over the steps since the frame before, and frames carry different numbers of
+ * steps, so each counts by its steps.
+ */
+export class SteadyForce {
+  private sum = 0;
+  private steps = 0;
+  private lastStep = 0;
+  /** one frame's diagnostics, once per frame and in order */
+  add(d: Pick<Diagnostics, 'phase' | 'rollForce' | 'step'>): void {
+    const w = d.step - this.lastStep;
+    this.lastStep = d.step;
+    if (d.phase !== 'steady' || !Number.isFinite(d.rollForce) || !(w > 0)) return;
+    this.sum += w * d.rollForce;
+    this.steps += w;
+  }
+  reset(): void {
+    this.sum = 0;
+    this.steps = 0;
+    this.lastStep = 0;
+  }
+  /** null before the steady phase */
+  get mean(): number | null {
+    return this.steps > 0 ? this.sum / this.steps : null;
+  }
+}
+
+/** MPM / slab method over the steady phase; null before it, or when the method is left out */
+export function slabRatio(slab: SlabReference, steadyForce: number | null): number | null {
+  return slab.outside || steadyForce == null || !(slab.force > 0) ? null : steadyForce / slab.force;
+}
+
+/**
+ * The note under the force chart, for the running condition: nothing when the slab method is left
+ * out (the reason is shown instead); for a thick plate (Δ > 1) that the method underestimates, with
+ * the ratio as a reference; otherwise the ratio against the standard condition's measured range
+ * (docs/validation.md「スラブ法との比較」). The ratio appears once the steady phase has started.
+ */
+export function forceNote(slab: SlabReference, steadyForce: number | null): string {
+  if (slab.outside) return '';
+  const ratio = slabRatio(slab, steadyForce);
+  const r = ratio != null ? ratio.toFixed(2) : null;
+  if (slab.delta > THICK_DELTA) {
+    return (
+      `板が厚い（Δ = 平均板厚 / 接触長 = ${slab.delta.toFixed(2)} > 1）。変形が板厚方向に一様でないので、スラブ法は荷重を低く見積もる。` +
+      (r != null ? `定常の MPM / スラブ法 = ${r}（参考）` : 'スラブ法の線は参考')
+    );
+  }
+  return (
+    (r != null ? `定常の MPM / スラブ法 = ${r}。` : '定常になると MPM / スラブ法 の比を出す。') +
+    '標準条件では 1.03〜1.07（格子で動く。6 セル 3.24・10 セル 3.11 対 スラブ法 3.03 kN/mm）'
+  );
 }
 
 /**
@@ -149,7 +221,14 @@ function setLegend(el: HTMLElement, items: string[]): void {
  * The roll force over time: one frame's mean as a thin faint line, the moving average as the
  * main line, and the slab method's force as a dashed level (or why it is left out).
  */
-export function drawForceChart(canvas: HTMLCanvasElement, legend: HTMLElement, t: number[], F: number[], P: SimParams): ForceChartData {
+export function drawForceChart(
+  canvas: HTMLCanvasElement,
+  legend: HTMLElement,
+  t: number[],
+  F: number[],
+  P: SimParams,
+  steadyForce: number | null,
+): ForceChartData {
   const window = smoothingWindow(P);
   const smooth = movingAverage(t, F, window * 1e3);
   const slab = slabReference(P);
@@ -162,13 +241,14 @@ export function drawForceChart(canvas: HTMLCanvasElement, legend: HTMLElement, t
     series.push({ x: [t[0], t[t.length - 1]], y: [f, f], color: STEEL, label: 'スラブ法', width: 1.4, dash: [6, 4] });
   }
   drawChart(canvas, { xLabel: '時間 [ms]', yLabel: '荷重 [kN/mm]', series });
+  const note = forceNote(slab, steadyForce);
   setLegend(legend, [
     item(INK, `移動平均（${fmtUs(window)}、揺れの周期の 2 倍）`),
     item(INK_FAINT, '1 フレームの平均', 'thin'),
     slab.outside
       ? `<span class="note">${slab.outside}</span>`
       : item(STEEL, `スラブ法（Kármán）${(slab.force * 1e-6).toFixed(2)} kN/mm`, 'dashed'),
-    `<span class="note">MPM の荷重はスラブ法より 3〜7 % 高い（標準条件で 6 セル 3.24・10 セル 3.11 対 スラブ法 3.03 kN/mm）</span>`,
+    ...(note ? [`<span class="note">${note}</span>`] : []),
   ]);
   // copies: t and F are the page's history, which grows between frames
   return { t: t.slice(), raw: F.slice(), smooth, windowMs: window * 1e3 };
