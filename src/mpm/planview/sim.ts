@@ -705,8 +705,8 @@ export class PlanSim {
 
   /**
    * Shear flow stress k = σy/√3 of point p [Pa]: the most friction can pass. At its plastic strain and
-   * the strain rate of its last update, as the constitutive update sees them (the static value is
-   * about 10 % lower).
+   * the strain rate of its last update, as the constitutive update sees them (about 1.13 times the
+   * static value: the median in the bite).
    */
   shearFlow(p: number): number {
     const m = this.params.material;

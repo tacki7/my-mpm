@@ -10,10 +10,17 @@ export const SAMPLE_STEPS = 250;
 /** the tail must be at least this far before the entry for a look to count [m] */
 export const TAIL_GAP = 8e-3;
 
-/** one look at the strip: force per unit width by z, σxx by z in the bite and past the exit, spread, pressure jumps */
+/** one look at the strip: force per unit width by band of lattice columns, σxx by z in the bite and past the exit, spread, pressure jumps */
 export interface PlanSnapshot {
-  /** mid → edge, ten bands of 1.05 × the initial half width [N/m] */
+  /**
+   * Roll force per unit width [N/m], mid → edge, in ten bands of whole lattice columns (fewer when the half
+   * width has fewer than ten columns): a band's value is the mean of its columns'. A column's is the sum over
+   * its points in contact of p_c × the point's length along x (plan area over its width across). Bands of a
+   * fixed width in z held 2 or 3 columns by turns and showed a false ±5–15 % ripple.
+   */
   forcePerWidth: number[];
+  /** the same per lattice column, mid → edge [N/m] */
+  forcePerWidthByColumn: number[];
   /** σxx mid → edge in the bite, x ∈ (−1, 0) mm, and 1–5 mm past the exit probe [Pa] */
   sxxBite: number[];
   sxxPast: number[];
@@ -31,7 +38,11 @@ export function snapshot(sim: PlanSim): PlanSnapshot {
   const nb = 10;
   const Wz = sim.halfWidth0 * 1.05;
   const band = (z: number) => Math.min(nb - 1, Math.floor((z / Wz) * nb));
-  const fz = new Float64Array(nb);
+  // force per unit width: by lattice column, then bands of whole columns
+  const NK = sim.NK;
+  const nf = Math.min(nb, NK);
+  const bandOf = (k: number) => Math.min(nf - 1, Math.floor((k * nf) / NK));
+  const fc = new Float64Array(NK);
   const bite = Array.from({ length: nb }, () => [0, 0]);
   const past = Array.from({ length: nb }, () => [0, 0]);
   const jumps: number[] = [];
@@ -51,7 +62,8 @@ export function snapshot(sim: PlanSim): PlanSnapshot {
     const b = band(sim.pz[p]);
     const detF = sim.f00[p] * sim.f11[p] - sim.f01[p] * sim.f10[p];
     if (sim.pc[p] > 0) {
-      fz[b] += sim.pc[p] * sim.dp * sim.dp * detF;
+      // p_c × the point's length along x: its plan area dp² det F over its width across dp |F e_z|
+      fc[sim.lk[p]] += (sim.pc[p] * sim.dp * detF) / Math.hypot(sim.f01[p], sim.f11[p]);
       pMean += sim.pres[p];
       nIn++;
       // the pressure against the lattice neighbours ahead and outward
@@ -63,8 +75,15 @@ export function snapshot(sim: PlanSim): PlanSnapshot {
   }
   jumps.sort((a, b) => a - b);
   const exit = sim.exitProfile(sim.xExitProbe, sim.xExitProbe + 2 * sim.h, 5);
+  const fb = new Float64Array(nf);
+  const cols = new Float64Array(nf);
+  for (let k = 0; k < NK; k++) {
+    fb[bandOf(k)] += fc[k];
+    cols[bandOf(k)]++;
+  }
   return {
-    forcePerWidth: Array.from(fz, (f) => f / (Wz / nb)),
+    forcePerWidth: Array.from(fb, (f, i) => f / cols[i]),
+    forcePerWidthByColumn: Array.from(fc),
     sxxBite: bite.map(([s, c]) => (c ? s / c : NaN)),
     sxxPast: past.map(([s, c]) => (c ? s / c : NaN)),
     halfWidth: exit.halfWidth,
@@ -82,8 +101,10 @@ export interface SteadyMeans {
   looks: number;
   /** roll force per roll on the half width [N] */
   forceHalfWidth: number;
-  /** mid → edge [N/m] */
+  /** mid → edge, bands of whole lattice columns [N/m] */
   forcePerWidthByZ: number[];
+  /** mid → edge, per lattice column [N/m] */
+  forcePerWidthByColumn: number[];
   /** W1/W0 − 1 */
   spread: number;
   centreExitThickness: number;
@@ -133,6 +154,7 @@ export class SteadySampler {
       looks: this.steadyLooks,
       forceHalfWidth: mean(s.map((k) => k.F)),
       forcePerWidthByZ: meanVec((x) => x.forcePerWidth),
+      forcePerWidthByColumn: meanVec((x) => x.forcePerWidthByColumn),
       spread: s.length ? meanOf((x) => x.halfWidth) / halfWidth0 - 1 : NaN,
       centreExitThickness: s.length ? meanOf((x) => x.centreThick) : NaN,
       sxxBite: meanVec((x) => x.sxxBite),
