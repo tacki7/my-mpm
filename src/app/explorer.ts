@@ -15,6 +15,10 @@ const ROLES: { role: TrackRole; label: string; color: string }[] = [
 ];
 const colorOf = (r: TrackRole) => ROLES.find((x) => x.role === r)!.color;
 
+/** a tandem's stands on the loading path of the point shown (the locus keeps its blue, cracks their vermilion) */
+const STAND_COLORS = ['#4b5a68', '#9c4a1c', '#6b3f7a', '#3d7a6a', '#b08a2e'];
+export const standColor = (k: number) => STAND_COLORS[k % STAND_COLORS.length];
+
 const MPa = 1e-6;
 
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls?: string, text?: string): HTMLElementTagNameMap[K] {
@@ -252,7 +256,21 @@ export class Explorer {
         et.push(t.path[i]);
         ep.push(t.path[i + 1]);
       }
-      series.push({ x: ep, y: et, color: colorOf(t.role), label: t.role });
+      const firstStand = t.stand?.[0] ?? 0;
+      const byStand = t === shown && (t.stand ?? []).some((k) => k !== firstStand);
+      if (byStand) {
+        // a tandem: the shown point's path in one colour per stand, each stand's first sample numbered
+        // (a stand's piece starts at the last sample of the stand before, so the line stays joined)
+        let from = 0;
+        for (let i = 1; i <= et.length; i++) {
+          if (i < et.length && t.stand[i] === t.stand[from]) continue;
+          const k = t.stand[from];
+          const a = Math.max(0, from - 1);
+          series.push({ x: ep.slice(a, i), y: et.slice(a, i), color: standColor(k), label: `#${k + 1}` });
+          dots.push({ x: ep[from], y: et[from], color: standColor(k), r: 3, label: `#${k + 1}` });
+          from = i;
+        }
+      } else series.push({ x: ep, y: et, color: colorOf(t.role), label: t.role });
       // the shown point, also as D·εf(η): the strain that would give its damage under proportional
       // loading at the current η — it meets the locus exactly when D = 1
       if (t === shown && gov) {
@@ -278,8 +296,10 @@ export class Explorer {
     });
     const item = (color: string, text: string, dotted = false) =>
       `<span class="item"><span class="swatch${dotted ? ' dotted' : ''}" style="--c:${color}"></span>${text}</span>`;
+    const shownStands = shown ? [...new Set(shown.stand ?? [])] : [];
     const items = [
       item('#2c4a8c', `εf(η) ${gov ? gov.label : d.model === 'gtn' ? '（判定は空孔率）' : d.model === 'localization' ? '（判定は音響テンソル）' : '（判定しない）'}`),
+      ...(shownStands.length > 1 ? shownStands.map((k) => item(standColor(k), `#${k + 1}`)) : []),
       ...this.tracks.map((t) => item(colorOf(t.role), `${ROLES.find((r) => r.role === t.role)!.label}（D ${t.state.damage.toFixed(2)}）`)),
       ...(shown && gov ? [item(colorOf(shown.role), 'D·εf(η)（D = 1 で曲線に届く）', true)] : []),
     ];

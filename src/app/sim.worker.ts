@@ -18,6 +18,8 @@ let stopAfter: number | null = null;
 let timer: ReturnType<typeof setTimeout> | null = null;
 let msPerStep = 0;
 let dirsOn = false;
+/** the finished stands, kept to draw their pictures again with another field */
+let held: { stand: number; sim: Sim; tracker: Tracker | null; result: StandDone['result'] }[] = [];
 
 const FRAME_MS = 33;
 /** steps between the tandem's own reads (tools/tandem.mjs reads at the same steps, so the results agree) */
@@ -78,6 +80,10 @@ function makeFrame(s: Sim, tr: Tracker | null): [Frame, Transferable[]] {
   const prof = s.pressureProfile();
   const cent = s.crackCentroids();
   const t = tandem!;
+  const k = tr?.stand ?? t.stand;
+  // the stands before stand j, on the pass's clock
+  const tBefore = (j: number) => t.results.slice(0, j).reduce((a, r) => a + r.t, 0);
+  const stepsBefore = (j: number) => t.results.slice(0, j).reduce((a, r) => a + r.steps, 0);
   const msg: Frame = {
     type: 'frame',
     pos,
@@ -88,11 +94,14 @@ function makeFrame(s: Sim, tr: Tracker | null): [Frame, Transferable[]] {
     flags,
     diag,
     profile: { x: Array.from(prof.x), p: Array.from(prof.p), tau: Array.from(prof.tau) },
-    cracks: s.cracks.map((c, i) => ({ ...c, cx: cent[i].x, cy: cent[i].y })),
+    cracks: s.cracks.map((c, i) => {
+      const j = c.stand ?? k; // a crack of the stand still running has no stand yet
+      return { ...c, cx: cent[i].x, cy: cent[i].y, stand: j, tPass: tBefore(j) + c.t, stepPass: stepsBefore(j) + c.step };
+    }),
     tracks: tr ? tr.tracks(selected) : [],
     running,
     msPerStep,
-    stand: tr?.stand ?? t.stand,
+    stand: k,
     stands: t.stands,
     tOffset: t.tOffset,
     stepOffset: t.stepOffset,
@@ -117,6 +126,7 @@ function onStandDone(e: StandDone): void {
   const [last, transfer] = makeFrame(e.sim, tracker);
   last.running = false;
   post({ type: 'stand', stand: e.stand, frame: last, geometry: geometryOf(e.sim), result: { ...e.result }, next: e.next ? geometryOf(e.next) : null }, transfer);
+  held.push({ stand: e.stand, sim: e.sim, tracker, result: e.result });
   if (!e.next || !e.parentOf) return;
   const next = new Tracker(e.next, { tracker: tracker!, parentOf: e.parentOf });
   if (selected !== null) {
@@ -126,6 +136,16 @@ function onStandDone(e: StandDone): void {
   tracker = next;
   sim = e.next;
   (self as unknown as { __sim: Sim }).__sim = e.next;
+}
+
+/** the finished stands' pictures again, in the field (and directions) now asked for */
+function refreshHeld(): void {
+  for (const h of held) {
+    const [f, transfer] = makeFrame(h.sim, h.tracker);
+    f.running = false;
+    f.stand = h.stand;
+    post({ type: 'stand', stand: h.stand, frame: f, geometry: geometryOf(h.sim), result: { ...h.result }, next: null, refresh: true }, transfer);
+  }
 }
 
 /** the pass is over: one stand as before (its phase), a tandem when the last stand has been closed */
@@ -175,6 +195,7 @@ self.onmessage = (e: MessageEvent<ToWorker>) => {
         tandem.onStandDone = onStandDone;
         sim = tandem.sim;
         tracker = new Tracker(sim);
+        held = [];
         selected = null;
         // headless checks read the simulation itself through the worker target (tools/browser/explorer.mjs)
         (self as unknown as { __sim: Sim }).__sim = sim;
@@ -194,6 +215,7 @@ self.onmessage = (e: MessageEvent<ToWorker>) => {
         break;
       case 'field':
         field = m.field;
+        refreshHeld();
         if (!running) frame();
         break;
       case 'select':
@@ -202,6 +224,7 @@ self.onmessage = (e: MessageEvent<ToWorker>) => {
         break;
       case 'dirs':
         dirsOn = m.on;
+        refreshHeld();
         if (!running) frame();
         break;
     }
