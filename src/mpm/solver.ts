@@ -97,7 +97,8 @@ export interface Diagnostics {
   inertiaRatio: number;
   /**
    * The same, measured: the kinetic energy the rolls put into the strip per second, ṁ (v1² − v0²)/2,
-   * over the plastic work per second, since the last read (steady phase only; null otherwise)
+   * over the plastic work per second, since the last read (steady phase only; null otherwise).
+   * Each diagnostics() call closes the interval, so reading it from a second place shortens it.
    */
   kineticRatio: number | null;
 }
@@ -1293,7 +1294,7 @@ export class Sim {
     return { thickness: top - bot, speed: sv / c };
   }
 
-  /** Diagnostics; the force averages restart after each call. */
+  /** Diagnostics; the force averages and the kinetic-energy interval restart after each call. */
   diagnostics(): Diagnostics {
     if (this.accSteps > 0) {
       const steps = this.accSteps;
