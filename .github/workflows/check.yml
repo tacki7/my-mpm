@@ -1,0 +1,29 @@
+# The regression gate on every push (any branch) and on pull requests from forks:
+# npm ci, then `npm run check` (tsc and every `// @check` script), then the build.
+# A pull request from a branch of this repository is checked by that branch's push
+# run (the same commit), so it does not use the Actions minutes twice.
+name: check
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+concurrency:
+  group: check-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name != github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run check
+      - run: npm run build
