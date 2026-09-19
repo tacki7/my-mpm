@@ -17,7 +17,7 @@ import { StandViews } from './app/standViews.ts';
 import { StandTable } from './app/standTable.ts';
 import type { StandResult } from './mpm/tandem.ts';
 import { attachViewControls } from './app/viewControls.ts';
-import { SteadyForce, drawForceChart, drawHillChart, slabRatio, slabReference, type ForceChartData } from './app/slabOverlay.ts';
+import { SteadyForce, drawForceChart, drawHillChart, slabRatio, slabReference, type ForceChartData, type StandStart } from './app/slabOverlay.ts';
 
 let forceChart: ForceChartData | null = null;
 const steadyForce = new SteadyForce();
@@ -37,13 +37,14 @@ const standViews = new StandViews(document.querySelector<HTMLElement>('.bite')!,
 let runStands = 1;
 let standResults: StandResult[] = [];
 /** a tandem: when each stand began on the pass's clock [ms] and its condition (its entry thickness) */
-let standStarts: { t0: number; P: SimParams }[] = [];
+let standStarts: StandStart[] = [];
 const standTable = new StandTable($('stand-results-section'), $('stand-results'));
-/** the conditions of a stand: the run's, with that stand's entry thickness */
-const standParams = (h0: number): SimParams => {
-  const p = cloneParams(params);
-  p.rolling.h0 = h0;
-  return p;
+/** a stand that begins on the pass's clock at t0 [ms] with entry thickness h0: the run's conditions with that h0,
+ * and the strain of the stands before for the slab method (plane strain from the thickness) */
+const standStart = (t0: number, h0: number): StandStart => {
+  const P = cloneParams(params);
+  P.rolling.h0 = h0;
+  return { t0, P, ep0: (2 / Math.sqrt(3)) * Math.log(params.rolling.h0 / h0) };
 };
 const explorer = new Explorer(
   $('explorer'),
@@ -205,6 +206,7 @@ function startWorker() {
         standViews.setCurrent(m.stand + 1);
         steadyForce.reset(); // the steady force of the stand on show
       }
+      view.frame = standViews.liveFrame(last); // the pass is over: the last stand's kept picture
       dirty = true;
     }
     else if (m.type === 'error') showError(m.message);
@@ -277,10 +279,10 @@ function updateButtons() {
 // ── frames ──────────────────────────────────────────────────────────────────
 function onFrame(f: Frame) {
   last = f;
-  if (runStands > 1 && geometry && standStarts.length <= f.stand) standStarts.push({ t0: f.tOffset * 1e3, P: standParams(geometry.h0) });
+  if (runStands > 1 && geometry && standStarts.length <= f.stand) standStarts.push(standStart(f.tOffset * 1e3, geometry.h0));
   frames++;
   running = f.running;
-  view.frame = f;
+  view.frame = standViews.liveFrame(f);
   const d = f.diag;
   const tPass = (f.tOffset + d.t) * 1e3;
   if (d.step > 0 && (history.t.length === 0 || tPass > history.t[history.t.length - 1])) {
@@ -429,9 +431,9 @@ function drawCharts() {
   const g = geometry;
   if (!g) return;
   // a tandem: each stand's slab level and mark; the friction hill of the stand on show
-  const shown = standStarts[last?.stand ?? 0]?.P ?? params;
+  const shown = standStarts[last?.stand ?? 0];
   forceChart = drawForceChart($<HTMLCanvasElement>('chart-force'), $('legend-force'), history.t, history.F, params, steadyForce.mean, runStands > 1 ? standStarts : undefined);
-  drawHillChart($<HTMLCanvasElement>('chart-hill'), $('legend-hill'), last?.profile, g.contactLength, last?.diag, shown);
+  drawHillChart($<HTMLCanvasElement>('chart-hill'), $('legend-hill'), last?.profile, g.contactLength, last?.diag, shown?.P ?? params, shown?.ep0);
   explorer.draw();
 }
 
@@ -495,7 +497,8 @@ window.__mpm = {
   },
   /** the slab method for the running condition (a tandem: the stand on show), as drawn over the charts; Δ, and MPM / slab over the steady phase (null before it) */
   get slab() {
-    const s = slabReference(standStarts[last?.stand ?? 0]?.P ?? params);
+    const shown = standStarts[last?.stand ?? 0];
+    const s = slabReference(shown?.P ?? params, shown?.ep0);
     return {
       force: s.force,
       torque: s.torque,

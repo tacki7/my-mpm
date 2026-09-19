@@ -51,11 +51,11 @@ const cache = new Map<string, SlabReference>();
 const CACHE_SIZE = 8;
 
 /** The slab method for the condition, solved once per condition (about 10–25 ms) and kept. */
-export function slabReference(P: SimParams): SlabReference {
-  const key = JSON.stringify([P.rolling, P.material]);
+export function slabReference(P: SimParams, ep0 = 0): SlabReference {
+  const key = JSON.stringify([P.rolling, P.material, ep0]);
   const kept = cache.get(key);
   if (kept) return kept;
-  const s = karman(P.rolling, P.material);
+  const s = karman(P.rolling, P.material, undefined, ep0);
   // the first reason that breaks the method: a tension at 2k makes the pressure negative at that
   // end (the branches then need not cross either), sticking breaks Coulomb friction, and without
   // a neutral point friction cannot draw the strip in
@@ -204,6 +204,13 @@ const BLUE = '#1f3f7a';
 const COPPER = '#9c4a1c';
 
 /** what the force chart last drew (the headless checks read it) */
+/** a tandem's stand on the force chart: when it began on the pass's clock [ms], its condition (its entry thickness), and the strain its strip brings in */
+export interface StandStart {
+  t0: number;
+  P: SimParams;
+  ep0: number;
+}
+
 export interface ForceChartData {
   t: number[];
   raw: number[];
@@ -231,15 +238,15 @@ export function drawForceChart(
   F: number[],
   P: SimParams,
   steadyForce: number | null,
-  /** a tandem: when each stand began [ms] and its condition (its entry thickness); one stand: omitted */
-  stands?: { t0: number; P: SimParams }[],
+  /** a tandem: when each stand began [ms], its condition (its entry thickness) and the strain it brings in; one stand: omitted */
+  stands?: StandStart[],
 ): ForceChartData {
   const window = smoothingWindow(P);
   const smooth = movingAverage(t, F, window * 1e3);
   const tandem = stands?.length ? stands : null;
   // the stand on show (the last begun) sets the note and the slab method's reason when outside it
-  const shown = tandem ? tandem[tandem.length - 1].P : P;
-  const slab = slabReference(shown);
+  const shown = tandem ? tandem[tandem.length - 1] : { P, ep0: 0 };
+  const slab = slabReference(shown.P, shown.ep0);
   const series: Series[] = [
     { x: t, y: F, color: INK_FAINT, label: '1 フレームの平均', width: 1 },
     { x: t, y: smooth, color: INK, label: '移動平均', width: 1.8 },
@@ -248,9 +255,9 @@ export function drawForceChart(
   const levels: (number | null)[] = [];
   if (t.length > 1) {
     // the slab method's level, per stand from its start to the next one's (one stand: the whole time)
-    const spans = tandem ?? [{ t0: t[0], P }];
+    const spans: StandStart[] = tandem ?? [{ t0: t[0], P, ep0: 0 }];
     spans.forEach((sp, k) => {
-      const ref = slabReference(sp.P);
+      const ref = slabReference(sp.P, sp.ep0);
       levels.push(ref.outside ? null : ref.force * 1e-6);
       if (ref.outside) return;
       const f = ref.force * 1e-6;
@@ -294,8 +301,10 @@ export function drawHillChart(
   contactLength: number,
   diag: Diagnostics | null | undefined,
   P: SimParams,
+  /** a tandem's later stand: the strain the strip brings in */
+  ep0 = 0,
 ): void {
-  const slab = slabReference(P);
+  const slab = slabReference(P, ep0);
   const xs = pr ? Array.from(pr.x, (x) => x * 1e3) : [];
   const series: Series[] = pr
     ? [

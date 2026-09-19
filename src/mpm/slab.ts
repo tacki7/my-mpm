@@ -58,9 +58,11 @@ export interface SlabResult {
 
 /**
  * Solve the roll bite. `n` is the number of intervals along the contact (RK4 on a
- * uniform grid; the default converges the force to about 1e-6).
+ * uniform grid; the default converges the force to about 1e-6). `ep0` is the equivalent
+ * plastic strain the strip brings into the bite (a tandem's later stands: the strain of the
+ * stands before); the flow stress along the bite is taken at ep0 + (2/√3) ln(h0/h).
  */
-export function karman(r: RollingParams, m: MaterialParams, n = 2000): SlabResult {
+export function karman(r: RollingParams, m: MaterialParams, n = 2000, ep0 = 0): SlabResult {
   const { gap: hf, contactLength: L, biteAngle } = biteGeometry(r);
   const R = r.rollRadius;
   const h0 = r.h0;
@@ -79,7 +81,7 @@ export function karman(r: RollingParams, m: MaterialParams, n = 2000): SlabResul
     const vExit = r.millSpeed * (1 + slip);
     const twoKAt = (x: number) => {
       const h = thick(x);
-      const ep = c * Math.log(h0 / h);
+      const ep = ep0 + c * Math.log(h0 / h);
       // ε̇eq = (2/√3)|ε̇yy|, ε̇yy = v (dh/dx)/h, v = vExit hf/h, dh/dx = −2 tan φ
       const rate = (c * vExit * hf * 2 * tanPhi(x)) / (h * h);
       return c * flowStress(m, ep, rate, m.tRoom).sy;
