@@ -61,6 +61,8 @@ export interface Crack {
   criterion: DamageModel;
   /** failed points that belong to this crack */
   count: number;
+  /** tandem (src/mpm/tandem.ts): the stand it started in, set once that stand is over; absent in a single pass */
+  stand?: number;
 }
 
 export type Phase = 'approach' | 'bite' | 'steady' | 'tail-out' | 'done' | 'stalled';
@@ -294,6 +296,9 @@ export class Sim {
   private accFy = [0, 0];
   private accTorque = [0, 0];
   private accPush = 0;
+  // a second window of the same sums, read and restarted only by readWindow() (src/mpm/tandem.ts): the page reads
+  // diagnostics() every frame, and a tandem's stand results must not depend on how often it does
+  private readonly win = { steps: 0, fy: [0, 0], tq: [0, 0] };
   // the last averages, repeated when nothing was stepped in between (e.g. a read while paused)
   private lastForce = 0;
   private lastTorque = 0;
@@ -811,6 +816,12 @@ export class Sim {
     this.accFy[1] += fyAcc[1];
     this.accTorque[0] += tqAcc[0];
     this.accTorque[1] += tqAcc[1];
+    const win = this.win;
+    win.steps++;
+    win.fy[0] += fyAcc[0];
+    win.fy[1] += fyAcc[1];
+    win.tq[0] += tqAcc[0];
+    win.tq[1] += tqAcc[1];
     this.accPush += pushImpulse * invDt;
   }
 
@@ -1638,6 +1649,22 @@ export class Sim {
     }
     if (c < this.NJ) return null;
     return { thickness: top - bot, speed: sv / c };
+  }
+
+  /**
+   * The roll force [N/m] and torque [N·m/m] over the steps since the last call (mean of both rolls, as
+   * diagnostics() takes them over its own window), and restart. Apart from diagnostics(): reading one does not
+   * restart the other. Null when no step was taken.
+   */
+  readWindow(): { force: number; torque: number; steps: number } | null {
+    const w = this.win;
+    const steps = w.steps;
+    if (steps === 0) return null;
+    const force = (Math.abs(w.fy[0]) + Math.abs(w.fy[1])) / 2 / steps;
+    const torque = (-w.tq[0] + w.tq[1]) / 2 / steps;
+    w.steps = 0;
+    w.fy[0] = w.fy[1] = w.tq[0] = w.tq[1] = 0;
+    return { force, torque, steps };
   }
 
   /** Diagnostics; the force averages and the kinetic-energy interval restart after each call. */
