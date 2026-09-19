@@ -22,6 +22,8 @@ export class StandViews {
   private slots: Slot[] = [];
   stands = 1;
   current = 0;
+  /** the pass is over (no stand is running) */
+  private over = false;
 
   constructor(bite: HTMLElement, live: BiteView, liveCanvas: HTMLCanvasElement) {
     this.bite = bite;
@@ -44,6 +46,7 @@ export class StandViews {
     }
     this.stands = stands;
     this.current = 0;
+    this.over = false;
     this.live.scaleFrom = null;
     this.live.rangeOverride = null;
     this.bite.classList.toggle('tandem', stands > 1);
@@ -93,12 +96,18 @@ export class StandViews {
     this.place();
   }
 
+  /** the pass is over: no stand is running any more */
+  finish(): void {
+    this.over = true;
+    this.place();
+  }
+
   private place(): void {
     this.slots.forEach((s, k) => {
       s.el.classList.toggle('current', k === this.current);
       s.el.classList.toggle('done', k < this.current);
       s.canvas.hidden = k === this.current;
-      s.label.textContent = k < this.current ? `#${k + 1}` : k === this.current ? `#${k + 1}（計算中）` : `#${k + 1}（まだ）`;
+      s.label.textContent = k < this.current || this.over ? `#${k + 1}` : k === this.current ? `#${k + 1}（計算中）` : `#${k + 1}（まだ）`;
     });
     const slot = this.slots[this.current];
     if (slot) slot.el.prepend(this.liveCanvas);
