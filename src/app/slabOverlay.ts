@@ -236,7 +236,7 @@ export function drawForceChart(
 ): ForceChartData {
   const window = smoothingWindow(P);
   const smooth = movingAverage(t, F, window * 1e3);
-  const tandem = stands && stands.length > 1 ? stands : null;
+  const tandem = stands?.length ? stands : null;
   // the stand on show (the last begun) sets the note and the slab method's reason when outside it
   const shown = tandem ? tandem[tandem.length - 1].P : P;
   const slab = slabReference(shown);
@@ -244,15 +244,16 @@ export function drawForceChart(
     { x: t, y: F, color: INK_FAINT, label: '1 フレームの平均', width: 1 },
     { x: t, y: smooth, color: INK, label: '移動平均', width: 1.8 },
   ];
-  const levels: number[] = [];
+  // the slab method's level of each stand (null where the method does not hold)
+  const levels: (number | null)[] = [];
   if (t.length > 1) {
     // the slab method's level, per stand from its start to the next one's (one stand: the whole time)
     const spans = tandem ?? [{ t0: t[0], P }];
     spans.forEach((sp, k) => {
       const ref = slabReference(sp.P);
+      levels.push(ref.outside ? null : ref.force * 1e-6);
       if (ref.outside) return;
       const f = ref.force * 1e-6;
-      levels.push(f);
       const t1 = k + 1 < spans.length ? spans[k + 1].t0 : t[t.length - 1];
       series.push({ x: [k === 0 ? t[0] : sp.t0, t1], y: [f, f], color: STEEL, label: 'スラブ法', width: 1.4, dash: [6, 4] });
     });
@@ -269,7 +270,13 @@ export function drawForceChart(
     item(INK_FAINT, '1 フレームの平均', 'thin'),
     slab.outside
       ? `<span class="note">${slab.outside}</span>`
-      : item(STEEL, tandem ? `スラブ法（Kármán）スタンドごと ${levels.map((f) => f.toFixed(2)).join(' / ')} kN/mm` : `スラブ法（Kármán）${(slab.force * 1e-6).toFixed(2)} kN/mm`, 'dashed'),
+      : item(
+          STEEL,
+          tandem
+            ? `スラブ法（Kármán）スタンドごと ${levels.map((f, k) => `#${k + 1} ${f != null ? f.toFixed(2) : '—'}`).join(' / ')} kN/mm`
+            : `スラブ法（Kármán）${(slab.force * 1e-6).toFixed(2)} kN/mm`,
+          'dashed',
+        ),
     ...(note ? [`<span class="note">${note}</span>`] : []),
   ]);
   // copies: t and F are the page's history, which grows between frames
