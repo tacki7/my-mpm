@@ -13,7 +13,8 @@
 //   Hancock-MacKenzie, Cockcroft-Latham, porosity / fc); a particle whose governing
 //   indicator reaches 1 fails and carries no deviatoric stress from then on
 // - the rolls are analytic rigid cylinders; contact is a Coulomb-friction
-//   velocity projection on the grid nodes that see a penetrating particle
+//   velocity projection on the grid nodes on the roll side of a penetrating
+//   particle, which also carry the normal velocity it needs to follow the roll
 //
 // World frame: x along rolling (the exit plane of the rigid rolls is x = 0),
 // y through the thickness (mid-plane y = 0). Everything per unit width.
@@ -164,7 +165,7 @@ export class Sim {
   readonly gB: Float64Array; // 'rate': mass-weighted relaxation fraction β_i
   readonly gMv: Float64Array; // 'rate': nodal mass of the points in the averages (intact, J > 0)
   readonly gcon: Uint8Array; // this step: bit k set when roll k constrains the node
-  private readonly gfolN: Float64Array; // 'roll-side-fix': Σ w m (requested normal velocity change) per node
+  private readonly gfolN: Float64Array; // 'surface': Σ w m (requested normal velocity change) per node
   private readonly gfolD: Float64Array; // Σ w m
 
   // particles (lattice order: index = i * NJ + j, i from the tail)
@@ -499,8 +500,8 @@ export class Sim {
     const tractionF = this.frontNow * this.dp * this.frontScale;
     const { li, NI } = this;
     const pushing = this.pusherActive;
-    // 'roll-side': a penetrating point marks only the nodes on the roll side of it (the top roll is roll 0)
-    const rollSide = this.params.numerics.contact.startsWith('roll-side');
+    // 'surface': a penetrating point marks only the nodes on its roll side and its nearest row (the top roll is roll 0)
+    const rollSide = this.params.numerics.contact === 'surface';
     const hh = 0.5 * h;
     for (let p = 0; p < n; p++) {
       if (!active[p]) continue;
@@ -579,9 +580,6 @@ export class Sim {
     const tqAcc = [0, 0];
     const nNodes = nxN * nyN;
     const mMin = 1e-12 * this.mass[0];
-    // 'node' / 'node-half': a marked node is constrained only inside the roll (or within h/2 of its surface)
-    const contact = this.params.numerics.contact;
-    const reach = contact === 'node' ? 0 : contact === 'node-half' ? 0.5 * h : Infinity;
     for (let idx = 0; idx < nNodes; idx++) {
       const m = gm[idx];
       if (m <= mMin) {
@@ -600,7 +598,6 @@ export class Sim {
         const rx = xi - roll.cx;
         const ry = yi - roll.cy;
         const d = Math.hypot(rx, ry);
-        if (d - roll.R > reach) continue;
         const nx = rx / d;
         const ny = ry / d;
         // roll surface velocity at the foot of the node
@@ -652,7 +649,7 @@ export class Sim {
       gvx[idx] = vx;
       gvy[idx] = vy;
     }
-    if (this.params.numerics.contact === 'roll-side-fix') this.followRoll(fyAcc, tqAcc);
+    if (this.params.numerics.contact === 'surface') this.followRoll(fyAcc, tqAcc);
     this.accSteps++;
     this.binSteps++;
     this.accFy[0] += fyAcc[0];
@@ -683,7 +680,6 @@ export class Sim {
     const b0 = (r0.R + 2 * h) * (r0.R + 2 * h);
     const b1 = (r1.R + 2 * h) * (r1.R + 2 * h);
     const invK = 1 / this.el.K;
-    const stop = this.params.numerics.contact === 'roll-side-stop';
     for (let p = 0; p < n; p++) {
       if (!active[p]) continue;
       const gx = (px[p] - ox) * invH;
@@ -733,7 +729,6 @@ export class Sim {
       this.c11[p] = l11;
       vx[p] = nvx;
       vy[p] = nvy;
-      if (stop && this.touch[p]) this.stopAtRoll(p);
       if (!jbar) continue;
       if (rate) {
         const m = mass[p];
@@ -814,7 +809,7 @@ export class Sim {
   }
 
   /**
-   * 'roll-side-fix': a point whose edge is inside a roll must not move further into it. Its velocity
+   * 'surface': a point whose edge is inside a roll must not move further into it. Its velocity
    * interpolates the constrained nodes on its roll side and free nodes deeper in the sheet, which move
    * toward the mid-plane more slowly than the roll surface (the flow converges less at depth), so it
    * would lag behind the surface and sink into the roll. The deficit of its normal velocity, over the
@@ -890,38 +885,6 @@ export class Sim {
       fyAcc[k] += -f * ny;
       tqAcc[k] += -(rx * f * ny - ry * f * nx);
       const b = col - this.binCol0;
-      if (b >= 0 && b < this.nBins) this.binN[b] += f;
-    }
-  }
-
-  /**
-   * A point whose edge is inside a roll does not move further into it: its velocity
-   * relative to the roll surface loses the part toward the roll. The impulse is a
-   * contact force on the sheet, added to the roll force, torque and profile.
-   */
-  private stopAtRoll(p: number): void {
-    const { px, py, vx, vy } = this;
-    for (let k = 0; k < 2; k++) {
-      if (!(this.touch[p] & (1 << k))) continue;
-      const roll = this.rolls[k];
-      const rx = px[p] - roll.cx;
-      const ry = py[p] - roll.cy;
-      const d = Math.hypot(rx, ry);
-      const nx = rx / d;
-      const ny = ry / d;
-      const ux = -roll.omega * roll.R * ny;
-      const uy = roll.omega * roll.R * nx;
-      const vn = (vx[p] - ux) * nx + (vy[p] - uy) * ny;
-      if (vn >= 0) continue;
-      vx[p] -= vn * nx;
-      vy[p] -= vn * ny;
-      const f = (-this.mass[p] * vn) / this.dt; // on the sheet, along n
-      const fx = f * nx;
-      const fy = f * ny;
-      this.accFy[k] += -fy;
-      this.accTorque[k] += -(rx * fy - ry * fx);
-      // normal only: nothing for the friction profile
-      const b = Math.floor((px[p] - this.binX0) / this.binW);
       if (b >= 0 && b < this.nBins) this.binN[b] += f;
     }
   }

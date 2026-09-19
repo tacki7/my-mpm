@@ -1,7 +1,7 @@
 // Compare the ways the roll contact marks grid nodes (`numerics.contact`) on the
 // standard pass. Not part of the gate; the numbers go to docs/validation.md.
 //
-//   node tools/contact-compare.mjs [--contact stencil,roll-side,node,node-half] [--cells 6,10,14]
+//   node tools/contact-compare.mjs [--contact stencil,surface] [--cells 6,10,14]
 //                                  [--jbar on,off] [--L 8] [--window 250] [--mu 0.08]
 //
 // For each run, over the steady phase: roll force and torque, exit thickness,
@@ -19,7 +19,7 @@ const opt = (name, def) => {
   const i = args.indexOf(`--${name}`);
   return i >= 0 ? args[i + 1] : def;
 };
-const contacts = opt('contact', 'stencil,roll-side,node,node-half').split(',');
+const contacts = opt('contact', 'stencil,surface').split(',');
 const cellsList = opt('cells', '6').split(',').map(Number);
 const jbars = opt('jbar', 'on').split(',');
 const L = +opt('L', 8) * 1e-3;

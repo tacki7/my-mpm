@@ -122,14 +122,14 @@ export interface RollingParams {
 export type VolumetricScheme = 'rate' | 'total';
 
 /**
- * Which grid nodes the roll contact constrains. A node is constrained only if a particle it takes
- * mass from penetrates the roll; then:
- * - 'stencil': every node of that particle's 3 × 3 stencil (3 node rows along each surface, ~1.5 cells)
- * - 'roll-side': only the nodes on the roll side of the particle (within h/2 of it on the far side)
- * - 'node': only the nodes inside the roll
- * - 'node-half': only the nodes inside the roll or within h/2 of its surface
+ * Which grid nodes the roll contact constrains, once a particle's edge is inside a roll:
+ * - 'surface': the nodes on the roll side of the particle and those within h/2 beyond it along the
+ *   roll normal (its nearest row). A point that would still move into the roll asks the normal
+ *   velocity it lacks of those nodes, so it follows the roll surface (docs/model.md「接触」)
+ * - 'stencil': every node of the particle's 3 × 3 stencil: 3 node rows along each surface, a band
+ *   about 1.5 cells deep held to the roll (the contact before; it stiffens the sheet)
  */
-export type ContactMarking = 'stencil' | 'roll-side' | 'roll-side-stop' | 'roll-side-fix' | 'node' | 'node-half';
+export type ContactScheme = 'surface' | 'stencil';
 
 export interface NumericsParams {
   cellsThrough: number; // grid cells through the entry thickness
@@ -151,7 +151,7 @@ export interface NumericsParams {
    */
   volRelaxContact?: number;
   /** which nodes the roll contact constrains */
-  contact: ContactMarking;
+  contact: ContactScheme;
 }
 
 /**
@@ -311,7 +311,7 @@ export function defaultParams(): SimParams {
       volumetric: 'rate',
       volRelax: 1,
       volRelaxContact: 5,
-      contact: 'roll-side-fix',
+      contact: 'surface',
     },
     defects: [],
   };
