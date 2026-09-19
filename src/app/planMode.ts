@@ -5,7 +5,7 @@
 import { cloneParams, type SimParams } from '../mpm/params.ts';
 import type { PlanSettings } from '../mpm/planview/condition.ts';
 import type { PlanPhase } from '../mpm/planview/sim.ts';
-import { TAIL_GAP } from '../mpm/planview/steady.ts';
+import { steadyGap, steadyLength } from '../mpm/planview/steady.ts';
 import { css, split, temper } from './colormap.ts';
 import { checkRange } from './fieldCheck.ts';
 import { edited, showNumber } from './numberInput.ts';
@@ -17,8 +17,6 @@ import { conditionsQuery } from './query.ts';
 export type ViewMode = 'section' | 'plan';
 
 const mm = 1e-3;
-/** a strip shorter than this has no steady looks (the tail comes within 8 mm of the entry before the steady phase) [m] */
-const STEADY_LENGTH = 28e-3;
 
 const phaseText: Record<PlanPhase, string> = {
   approach: 'ロールに向かっている',
@@ -396,17 +394,20 @@ export class PlanMode {
         return tr;
       }),
     );
-    // a strip too short for the window: the tail comes within reach of the entry before the steady phase
+    // a strip too short for the window: the tail comes within the gap of the entry before the head is the gap past the exit
     const L = this.params!.rolling.sheetLength;
-    const short = L < STEADY_LENGTH - 1e-12;
+    const gap = steadyGap(g.halfWidth0);
+    const enough = steadyLength(g.halfWidth0);
+    const short = L < enough - 1e-12;
+    const mmOf = (v: number) => +(v * 1e3).toFixed(3);
     this.$('plan-results-note').textContent =
-      `定常の値は、尾端が入口より ${TAIL_GAP * 1e3} mm 以上手前にある間の平均（${SAMPLE_NOTE}）。` +
+      `定常の値は、頭端が出口の先に、尾端が入口の手前にそれぞれ ${mmOf(gap)} mm（8 mm か半幅の大きい方）以上ある間の平均（${SAMPLE_NOTE}）。` +
       (steady
         ? ''
         : none
-          ? `この板の長さ（${+(L * 1e3).toFixed(3)} mm）では定常の読みが無かった。板の長さを ${STEADY_LENGTH * 1e3} mm 以上にする。`
+          ? `この板の長さ（${mmOf(L)} mm）では定常の読みが無かった。板の長さを ${mmOf(enough)} mm 以上にする。`
           : short
-            ? `板の長さ ${+(L * 1e3).toFixed(3)} mm では定常の読みが出ない見込み（${STEADY_LENGTH * 1e3} mm 以上に）。薄い字は直前の読み。`
+            ? `板の長さ ${mmOf(L)} mm では定常の読みが出ない見込み（${mmOf(enough)} mm 以上に）。薄い字は直前の読み。`
             : 'まだ無いので、薄い字は直前の読み。');
     this.showClock();
     this.$('plan-phase').textContent = phaseText[d.phase];
