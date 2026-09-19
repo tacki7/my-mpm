@@ -59,8 +59,8 @@ async function mouseChecks(c) {
   await c.waitFor(`__mpm.view.zoom > ${z0} * 1.3`, 5000).catch(() => {});
   const z1 = await c.evaluate('__mpm.view.zoom');
   ok(z1 > z0 * 1.3, 'a real wheel on the slot zooms', `${z0.toFixed(2)} → ${z1.toFixed(2)}`);
-  // while zoomed in: a point near the slot's centre with no other point within 4 px on screen (the points of a later
-  // stand can sit 1–2 px apart, and a click lands on whole pixels), clicked where it is drawn
+  // while zoomed in: a point near the slot's centre that is the nearest, by a pixel or more, to the whole pixel it is
+  // clicked at (a later stand's points can sit 1–2 px apart on screen, and a click lands on whole pixels)
   const pick = await c.evaluate(`(() => {
     const b = document.getElementById('bite').getBoundingClientRect();
     const all = [];
@@ -68,7 +68,9 @@ async function mouseChecks(c) {
     for (let id = 0; id < all.length; id++) {
       const s = all[id];
       if (Math.abs(s.x - (b.x + b.width / 2)) > b.width / 5 || Math.abs(s.y - (b.y + b.height / 2)) > b.height / 5) continue;
-      if (all.every((o, j) => j === id || Math.hypot(o.x - s.x, o.y - s.y) >= 4)) return { id, x: s.x, y: s.y };
+      const x = Math.round(s.x), y = Math.round(s.y);
+      const d = Math.hypot(s.x - x, s.y - y);
+      if (all.every((o, j) => j === id || Math.hypot(o.x - x, o.y - y) >= d + 1)) return { id, x, y };
     }
     return null;
   })()`);
@@ -281,8 +283,12 @@ try {
     );
     await c.screenshot(join(dir, `tandem-5-${w}.png`));
     console.log(`shot  ${join(dir, `tandem-5-${w}.png`)}`);
-    // the widest the numbers get: every value filled with its longest usual form (a table of its own, from the
-    // page's module through the dev server, on the same section)
+  }
+  // the widest the numbers get: every value filled with its longest usual form (a table of its own, from the
+  // page's module through the dev server, on the same section), after the real ones
+  for (const [w, h] of [[1600, 1000], [700, 1600]]) {
+    await c.setViewport(w, h);
+    await painted();
     const worst = await c.evaluate(`(async () => {
       const { StandTable } = await import('/src/app/standTable.ts');
       const t = new StandTable(document.getElementById('stand-results-section'), document.getElementById('stand-results'));
