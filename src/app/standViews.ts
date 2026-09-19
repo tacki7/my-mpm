@@ -45,6 +45,8 @@ export class StandViews {
     this.current = 0;
     this.live.scaleFrom = null;
     this.live.rangeOverride = null;
+    this.bite.classList.toggle('tandem', stands > 1);
+    this.bite.style.setProperty('--stands', String(stands));
     if (stands <= 1) return;
     this.live.scaleFrom = g;
     const row = document.createElement('div');
@@ -121,6 +123,16 @@ export class StandViews {
     const range = same.length ? fieldRange(same) : null;
     this.live.rangeOverride = range;
     for (const s of this.slots) s.view.rangeOverride = range;
+  }
+
+  /** for the checks: what each slot shows */
+  hook(): { stand: number; live: boolean; field: string | null; step: number | null; dirs: boolean; width: number }[] {
+    return this.slots.map((s, k) => {
+      const live = k === this.current;
+      const f = live ? this.live.frame : s.view.frame;
+      const c = live ? this.liveCanvas : s.canvas;
+      return { stand: k, live, field: f?.field ?? null, step: f ? f.diag.step : null, dirs: !!f?.dirs, width: c.getBoundingClientRect().width };
+    });
   }
 
   /** one picture of the stands side by side, each with its number (the PNG export); one stand: the live canvas */

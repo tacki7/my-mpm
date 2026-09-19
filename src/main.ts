@@ -544,9 +544,9 @@ window.__mpm = {
   get params() {
     return cloneParams(params);
   },
-  /** the slab method for the running condition, as drawn over the charts; Δ, and MPM / slab over the steady phase (null before it) */
+  /** the slab method for the running condition (a tandem: the stand on show), as drawn over the charts; Δ, and MPM / slab over the steady phase (null before it) */
   get slab() {
-    const s = slabReference(params);
+    const s = slabReference(standStarts[last?.stand ?? 0]?.P ?? params);
     return {
       force: s.force,
       torque: s.torque,
@@ -568,7 +568,6 @@ window.__mpm = {
   get explorer() {
     return { role: explorer.shownRole, id: explorer.shown?.id ?? null };
   },
-  /** the points the stress explorer follows, with their paths (flat η, εp, D) */
   /** the tandem: the stand on show (0 first), the stands of the run, the finished stands' results */
   get stand() {
     return last?.stand ?? 0;
@@ -579,6 +578,11 @@ window.__mpm = {
   get standResults() {
     return standResults.map((r) => ({ ...r }));
   },
+  /** the pictures side by side: each slot's stand, the field and step of the frame it holds (null: none yet), live or held */
+  get standFrames() {
+    return standViews.hook();
+  },
+  /** the points the stress explorer follows, with their paths (flat η, εp, D) */
   get tracks() {
     return last?.tracks ?? [];
   },
