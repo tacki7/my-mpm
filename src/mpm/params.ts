@@ -121,6 +121,16 @@ export interface RollingParams {
  */
 export type VolumetricScheme = 'rate' | 'total';
 
+/**
+ * Which grid nodes the roll contact constrains, once a particle's edge is inside a roll:
+ * - 'surface': the nodes on the roll side of the particle and those within h/2 beyond it along the
+ *   roll normal (its nearest row). A point that would still move into the roll asks the normal
+ *   velocity it lacks of those nodes, so it follows the roll surface (docs/model.md「接触」)
+ * - 'stencil': every node of the particle's 3 × 3 stencil: 3 node rows along each surface, a band
+ *   about 1.5 cells deep held to the roll (the contact before; it stiffens the sheet)
+ */
+export type ContactScheme = 'surface' | 'stencil';
+
 export interface NumericsParams {
   cellsThrough: number; // grid cells through the entry thickness
   ppc: number; // particles per cell per direction
@@ -136,10 +146,13 @@ export interface NumericsParams {
    */
   volRelax?: number;
   /**
-   * 'rate': the same within two cells of a roll surface, where the contact projection pins the
-   * velocity of a ~1.5-cell band and the discrete flow cannot stay isochoric. Default 5
+   * 'rate': the same within two cells of a roll surface. Default 1. With the 'stencil' contact, which
+   * holds a ~1.5-cell band to the roll so that the discrete flow cannot stay isochoric there, 5 made
+   * up for the band (and 1 locks: 5.05 kN/mm on the standard pass at 6 cells)
    */
   volRelaxContact?: number;
+  /** which nodes the roll contact constrains */
+  contact: ContactScheme;
 }
 
 /**
@@ -298,7 +311,8 @@ export function defaultParams(): SimParams {
       jbar: true,
       volumetric: 'rate',
       volRelax: 1,
-      volRelaxContact: 5,
+      volRelaxContact: 1,
+      contact: 'surface',
     },
     defects: [],
   };

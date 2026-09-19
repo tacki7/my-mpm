@@ -13,7 +13,8 @@
 //   Hancock-MacKenzie, Cockcroft-Latham, porosity / fc); a particle whose governing
 //   indicator reaches 1 fails and carries no deviatoric stress from then on
 // - the rolls are analytic rigid cylinders; contact is a Coulomb-friction
-//   velocity projection on the grid nodes that see a penetrating particle
+//   velocity projection on the grid nodes on the roll side of a penetrating
+//   particle, which also carry the normal velocity it needs to follow the roll
 //
 // World frame: x along rolling (the exit plane of the rigid rolls is x = 0),
 // y through the thickness (mid-plane y = 0). Everything per unit width.
@@ -163,6 +164,9 @@ export class Sim {
   readonly gJe: Float64Array; // 'rate': β_i × mass-weighted mean of the elastic log volume ln J − ev
   readonly gB: Float64Array; // 'rate': mass-weighted relaxation fraction β_i
   readonly gMv: Float64Array; // 'rate': nodal mass of the points in the averages (intact, J > 0)
+  readonly gcon: Uint8Array; // this step: bit k set when roll k constrains the node
+  private readonly gfolN: Float64Array; // 'surface': Σ w m (requested normal velocity change) per node
+  private readonly gfolD: Float64Array; // Σ w m
 
   // particles (lattice order: index = i * NJ + j, i from the tail)
   readonly n: number;
@@ -222,6 +226,7 @@ export class Sim {
   readonly active: Uint8Array;
   readonly failed: Uint8Array;
   readonly tag: Uint8Array; // 1 tail column, 2 head column
+  readonly touch: Uint8Array; // this step: bit k set when the point's edge is inside roll k (P2G)
   readonly crackId: Int32Array;
 
   t = 0;
@@ -303,6 +308,9 @@ export class Sim {
     this.gvy = new Float64Array(nNodes);
     this.gpen = [new Float64Array(nNodes), new Float64Array(nNodes)];
     this.gpush = new Uint8Array(nNodes);
+    this.gcon = new Uint8Array(nNodes);
+    this.gfolN = new Float64Array(nNodes);
+    this.gfolD = new Float64Array(nNodes);
     this.gJ = new Float64Array(nNodes);
     this.gJe = new Float64Array(nNodes);
     this.gB = new Float64Array(nNodes);
@@ -395,6 +403,7 @@ export class Sim {
     this.active = new Uint8Array(n);
     this.failed = new Uint8Array(n);
     this.tag = new Uint8Array(n);
+    this.touch = new Uint8Array(n);
     this.crackId = new Int32Array(n).fill(-1);
 
     // Entry speed from mass flow, a little under the roll speed.
@@ -459,6 +468,7 @@ export class Sim {
     gpen0.fill(INF);
     gpen1.fill(INF);
     gpush.fill(0);
+    this.gcon.fill(0);
     this.updatePusher();
     if (!this.pusherActive && !this.stalled && this.step % 50 === 0) this.checkStall();
     this.p2g();
@@ -490,6 +500,9 @@ export class Sim {
     const tractionF = this.frontNow * this.dp * this.frontScale;
     const { li, NI } = this;
     const pushing = this.pusherActive;
+    // 'surface': a penetrating point marks only the nodes on its roll side and its nearest row (the top roll is roll 0)
+    const rollSide = this.params.numerics.contact === 'surface';
+    const hh = 0.5 * h;
     for (let p = 0; p < n; p++) {
       if (!active[p]) continue;
       const xp = px[p];
@@ -524,8 +537,15 @@ export class Sim {
 
       // penetration of this point into each roll (its half size along the deformed y edge)
       const rp = 0.5 * this.dp * Math.hypot(this.f01[p], this.f11[p]);
-      const pen0 = Math.hypot(xp - r0.cx, yp - r0.cy) - r0.R - rp;
-      const pen1 = Math.hypot(xp - r1.cx, yp - r1.cy) - r1.R - rp;
+      const d0 = Math.hypot(xp - r0.cx, yp - r0.cy);
+      const d1 = Math.hypot(xp - r1.cx, yp - r1.cy);
+      const pen0 = d0 - r0.R - rp;
+      const pen1 = d1 - r1.R - rp;
+      this.touch[p] = (pen0 < 0 ? 1 : 0) | (pen1 < 0 ? 2 : 0);
+      const n0x = (xp - r0.cx) / d0;
+      const n0y = (yp - r0.cy) / d0;
+      const n1x = (xp - r1.cx) / d1;
+      const n1y = (yp - r1.cy) / d1;
       const pushMark = pushing && tg === 1;
 
       for (let i = 0; i < 3; i++) {
@@ -539,8 +559,9 @@ export class Sim {
           gm[idx] += w * m;
           gvx[idx] += w * (mvx + a00 * dx + a01 * dy);
           gvy[idx] += w * (mvy + a10 * dx + a11 * dy);
-          if (pen0 < gpen0[idx]) gpen0[idx] = pen0;
-          if (pen1 < gpen1[idx]) gpen1[idx] = pen1;
+          // along the roll normal n (roll centre → point): the node lies toward the roll, or within h/2 beyond the point
+          if (pen0 < gpen0[idx] && (!rollSide || dx * n0x + dy * n0y <= hh)) gpen0[idx] = pen0;
+          if (pen1 < gpen1[idx] && (!rollSide || dx * n1x + dy * n1y <= hh)) gpen1[idx] = pen1;
           if (pushMark) gpush[idx] = 1;
         }
       }
@@ -586,6 +607,7 @@ export class Sim {
         const rely = vy - uy;
         const vn = relx * nx + rely * ny;
         if (vn >= 0) continue; // separating
+        this.gcon[idx] |= 1 << k;
         const tx = relx - vn * nx;
         const ty = rely - vn * ny;
         const vt = Math.hypot(tx, ty);
@@ -627,6 +649,7 @@ export class Sim {
       gvx[idx] = vx;
       gvy[idx] = vy;
     }
+    if (this.params.numerics.contact === 'surface') this.followRoll(fyAcc, tqAcc);
     this.accSteps++;
     this.binSteps++;
     this.accFy[0] += fyAcc[0];
@@ -651,7 +674,7 @@ export class Sim {
     const jbar = num.jbar;
     const rate = num.volumetric !== 'total';
     const cIn = num.volRelax ?? 1;
-    const cContact = num.volRelaxContact ?? 5;
+    const cContact = num.volRelaxContact ?? 1;
     // contact band: within 2h of a roll surface, i.e. |x − c| < R + 2h (squared, no sqrt per point)
     const [r0, r1] = this.rolls;
     const b0 = (r0.R + 2 * h) * (r0.R + 2 * h);
@@ -782,6 +805,96 @@ export class Sim {
           gJe[idx] = (b * gJe[idx]) / m;
         }
       }
+    }
+  }
+
+  /**
+   * 'surface': the edge of a point that is inside a roll must not move further into it. The point's
+   * velocity interpolates the constrained nodes on its roll side and free nodes deeper in the sheet,
+   * which move toward the mid-plane more slowly than the roll surface (the flow converges less at
+   * depth), so it would lag behind the surface and sink into the roll. Its edge moves along the normal n
+   * (roll centre → point) at (v − u)·n − rp D_nn (the point also gets thinner at the rate D_nn); what it
+   * lacks, over the weight the point puts on its constrained nodes, is asked of those nodes
+   * (mass-weighted mean of the requests per node), which then carry the velocity the field has there
+   * rather than the surface's. The impulse goes to the roll force, torque and profile like the contact's.
+   */
+  private followRoll(fyAcc: number[], tqAcc: number[]): void {
+    const { n, active, touch, px, py, gvx, gvy, gm, gcon, gfolN, gfolD, mass, h, invH, ox, oy, nyN, dt } = this;
+    const k4 = 4 * invH * invH;
+    const w = [0, 0, 0, 0, 0, 0, 0, 0, 0];
+    const touched: number[] = [];
+    for (let p = 0; p < n; p++) {
+      if (!active[p] || !touch[p]) continue;
+      const gx = (px[p] - ox) * invH;
+      const gy = (py[p] - oy) * invH;
+      const bx = Math.floor(gx - 0.5);
+      const by = Math.floor(gy - 0.5);
+      const fx = gx - bx;
+      const fy = gy - by;
+      const wx = [0.5 * (1.5 - fx) * (1.5 - fx), 0.75 - (fx - 1) * (fx - 1), 0.5 * (fx - 0.5) * (fx - 0.5)];
+      const wy = [0.5 * (1.5 - fy) * (1.5 - fy), 0.75 - (fy - 1) * (fy - 1), 0.5 * (fy - 0.5) * (fy - 0.5)];
+      for (let a = 0; a < 3; a++) for (let c = 0; c < 3; c++) w[a * 3 + c] = wx[a] * wy[c];
+      for (let k = 0; k < 2; k++) {
+        if (!(touch[p] & (1 << k))) continue;
+        const roll = this.rolls[k];
+        const rx = px[p] - roll.cx;
+        const ry = py[p] - roll.cy;
+        const d = Math.hypot(rx, ry);
+        const nx = rx / d;
+        const ny = ry / d;
+        const ux = -roll.omega * roll.R * ny;
+        const uy = roll.omega * roll.R * nx;
+        let e = 0;
+        let W = 0;
+        let dnn = 0; // n·L·n, L the APIC velocity gradient (4/h²) Σ w v ⊗ (x_i − x_p)
+        for (let a = 0; a < 3; a++) {
+          for (let c = 0; c < 3; c++) {
+            const idx = (bx + a) * nyN + by + c;
+            const wi = w[a * 3 + c];
+            const vn = (gvx[idx] - ux) * nx + (gvy[idx] - uy) * ny;
+            e += wi * vn;
+            dnn += wi * (gvx[idx] * nx + gvy[idx] * ny) * ((a - fx) * nx + (c - fy) * ny) * h;
+            if (gcon[idx] & (1 << k)) W += wi;
+          }
+        }
+        // the edge, half the point's deformed height toward the roll
+        const edge = e - 0.5 * this.dp * Math.hypot(this.f01[p], this.f11[p]) * k4 * dnn;
+        if (edge >= 0 || W <= 0) continue;
+        const want = -edge / W;
+        for (let a = 0; a < 3; a++) {
+          for (let c = 0; c < 3; c++) {
+            const idx = (bx + a) * nyN + by + c;
+            if (!(gcon[idx] & (1 << k))) continue;
+            const wm = w[a * 3 + c] * mass[p];
+            // a node the point does not weigh (fx or fy exactly 0.5) gets no request: 0/0 otherwise
+            if (!(wm > 0)) continue;
+            if (gfolD[idx] === 0) touched.push(idx);
+            gfolN[idx] += wm * want;
+            gfolD[idx] += wm;
+          }
+        }
+      }
+    }
+    const invDt = 1 / dt;
+    for (const idx of touched) {
+      const dv = gfolN[idx] / gfolD[idx];
+      gfolN[idx] = 0;
+      gfolD[idx] = 0;
+      const k = gcon[idx] & 1 ? 0 : 1;
+      const roll = this.rolls[k];
+      const col = Math.floor(idx / nyN);
+      const rx = ox + col * h - roll.cx;
+      const ry = oy + (idx % nyN) * h - roll.cy;
+      const d = Math.hypot(rx, ry);
+      const nx = rx / d;
+      const ny = ry / d;
+      gvx[idx] += dv * nx;
+      gvy[idx] += dv * ny;
+      const f = gm[idx] * dv * invDt; // on the sheet, along n
+      fyAcc[k] += -f * ny;
+      tqAcc[k] += -(rx * f * ny - ry * f * nx);
+      const b = col - this.binCol0;
+      if (b >= 0 && b < this.nBins) this.binN[b] += f;
     }
   }
 

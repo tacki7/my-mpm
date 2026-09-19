@@ -173,6 +173,7 @@ const RULES: Record<string, Rule> = {
   'numerics.volumetric': { oneOf: ['rate', 'total'] },
   'numerics.volRelax': r(0, 10),
   'numerics.volRelaxContact': r(0, 10),
+  'numerics.contact': { oneOf: ['surface', 'stencil'] },
 };
 
 function allowed(rule: Rule, v: unknown): boolean {
