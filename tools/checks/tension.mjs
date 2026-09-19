@@ -61,9 +61,11 @@ function sectionStress(sim, x0, x1) {
   while (sim.step < 80000) {
     for (let i = 0; i < 50; i++) sim.advance();
     const tail = sim.tailX();
-    // the strip just ahead of the tail once the pusher has let go (from then on only the
-    // back tension and the rolls act on it), while the tail is still well before the bite
-    if (!sim.pusherActive && tail < -sim.contactLength - 1.5e-3) entry.push(sectionStress(sim, tail + 0.5e-3, tail + 1.1e-3));
+    // the strip just ahead of the gripped length at the tail (the tension is shared by the grip's
+    // columns, so the stress builds up across it) once the pusher has let go (from then on only
+    // the back tension and the rolls act on it), while the tail is still well before the bite
+    const grip = (sim.gripCols ?? 0) * sim.dp;
+    if (!sim.pusherActive && tail < -sim.contactLength - grip - 1e-3) entry.push(sectionStress(sim, tail + grip + 0.1e-3, tail + grip + 0.7e-3));
     // once the tail has left the rolls nothing pulls it back: it keeps the exit speed
     if (tail > 0 && tail < 1e3) {
       afterExit++;

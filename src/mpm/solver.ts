@@ -154,6 +154,9 @@ export class Sim {
   readonly n: number;
   readonly NI: number;
   readonly NJ: number;
+  /** lattice columns at each end that stand for the grip (coiler / pay-off reel), h0 long: a tension is shared by
+   *  them, and a point there does not fail (damage is still shown) */
+  readonly gripCols: number;
   readonly lattice: Int32Array; // lattice cell → particle index (−1: void)
   readonly li: Int32Array;
   readonly lj: Int32Array;
@@ -294,6 +297,7 @@ export class Sim {
     const NI = Math.round(r.sheetLength / dp);
     const NJ = Math.round(r.h0 / dp);
     this.NI = NI;
+    this.gripCols = Math.ceil(r.h0 / dp);
     this.NJ = NJ;
     const lattice = new Int32Array(NI * NJ).fill(-1);
     const keep: number[] = [];
@@ -441,9 +445,12 @@ export class Sim {
     const [r0, r1] = this.rolls;
     const k4 = 4 * invH * invH;
     this.updateTension();
-    // force per end point [N/m] per unit of its current height (a stress on the end face)
-    const tractionB = -this.backNow * this.dp * this.backScale;
-    const tractionF = this.frontNow * this.dp * this.frontScale;
+    // force per gripped point [N/m] per unit of its current height: the end stress times the end column's height,
+    // shared by the gripCols columns of the gripped length (a line load on the end column alone tears it off)
+    const grip = this.gripCols;
+    const tractionB = (-this.backNow * this.dp * this.backScale) / grip;
+    const tractionF = (this.frontNow * this.dp * this.frontScale) / grip;
+    const { li, NI } = this;
     const pushing = this.pusherActive;
     for (let p = 0; p < n; p++) {
       if (!active[p]) continue;
@@ -474,8 +481,8 @@ export class Sim {
       let mvx = m * vx[p];
       const mvy = m * vy[p];
       const tg = tag[p];
-      if (tg === 1 && tractionB !== 0) mvx += dt * tractionB * Math.hypot(this.f01[p], this.f11[p]);
-      else if (tg === 2 && tractionF !== 0) mvx += dt * tractionF * Math.hypot(this.f01[p], this.f11[p]);
+      if (tractionB !== 0 && li[p] < grip) mvx += dt * tractionB * Math.hypot(this.f01[p], this.f11[p]);
+      else if (tractionF !== 0 && li[p] >= NI - grip) mvx += dt * tractionF * Math.hypot(this.f01[p], this.f11[p]);
 
       // penetration of this point into each roll (its half size along the deformed y edge)
       const rp = 0.5 * this.dp * Math.hypot(this.f01[p], this.f11[p]);
@@ -853,7 +860,7 @@ export class Sim {
           this.dHM[p] += (dep / hmFractureStrain(eta)) * du;
         }
         if (s1 > 0) this.dCL[p] += ((s1 / q) * dep * du) / dmg.clCrit;
-        if (dmg.model !== 'none' && this.governingDamage(p) >= 1) this.fail(p);
+        if (dmg.model !== 'none' && this.governingDamage(p) >= 1 && !this.inGrip(p)) this.fail(p);
       }
     }
     if (nl) this.addNonlocalDamage(nl);
@@ -942,6 +949,13 @@ export class Sim {
   hardening(p: number): number {
     const rate = this.flowRate[p];
     return rate < 0 ? Infinity : flowStress(this.params.material, this.ep[p], rate, this.temp[p]).H;
+  }
+
+  /** In the gripped length (h0) of an end that carries a tension: damage is shown there but does not fail the point. */
+  inGrip(p: number): boolean {
+    const r = this.params.rolling;
+    const i = this.li[p];
+    return (r.frontTension !== 0 && i >= this.NI - this.gripCols) || (r.backTension !== 0 && i < this.gripCols);
   }
 
   governingDamage(p: number): number {
