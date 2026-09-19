@@ -37,5 +37,6 @@ export function runParams(args) {
   num('chi', (v) => (P.material.chi = v)); // Taylor-Quinney coefficient: 0 = no heating
   num('nonlocal', (v) => (P.damage.nonlocalLength = v * 1e-3)); // mm
   text('nucleation', (v) => (P.damage.gtn.nucleation = v));
+  text('crack', (v) => (P.numerics.crackFields = v)); // the faces of a crack: none | dfg
   return P;
 }
