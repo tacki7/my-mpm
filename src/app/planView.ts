@@ -30,6 +30,7 @@ export const planFieldInfo = (id: PlanFieldName) => PLAN_FIELDS.find((f) => f.id
 const BINS = 48;
 const PAD = 0.6; // px added around each point's cell so that neighbours overlap
 const INK = '#1d2a3a';
+const INK_SOFT = '#4b5a68';
 const STAMP = '#c23b22';
 
 export class PlanView {
@@ -119,6 +120,7 @@ export class PlanView {
       this.drawPoints(T, g, f);
       this.drawCracks(T, f);
     }
+    this.drawNotes(T, g);
   }
 
   /** the roll contact, from the entry to the exit, across the whole picture */
@@ -149,12 +151,24 @@ export class PlanView {
     ctx.textBaseline = 'top';
     ctx.fillText('入口', x0, zBot + 10);
     ctx.fillText('出口', x1, zBot + 10);
-    ctx.textAlign = 'left';
+  }
+
+  /** the notes on the picture: last, over the sheet, each on the sheet's colour (4.5:1 over anything under it) */
+  private drawNotes(T: ReturnType<PlanView['transform']>, g: PlanGeometry): void {
+    const ctx = this.ctx;
+    ctx.font = uiFont(12);
     ctx.textBaseline = 'bottom';
-    ctx.fillStyle = 'rgba(29,42,58,0.6)';
-    ctx.fillText('ロールの接触', x0 + 4, zTop - 4);
-    ctx.textAlign = 'right';
-    ctx.fillText('板幅の中央', this.w - 8, T.Y(0) - 3);
+    const note = (text: string, x: number, y: number, align: 'left' | 'right') => {
+      const m = ctx.measureText(text);
+      const left = align === 'right' ? x - m.width : x;
+      ctx.fillStyle = 'rgba(244,245,243,0.9)';
+      ctx.fillRect(left - 3, y - m.actualBoundingBoxAscent - 2, m.width + 6, m.actualBoundingBoxAscent + m.actualBoundingBoxDescent + 4);
+      ctx.textAlign = align;
+      ctx.fillStyle = INK_SOFT;
+      ctx.fillText(text, x, y);
+    };
+    note('ロールの接触', T.X(-g.contactLength) + 4, T.Y(g.halfWidth0 * 1.2) - 4, 'left');
+    note('板幅の中央', this.w - 8, T.Y(0) - 3, 'right');
   }
 
   private drawPoints(T: ReturnType<PlanView['transform']>, g: PlanGeometry, f: PlanFrame): void {

@@ -442,6 +442,55 @@ button.pending {
   pointer-events: none;
 }
 
+/* with the roll bite focused by the keyboard: a mark in its middle, where Enter takes the nearest point (keyPick.ts) */
+.pick-aim {
+  display: none;
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 0;
+  height: 0;
+  pointer-events: none;
+}
+
+canvas#bite:focus-visible + .pick-aim {
+  display: block;
+}
+
+.pick-cross::before,
+.pick-cross::after {
+  content: '';
+  position: absolute;
+  background: var(--ink);
+  box-shadow: 0 0 0 1px var(--sheet);
+}
+
+.pick-cross::before {
+  left: -9px;
+  top: -1px;
+  width: 18px;
+  height: 2px;
+}
+
+.pick-cross::after {
+  left: -1px;
+  top: -9px;
+  width: 2px;
+  height: 18px;
+}
+
+.pick-hint {
+  position: absolute;
+  top: 14px;
+  left: 0;
+  transform: translateX(-50%);
+  white-space: nowrap;
+  padding: 1px 6px;
+  font-size: var(--fs-xs);
+  color: var(--ink);
+  background: rgba(244, 245, 243, 0.9);
+}
+
 .bite canvas.overview {
   position: absolute;
   inset: auto 18px 12px auto;
@@ -504,6 +553,23 @@ button.pending {
   background: var(--sheet);
   touch-action: none;
   outline-offset: -2px;
+}
+
+/* the mouse finds a handle 12 px across while it is drawn 1 px: 3 px more on each side, over the panes beside it
+   (the handle is above them, z-index 2). The conditions pane has its scrollbar at its right edge, so the left
+   handle takes all 6 px on its right, over the roll bite */
+.splitter::before {
+  content: '';
+  position: absolute;
+  inset: 0 -3px;
+}
+
+.split-charts::before {
+  inset: -3px 0;
+}
+
+.split-left::before {
+  inset: 0 -6px 0 0;
 }
 
 /* the drawn line is 1 px in the middle of the 6 px handle */
