@@ -74,6 +74,9 @@ export interface Diagnostics {
   /** force the pusher applied to the tail since the last read [N/m] */
   pusherForce: number;
   pusherActive: boolean;
+  /** tension stresses applied now, after ramping [Pa] */
+  backTension: number;
+  frontTension: number;
   /** thickness measured at the exit probe (null until the head reaches it) [m] */
   exitThickness: number | null;
   /** mean sheet speed at the exit probe / roll surface speed − 1 */
@@ -189,6 +192,17 @@ export class Sim {
   t = 0;
   step = 0;
   pusherActive = true;
+  /** tension stresses applied at this step, after ramping [Pa] */
+  backNow = 0;
+  frontNow = 0;
+  /** column height / Σ|F e_y| dp of the tail and head columns (see endScale) */
+  private backScale = 1;
+  private frontScale = 1;
+  /** time the front tension was switched on (head past the exit probe), and the back tension released (tail at the entry); −1: not yet */
+  private frontOnAt = -1;
+  private backOffAt = -1;
+  /** ramp time of the tensions [s] */
+  readonly tensionRamp: number;
   plasticWork = 0;
   readonly cracks: Crack[] = [];
 
@@ -362,6 +376,9 @@ export class Sim {
     // Explicit time step from the (mass-scaled) dilatational wave speed.
     const c = Math.sqrt((this.el.K + (4 / 3) * this.el.G) / rho);
     this.dt = (num.cfl * h) / (c + 1.5 * r.rollSpeed);
+    // Tensions are ramped over ten passes of the (mass-scaled) elastic wave along the sheet
+    // unless given: a step load rings, and the ringing alone can crack the head.
+    this.tensionRamp = r.tensionRamp && r.tensionRamp > 0 ? r.tensionRamp : (10 * r.sheetLength) / c;
 
     // Contact traction bins over the bite and a little around it, one per grid
     // column and centred on it: bins whose edges fall on the columns collect 0, 1
@@ -401,11 +418,11 @@ export class Sim {
     const { n, active, px, py, vx, vy, mass, vol0, gm, gvx, gvy, gpush, tag, dt, h, invH, ox, oy, nyN } = this;
     const [gpen0, gpen1] = this.gpen;
     const [r0, r1] = this.rolls;
-    const r = this.params.rolling;
     const k4 = 4 * invH * invH;
-    const headOut = this.headX() > this.xExitProbe;
-    const tractionB = -r.backTension * this.dp; // force per tail point [N/m]
-    const tractionF = headOut ? r.frontTension * this.dp : 0;
+    this.updateTension();
+    // force per end point [N/m] per unit of its current height (a stress on the end face)
+    const tractionB = -this.backNow * this.dp * this.backScale;
+    const tractionF = this.frontNow * this.dp * this.frontScale;
     const pushing = this.pusherActive;
     for (let p = 0; p < n; p++) {
       if (!active[p]) continue;
@@ -436,8 +453,8 @@ export class Sim {
       let mvx = m * vx[p];
       const mvy = m * vy[p];
       const tg = tag[p];
-      if (tg === 1) mvx += dt * tractionB;
-      else if (tg === 2) mvx += dt * tractionF;
+      if (tg === 1 && tractionB !== 0) mvx += dt * tractionB * Math.hypot(this.f01[p], this.f11[p]);
+      else if (tg === 2 && tractionF !== 0) mvx += dt * tractionF * Math.hypot(this.f01[p], this.f11[p]);
 
       // penetration of this point into each roll (its half size along the deformed y edge)
       const rp = 0.5 * this.dp * Math.hypot(this.f01[p], this.f11[p]);
@@ -881,6 +898,56 @@ export class Sim {
     return 'steady';
   }
 
+  /**
+   * Tension stresses for this step. Back tension ramps up from the start and is released
+   * (ramped down) once the tail reaches the entry plane — the sheet behind the rolls is
+   * gone, nothing can pull it back. Front tension is switched on when the head passes the
+   * exit probe (the strip is gripped by the coiler) and ramps up from then.
+   */
+  private updateTension(): void {
+    const r = this.params.rolling;
+    const t = this.t;
+    const ramp = this.tensionRamp;
+    if (r.backTension !== 0) {
+      if (this.backOffAt < 0 && this.tailX() >= -this.contactLength) this.backOffAt = t;
+      let back = r.backTension * Math.min(1, t / ramp);
+      // let go within the time the tail takes to cross the bite, not the (possibly longer) ramp
+      const release = Math.min(ramp, this.contactLength / this.vIn);
+      if (this.backOffAt >= 0) back *= Math.max(0, 1 - (t - this.backOffAt) / release);
+      this.backScale = this.endScale(1);
+      this.backNow = this.backScale > 0 ? back : 0;
+    }
+    if (r.frontTension !== 0) {
+      if (this.frontOnAt < 0 && this.headX() > this.xExitProbe) this.frontOnAt = t;
+      const front = this.frontOnAt >= 0 ? r.frontTension * Math.min(1, (t - this.frontOnAt) / ramp) : 0;
+      this.frontScale = this.endScale(2);
+      this.frontNow = this.frontScale > 0 ? front : 0;
+    }
+  }
+
+  /**
+   * Height of an end column (tag 1 tail, 2 head) over the sum of its points' deformed y edges
+   * |F e_y| dp. Each point's end load is σ dp |F e_y| times this, so the total is σ × the
+   * column's actual height even when the column is sheared or its points have spread apart.
+   * 0 when the column has no active point left (it has left the grid).
+   */
+  private endScale(tg: number): number {
+    const { n, tag, active, py, dp } = this;
+    let top = -INF;
+    let bot = INF;
+    let sum = 0;
+    const from = tg === 1 ? 0 : n - 1;
+    const step = tg === 1 ? 1 : -1;
+    for (let p = from; p >= 0 && p < n && tag[p] === tg; p += step) {
+      if (!active[p]) continue;
+      const e = dp * Math.hypot(this.f01[p], this.f11[p]);
+      sum += e;
+      if (py[p] + e / 2 > top) top = py[p] + e / 2;
+      if (py[p] - e / 2 < bot) bot = py[p] - e / 2;
+    }
+    return sum > 0 ? (top - bot) / sum : 0;
+  }
+
   /** Release the pusher once the head is well out of the bite (friction has to draw the sheet from then on). */
   updatePusher(): void {
     if (this.pusherActive && this.headX() > this.xExitProbe) this.pusherActive = false;
@@ -949,6 +1016,8 @@ export class Sim {
       rollTorque: tq,
       pusherForce: push,
       pusherActive: this.pusherActive,
+      backTension: this.backNow,
+      frontTension: this.frontNow,
       exitThickness: ex ? ex.thickness : null,
       forwardSlip: ex ? ex.speed / this.params.rolling.rollSpeed - 1 : null,
       neutralX: this.lastNeutral,
