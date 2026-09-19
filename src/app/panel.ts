@@ -38,6 +38,17 @@ const RAW: Group[] = [
       { key: 'r', label: '圧下率', unit: '%', step: 1, min: 1, max: 60, get: (p) => p.rolling.reduction * 100, set: (p, v) => (p.rolling.reduction = v / 100) },
       { key: 'R', label: 'ロール半径', unit: 'mm', step: 5, min: 5, max: 1000, get: (p) => p.rolling.rollRadius / mm, set: (p, v) => (p.rolling.rollRadius = v * mm) },
       { key: 'L', label: '板の長さ', unit: 'mm', step: 1, min: 2, max: 200, get: (p) => p.rolling.sheetLength / mm, set: (p, v) => (p.rolling.sheetLength = v * mm) },
+      {
+        key: 'stands',
+        label: 'スタンド数',
+        unit: '',
+        step: 1,
+        min: 1,
+        max: 5,
+        get: (p) => p.rolling.stands ?? 1,
+        set: (p, v) => (p.rolling.stands = Math.round(v)),
+        hint: 'タンデム。どのスタンドも同じ条件で、圧下率はそのスタンドの入側板厚に対して',
+      },
     ],
   },
   {

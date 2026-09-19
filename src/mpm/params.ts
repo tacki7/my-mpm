@@ -109,6 +109,8 @@ export interface RollingParams {
   frontTension: number;
   /** ramp time of both tensions [s]; 0 or absent: ten passes of the elastic wave along the sheet */
   tensionRamp?: number;
+  /** stands of a tandem, each rolling the one before's exit strip by the same reduction (1 or absent: one stand). Sim does not read it */
+  stands?: number;
 }
 
 /**
