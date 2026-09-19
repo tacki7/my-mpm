@@ -170,6 +170,9 @@ const RULES: Record<string, Rule> = {
   'numerics.massScale': r(1, 1e8),
   'numerics.cfl': r(0.05, 1),
   'numerics.jbar': 'flag',
+  'numerics.volumetric': { oneOf: ['rate', 'total'] },
+  'numerics.volRelax': r(0, 10),
+  'numerics.volRelaxContact': r(0, 10),
 };
 
 function allowed(rule: Rule, v: unknown): boolean {
