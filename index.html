@@ -36,7 +36,7 @@
         <p class="preset-note" id="preset-note"></p>
       </aside>
 
-      <section class="stage" aria-label="ロールバイト">
+      <section class="stage section-only" aria-label="ロールバイト">
         <div class="field-tabs" id="field-tabs" role="radiogroup" aria-label="色で表す量"></div>
         <div class="bite">
           <canvas id="bite"></canvas>
@@ -63,17 +63,36 @@
         </div>
       </section>
 
+      <section class="plan-stage plan-only" aria-label="平面図（上から見た板）">
+        <div class="field-tabs" id="plan-tabs" role="radiogroup" aria-label="色で表す量（平面図）"></div>
+        <div class="bite plan-bite">
+          <canvas id="plan-canvas"></canvas>
+          <div class="legend" id="plan-legend"></div>
+          <div class="phase" id="plan-phase" aria-live="polite"></div>
+        </div>
+      </section>
+
       <aside class="record" aria-label="結果">
-        <section class="certificate">
+        <section class="certificate section-only">
           <h2>圧延結果</h2>
           <table id="results"></table>
         </section>
-        <section class="cracks">
+        <section class="cracks section-only">
           <h2>亀裂の記録</h2>
           <ol id="crack-log" aria-live="polite"></ol>
         </section>
-        <section class="explorer" id="explorer" aria-label="応力状態"></section>
-        <section class="export" id="export" aria-label="結果の書き出し"></section>
+        <section class="explorer section-only" id="explorer" aria-label="応力状態"></section>
+        <section class="export section-only" id="export" aria-label="結果の書き出し"></section>
+        <section class="certificate plan-only">
+          <h2>圧延結果（平面図）</h2>
+          <table id="plan-results"></table>
+          <p class="table-note" id="plan-results-note"></p>
+        </section>
+        <section class="cracks plan-only">
+          <h2>亀裂の記録（平面図）</h2>
+          <ol id="plan-crack-log" aria-live="polite"></ol>
+        </section>
+        <section class="export plan-only" id="plan-export" aria-label="結果の書き出し（平面図）"></section>
       </aside>
     </main>
     <script type="module" src="/src/main.ts"></script>

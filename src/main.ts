@@ -10,6 +10,7 @@ import { buildPanel } from './app/panel.ts';
 import type { CrackView, Frame, FromWorker, Geometry, ToWorker } from './app/protocol.ts';
 import { applyQuery, stopAfterOf } from './app/query.ts';
 import { Overview } from './app/overview.ts';
+import { PlanMode } from './app/planMode.ts';
 import { BiteView } from './app/view.ts';
 import { attachViewControls } from './app/viewControls.ts';
 import { drawForceChart, drawHillChart, slabReference, type ForceChartData } from './app/slabOverlay.ts';
@@ -79,12 +80,40 @@ panel.show(params);
 const showNote = () => ($('preset-note').textContent = presetById(presetId)?.note ?? '');
 showNote();
 
+// the plan view (板幅方向): its own worker and picture; the shared buttons go to it while it is shown.
+// Both views run the same conditions (params): 「条件を反映してやり直す」 and a preset restart both, and
+// switching views never applies the panel's pending edits.
+const plan = new PlanMode(
+  {
+    query,
+    panelRoot: $('panel'),
+    conditions: () => params,
+    presetId: () => presetId,
+    preset: () => presetById(presetId)!.build(),
+    onEdit: () => {
+      edited = true;
+      $('reset').classList.add('pending');
+    },
+    onMode: (mode) => {
+      if (mode === 'plan' && running) {
+        running = false;
+        send({ type: 'pause' });
+      }
+      if (mode === 'section') showClock();
+      updateButtons();
+      dirty = true;
+    },
+  },
+  stopAfter,
+);
+
 presetSel.addEventListener('change', () => {
   presetId = presetSel.value;
   params = presetById(presetId)!.build();
   panel.show(params);
   showNote();
   restart();
+  plan.applyConditions(params);
 });
 
 // ── field tabs ──────────────────────────────────────────────────────────────
@@ -120,7 +149,7 @@ function startWorker() {
       if (!geometry || geometry.h0 !== m.geometry.h0 || geometry.contactLength !== m.geometry.contactLength) view.resetView();
       geometry = m.geometry;
       view.geometry = geometry;
-      if (query.get('autorun') === '1' && frames === 0) run();
+      if (query.get('autorun') === '1' && frames === 0 && !plan.active) run();
     } else if (m.type === 'frame') {
       if (!awaitingReady) onFrame(m);
     }
@@ -129,13 +158,18 @@ function startWorker() {
   worker.onerror = (e) => showError(e.message);
 }
 
-function restart() {
+/** the panel's edits into params (what runs, after clamping) */
+function readConditions() {
   if (edited) {
     params = panel.read(params);
-    panel.show(params); // what runs, after clamping
+    panel.show(params);
   }
   edited = false;
   $('reset').classList.remove('pending');
+}
+
+function restart() {
+  readConditions();
   history.t.length = 0;
   kineticSum = 0;
   kineticN = 0;
@@ -160,15 +194,21 @@ function run() {
   updateButtons();
 }
 
-$('run').addEventListener('click', run);
+$('run').addEventListener('click', () => (plan.active ? plan.run() : run()));
 $('pause').addEventListener('click', () => {
+  if (plan.active) return plan.pause();
   running = false;
   send({ type: 'pause' });
   updateButtons();
 });
-$('reset').addEventListener('click', restart);
+$('reset').addEventListener('click', () => {
+  // the new conditions go to both views; only the one shown runs
+  restart();
+  plan.applyConditions(params);
+});
 
 function updateButtons() {
+  if (plan.active) return plan.updateButtons();
   const done = last?.diag.phase === 'done' || last?.diag.phase === 'stalled';
   ($('run') as HTMLButtonElement).disabled = running || done;
   ($('pause') as HTMLButtonElement).disabled = !running;
@@ -239,8 +279,15 @@ function updateResults(d: Diagnostics, f: Frame) {
       return tr;
     }),
   );
-  $('clock').textContent = `t = ${(d.t * 1e3).toFixed(2)} ms　${d.step.toLocaleString()} step`;
+  showClock();
   $('phase').textContent = phaseText[d.phase];
+}
+
+/** the shared clock, from the section model's last frame, while the section view is shown */
+function showClock() {
+  if (plan.active) return;
+  const d = last?.diag;
+  $('clock').textContent = `t = ${((d?.t ?? 0) * 1e3).toFixed(2)} ms　${(d?.step ?? 0).toLocaleString()} step`;
 }
 
 let crackSeen = 0;
@@ -408,9 +455,12 @@ window.__mpm = {
   run,
   restart,
   setField,
+  /** the plan view (板幅方向; tools/browser/planview.mjs) */
+  plan: plan.hook(),
 };
 
 startWorker();
 setField(field);
 restart();
 requestAnimationFrame(frameLoop);
+if (query.get('view') === 'plan') plan.setMode('plan');

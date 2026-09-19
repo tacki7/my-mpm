@@ -15,7 +15,9 @@
 // the tail is still at least --tailgap mm before the entry: as the tail comes within about 8 mm of
 // the entry the stresses in the bite fall (by up to 40 % in a narrow strip), and that transient is
 // not the steady state. A strip too short for the window has no samples (lengthen it with --L).
-import { PlanSim, planParams } from '../src/mpm/planview/sim.ts';
+import { PlanSim } from '../src/mpm/planview/sim.ts';
+import { planCondition } from '../src/mpm/planview/condition.ts';
+import { SAMPLE_STEPS, SteadySampler } from '../src/mpm/planview/steady.ts';
 import { defaultParams } from '../src/mpm/params.ts';
 
 const args = process.argv.slice(2);
@@ -43,8 +45,7 @@ base.damage.model = opt('damage', 'none');
 base.damage.clCrit = +opt('cl', base.damage.clCrit);
 const W = +opt('W', 20) * 1e-3;
 const notch = +opt('notch', 0) * 1e-3;
-if (notch > 0) base.defects = [{ kind: 'void', x: r.sheetLength / 2, y: W / 2, ax: notch, ay: notch }];
-const P = planParams(base, W, +opt('cells', 20));
+const P = planCondition(base, { width: W, cells: +opt('cells', 20), notch });
 const sim = new PlanSim(P);
 say(`plan view: W ${(W * 1e3).toFixed(1)} mm (W/h0 ${(W / r.h0).toFixed(0)}), ${sim.n} points, h ${(sim.h * 1e3).toFixed(3)} mm, dt ${sim.dt.toExponential(3)} s`);
 
@@ -52,95 +53,33 @@ say(`plan view: W ${(W * 1e3).toFixed(1)} mm (W/h0 ${(W / r.h0).toFixed(0)}), ${
 const wus = Math.pow(1 - r.reduction, -Math.pow(10, -1.269 * (W / r.h0) * Math.pow(r.h0 / (2 * r.rollRadius), 0.556))) - 1;
 
 const t0 = performance.now();
-const samples = [];
-let steadyLooks = 0;
-let phase = '';
+// the steady looks, read the same way as the page does (src/mpm/planview/steady.ts)
+const sampler = new SteadySampler(tailGap);
 while (sim.step < maxSteps) {
-  for (let k = 0; k < 250; k++) sim.advance();
-  phase = sim.phase();
-  const F = sim.readForce();
-  if (phase === 'done') break;
-  if (phase !== 'steady') continue;
-  steadyLooks++;
-  if (sim.tailX() <= -sim.contactLength - tailGap) samples.push({ F, snap: snapshot() });
+  for (let k = 0; k < SAMPLE_STEPS; k++) sim.advance();
+  if (sampler.look(sim) === 'done') break;
 }
 const secs = (performance.now() - t0) / 1000;
-
-/** one look at the strip: force per unit width by z, σxx by z in the bite and past the exit, spread, pressure jumps */
-function snapshot() {
-  const nb = 10;
-  const Wz = sim.halfWidth0 * 1.05;
-  const band = (z) => Math.min(nb - 1, Math.floor((z / Wz) * nb));
-  const fz = new Float64Array(nb);
-  const bite = Array.from({ length: nb }, () => [0, 0]);
-  const past = Array.from({ length: nb }, () => [0, 0]);
-  let jumps = [];
-  let pMean = 0;
-  let nIn = 0;
-  const x2 = sim.xExitProbe + 1e-3;
-  const x3 = sim.xExitProbe + 5e-3;
-  for (let p = 0; p < sim.n; p++) {
-    if (!sim.active[p]) continue;
-    const x = sim.px[p];
-    const b = band(sim.pz[p]);
-    const detF = sim.f00[p] * sim.f11[p] - sim.f01[p] * sim.f10[p];
-    if (sim.pc[p] > 0) {
-      fz[b] += sim.pc[p] * sim.dp * sim.dp * detF;
-      pMean += sim.pres[p];
-      nIn++;
-      // the pressure against the lattice neighbours ahead and outward
-      for (const q of [neighbour(p, 1, 0), neighbour(p, 0, 1)]) if (q >= 0 && sim.active[q] && sim.pc[q] > 0) jumps.push(Math.abs(sim.pres[p] - sim.pres[q]));
-    }
-    const sxx = sim.sxx[p] - sim.pres[p];
-    if (x > -1e-3 && x < 0) (bite[b][0] += sxx), bite[b][1]++;
-    if (x > x2 && x < x3) (past[b][0] += sxx), past[b][1]++;
-  }
-  jumps.sort((a, b) => a - b);
-  const exit = sim.exitProfile(sim.xExitProbe, sim.xExitProbe + 2 * sim.h, 5);
-  return {
-    forcePerWidth: Array.from(fz, (f) => f / (Wz / nb)),
-    sxxBite: bite.map(([s, c]) => (c ? s / c : NaN)),
-    sxxPast: past.map(([s, c]) => (c ? s / c : NaN)),
-    halfWidth: exit.halfWidth,
-    centreThick: exit.bins[0].thick,
-    pressureMean: nIn ? pMean / nIn : NaN,
-    jumpMax: jumps.length ? jumps[jumps.length - 1] : NaN,
-    jumpP95: jumps.length ? jumps[Math.floor(0.95 * (jumps.length - 1))] : NaN,
-  };
-}
-
-function neighbour(p, di, dk) {
-  const i = sim.li[p] + di;
-  const k = sim.lk[p] + dk;
-  if (i < 0 || i >= sim.NI || k < 0 || k >= sim.NK) return -1;
-  return sim.lattice[i * sim.NK + k];
-}
-
-const mean = (a) => {
-  const v = a.filter((x) => Number.isFinite(x));
-  return v.length ? v.reduce((s, x) => s + x, 0) / v.length : NaN;
-};
-const meanOf = (f) => mean(samples.map((s) => f(s.snap)));
-const meanVec = (f) => f(samples[0].snap).map((_, i) => mean(samples.map((s) => f(s.snap)[i])));
+const m = sampler.means(sim.halfWidth0);
 const out = {
   W_mm: W * 1e3,
   cells: P.plan.cellsHalfWidth,
   points: sim.n,
   secs,
-  steadySamples: samples.length,
-  steadyLooks,
+  steadySamples: m.samples,
+  steadyLooks: m.looks,
   tailGap_mm: tailGap * 1e3,
-  forceHalfWidth_kN: mean(samples.map((s) => s.F)) * 1e-3,
-  forcePerWidthMid_kN_per_mm: samples.length ? meanVec((s) => s.forcePerWidth)[0] * 1e-6 : NaN,
-  forcePerWidthByZ_kN_per_mm: samples.length ? meanVec((s) => s.forcePerWidth).map((v) => v * 1e-6) : [],
-  spread: samples.length ? meanOf((s) => s.halfWidth) / sim.halfWidth0 - 1 : NaN,
+  forceHalfWidth_kN: m.forceHalfWidth * 1e-3,
+  forcePerWidthMid_kN_per_mm: m.samples ? m.forcePerWidthByZ[0] * 1e-6 : NaN,
+  forcePerWidthByZ_kN_per_mm: m.forcePerWidthByZ.map((v) => v * 1e-6),
+  spread: m.spread,
   spreadWusatowski: wus,
-  centreExitThickness_mm: samples.length ? meanOf((s) => s.centreThick) * 1e3 : NaN,
-  sxxBite_MPa: samples.length ? meanVec((s) => s.sxxBite).map((v) => v * 1e-6) : [],
-  sxxPast_MPa: samples.length ? meanVec((s) => s.sxxPast).map((v) => v * 1e-6) : [],
-  pressureMean_MPa: samples.length ? meanOf((s) => s.pressureMean) * 1e-6 : NaN,
-  pressureJumpMax_MPa: samples.length ? meanOf((s) => s.jumpMax) * 1e-6 : NaN,
-  pressureJumpP95_MPa: samples.length ? meanOf((s) => s.jumpP95) * 1e-6 : NaN,
+  centreExitThickness_mm: m.centreExitThickness * 1e3,
+  sxxBite_MPa: m.sxxBite.map((v) => v * 1e-6),
+  sxxPast_MPa: m.sxxPast.map((v) => v * 1e-6),
+  pressureMean_MPa: m.pressureMean * 1e-6,
+  pressureJumpMax_MPa: m.pressureJumpMax * 1e-6,
+  pressureJumpP95_MPa: m.pressureJumpP95 * 1e-6,
   cracks: sim.cracks.map((c) => {
     let xs = [Infinity, -Infinity];
     let zs = [Infinity, -Infinity];
@@ -155,8 +94,8 @@ const out = {
 if (json) console.log(JSON.stringify(out));
 else {
   const f = (a, d = 0) => a.map((v) => v.toFixed(d).padStart(6)).join('');
-  say(`${samples.length} of ${steadyLooks} steady samples (the tail ≥ ${(tailGap * 1e3).toFixed(0)} mm before the entry), ${sim.step} steps, ${secs.toFixed(1)} s`);
-  if (!samples.length) say('no steady sample with the tail that far before the entry: lengthen the strip (--L)');
+  say(`${m.samples} of ${m.looks} steady samples (the tail ≥ ${(tailGap * 1e3).toFixed(0)} mm before the entry), ${sim.step} steps, ${secs.toFixed(1)} s`);
+  if (!m.samples) say('no steady sample with the tail that far before the entry: lengthen the strip (--L)');
   say(`force per unit width, mid → edge [kN/mm]: ${f(out.forcePerWidthByZ_kN_per_mm, 2)}   (whole half width ${out.forceHalfWidth_kN.toFixed(2)} kN per roll)`);
   // Wusatowski's fit is for narrow strips; past W/h0 ≈ 20 it gives no spread at all
   say(`spread W1/W0 − 1: ${(out.spread * 100).toFixed(2)} %${W / r.h0 < 20 ? `   (Wusatowski ${(wus * 100).toFixed(2)} %)` : ''}`);

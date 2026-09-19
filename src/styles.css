@@ -786,6 +786,62 @@ details.group > summary {
   color: var(--ink-soft);
 }
 
+/* ── section / plan view ──────────────────────────────────────────────── */
+body:not([data-view='plan']) .plan-only,
+body[data-view='plan'] .section-only {
+  display: none !important;
+}
+
+.view-switch {
+  display: inline-flex;
+  align-self: end;
+}
+
+.view-switch button {
+  border-radius: 0;
+  padding: 6px 12px;
+}
+
+.view-switch button + button {
+  border-left: 0;
+}
+
+.view-switch button:first-child {
+  border-radius: 3px 0 0 3px;
+}
+
+.view-switch button:last-child {
+  border-radius: 0 3px 3px 0;
+}
+
+.view-switch button:focus-visible {
+  /* the focus ring stays above the neighbouring button */
+  position: relative;
+  z-index: 1;
+}
+
+.view-switch button[aria-pressed='true'] {
+  background: var(--ink);
+  color: var(--sheet);
+}
+
+.plan-stage {
+  display: grid;
+  grid-template-rows: auto minmax(420px, 1fr);
+  min-width: 0;
+}
+
+/* the last look, shown until the steady window has looks of its own */
+.certificate tr.provisional td {
+  color: var(--steel);
+}
+
+.table-note {
+  margin: 6px 0 0;
+  font-size: var(--fs-xs);
+  color: var(--ink-soft);
+}
+
 /* ── narrow screens ───────────────────────────────────────────────────── */
 @media (max-width: 1100px) {
   .layout {
@@ -820,7 +876,8 @@ details.group > summary {
   }
   /* on a phone the roll bite comes first, then the results, then the detailed conditions
      (the preset and the buttons stay at the top) */
-  .stage {
+  .stage,
+  .plan-stage {
     order: 1;
   }
   .record {
