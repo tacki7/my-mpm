@@ -39,7 +39,7 @@ export const PRESETS: Preset[] = [
   {
     id: 'central-burst',
     label: '厚肉・軽圧下の中心割れ',
-    note: '接触長に比べて板が厚い（Δ = 平均板厚 / 接触長 ≈ 3.6）と、張力なしでも塑性変形中の板厚中心が静水圧の引張（η > 0）になり、中心の偏析帯（延性 1/50）が割れる（既定の 12 セル以上で。10 セル以下の粗い格子では割れない）。表層は圧縮のまま。実物の中心割れは多パスで累積するので、1 パスで見せるために延性を下げている。割れの間隔は格子で決まる（docs/presets.md）。',
+    note: '接触長に比べて板が厚い（Δ = 平均板厚 / 接触長 ≈ 3.6）と、張力なしでも塑性変形中の板厚中心が静水圧の引張（η > 0）になり、中心の偏析帯（延性 1/50）が割れる（既定の 12 セル以上で。11 セル以下の粗い格子では割れない）。表層は圧縮のまま。実物の中心割れは多パスで累積するので、1 パスで見せるために延性を下げている。割れの間隔は格子で決まる（docs/presets.md）。',
     build: () => {
       const p = defaultParams();
       p.rolling.h0 = 10 * mm;
@@ -53,7 +53,8 @@ export const PRESETS: Preset[] = [
       // the paper's Johnson-Cook constants; damage grows only under hydrostatic tension (η > 0)
       p.damage = { ...DAMAGE_4340, etaCutoff: 0 };
       // centreline segregation: a weak band along the mid-plane, clear of both ends. 1/50 is the loosest that
-      // cracks at 12 cells (1/20 reaches D 0.44, 1/33 D 0.74); coarser grids need 1/100 (docs/presets.md)
+      // cracks at 12 cells (1/20 reaches D 0.44, 1/33 D 0.74, and 11 cells D 0.99); coarser grids need 1/100.
+      // At 5 cells or fewer no point falls inside the band (docs/presets.md)
       p.defects = [{ kind: 'weak', x: 16 * mm, y: 0, ax: 13 * mm, ay: 0.5 * mm, ductility: 0.02 }];
       p.numerics.cellsThrough = 12;
       return p;
