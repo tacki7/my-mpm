@@ -16,6 +16,7 @@ import { BiteView } from './app/view.ts';
 import { StandViews } from './app/standViews.ts';
 import { StandTable, stopPhrase } from './app/standTable.ts';
 import { passReadout, readoutKind, readoutNote } from './app/passReadout.ts';
+import { BurstHint } from './app/burstHint.ts';
 import type { StandResult } from './mpm/tandem.ts';
 import { attachViewControls } from './app/viewControls.ts';
 import { SteadyForce, SteadyProfile, drawForceChart, drawHillChart, slabRatio, slabReference, type ForceChartData, type StandStart } from './app/slabOverlay.ts';
@@ -43,6 +44,7 @@ let standResults: StandResult[] = [];
 let standStarts: StandStart[] = [];
 /** a tandem: each stand's geometry, as the worker sent it (the first on 'ready', the next with each stand's end) */
 let standGeometries: Geometry[] = [];
+const burstHint = new BurstHint($('burst-hint'));
 const standTable = new StandTable($('stand-results-section'), $('stand-results'));
 /** a stand that begins on the pass's clock at t0 [ms] with entry thickness h0: the run's conditions with that h0,
  * and the strain of the stands before for the slab method (plane strain from the thickness) */
@@ -334,6 +336,8 @@ function updateResults(d: Diagnostics, f: Frame) {
   // the load, torque, exit thickness and slip: the steady means once there are any (they stay after the pass)
   const pass = passReadout(d, f.steady);
   $('results-note').textContent = readoutNote(readoutKind(d, f.steady));
+  // the shape against the central-burst map (the stand on show's entry thickness), and the mid-plane η measured
+  burstHint.update(standStarts[f.stand]?.P ?? params, f.midEta);
   const rows: [string, string, string][] = [
     ...pass.map((r): [string, string, string] => [r.label, r.text, r.unit]),
     [params.damage.model === 'none' ? '最大損傷（3 指標の最大）' : '最大損傷', d.maxDamage.toFixed(3), ''],

@@ -17,6 +17,7 @@
 import { Sim } from '../src/mpm/solver.ts';
 import { karman } from '../src/mpm/slab.ts';
 import { biteGeometry } from '../src/mpm/params.ts';
+import { MidPlaneEta, LOOK } from '../src/mpm/midplane.ts';
 import { runParams } from './run-params.mjs';
 
 const args = process.argv.slice(2);
@@ -31,7 +32,6 @@ const R = +opt('R', 15) * 1e-3;
 const mu = +opt('mu', 0.2);
 const reductions = String(opt('r', '0.05')).split(',').map(Number);
 const deltas = String(opt('delta', '0.5,1,2,3,4,6')).split(',').map(Number);
-const LOOK = 50;
 const READ = 250;
 
 function point(delta, r) {
@@ -51,13 +51,8 @@ function point(delta, r) {
   const bite = Math.sqrt((r * h0) / R); // bite angle [rad]
   const t0 = performance.now();
   const sim = new Sim(P);
-  const NJ = sim.NJ;
-  const mid = [NJ / 2 - 1, NJ / 2];
-  const surf = [0, NJ - 1];
-  const last = new Float64Array(sim.n);
-  const acc = { mid: [0, 0], surf: [0, 0] };
+  const mp = new MidPlaneEta(sim); // the measure the page shows too (src/mpm/midplane.ts)
   const forces = [];
-  let steadyLooks = 0;
   let phase = sim.phase();
   while (phase !== 'done' && phase !== 'stalled' && sim.step < 2e6) {
     for (let k = 0; k < LOOK; k++) sim.advance();
@@ -66,21 +61,7 @@ function point(delta, r) {
       const d = sim.diagnostics();
       if (d.phase === 'steady') forces.push(d.rollForce);
     }
-    if (phase !== 'steady') {
-      for (let p = 0; p < sim.n; p++) last[p] = sim.ep[p];
-      continue;
-    }
-    steadyLooks++;
-    for (let p = 0; p < sim.n; p++) {
-      const de = sim.ep[p] - last[p];
-      last[p] = sim.ep[p];
-      if (!sim.active[p] || !(de > 0) || sim.px[p] < -sim.contactLength || sim.px[p] > 0) continue;
-      const j = sim.lj[p];
-      const a = mid.includes(j) ? acc.mid : surf.includes(j) ? acc.surf : null;
-      if (!a) continue;
-      a[0] += de * sim.eta[p];
-      a[1] += de;
-    }
+    mp.look(sim);
   }
   const slab = karman(P.rolling, P.material);
   const force = forces.length ? forces.reduce((x, v) => x + v, 0) / forces.length : null;
@@ -96,9 +77,9 @@ function point(delta, r) {
     biteAngle: bite,
     mu,
     phase,
-    steadyLooks,
-    etaMid: acc.mid[1] > 0 ? acc.mid[0] / acc.mid[1] : null,
-    etaSurface: acc.surf[1] > 0 ? acc.surf[0] / acc.surf[1] : null,
+    steadyLooks: mp.steadyLooks,
+    etaMid: mp.middle,
+    etaSurface: mp.surface,
     force_kN_per_mm: force != null ? force * 1e-6 : null,
     slab_kN_per_mm: slab.outside ? null : slab.force * 1e-6,
     slabOutside: slab.tensionAtYield || slab.sticking || !slab.crossed,
