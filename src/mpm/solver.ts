@@ -866,6 +866,8 @@ export class Sim {
             const idx = (bx + a) * nyN + by + c;
             if (!(gcon[idx] & (1 << k))) continue;
             const wm = w[a * 3 + c] * mass[p];
+            // a node the point does not weigh (fx or fy exactly 0.5) gets no request: 0/0 otherwise
+            if (!(wm > 0)) continue;
             if (gfolD[idx] === 0) touched.push(idx);
             gfolN[idx] += wm * want;
             gfolD[idx] += wm;
