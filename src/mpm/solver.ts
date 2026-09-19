@@ -165,8 +165,10 @@ export class Sim {
   readonly gB: Float64Array; // 'rate': mass-weighted relaxation fraction β_i
   readonly gMv: Float64Array; // 'rate': nodal mass of the points in the averages (intact, J > 0)
   readonly gcon: Uint8Array; // this step: bit k set when roll k constrains the node
-  private readonly gfolN: Float64Array; // 'surface': Σ w m (requested normal velocity change) per node
-  private readonly gfolD: Float64Array; // Σ w m
+  private readonly projBuf = new Float64Array(16); // gridUpdate: each roll's projection of a node
+  // 'surface': per roll and node (roll k at k · nodes + node), Σ w m (requested normal velocity change) and Σ w m
+  private readonly gfolN: Float64Array;
+  private readonly gfolD: Float64Array;
 
   // particles (lattice order: index = i * NJ + j, i from the tail)
   readonly n: number;
@@ -309,8 +311,8 @@ export class Sim {
     this.gpen = [new Float64Array(nNodes), new Float64Array(nNodes)];
     this.gpush = new Uint8Array(nNodes);
     this.gcon = new Uint8Array(nNodes);
-    this.gfolN = new Float64Array(nNodes);
-    this.gfolD = new Float64Array(nNodes);
+    this.gfolN = new Float64Array(2 * nNodes);
+    this.gfolD = new Float64Array(2 * nNodes);
     this.gJ = new Float64Array(nNodes);
     this.gJe = new Float64Array(nNodes);
     this.gB = new Float64Array(nNodes);
@@ -568,6 +570,47 @@ export class Sim {
     }
   }
 
+  /**
+   * Roll k's contact on a node with velocity (vx, vy) at (xi, yi): the approaching normal velocity
+   * relative to the roll surface is removed and the tangential one limited by Coulomb friction.
+   * Writes the new velocity, the node relative to the roll centre, the unit normal and the gap to the
+   * surface at out[o8..o8+6] (o8 = 8 k); false when the node separates (no contact).
+   */
+  private projectRoll(k: number, vx: number, vy: number, xi: number, yi: number, mu: number, out: Float64Array, slot: number): boolean {
+    const roll = this.rolls[k];
+    const rx = xi - roll.cx;
+    const ry = yi - roll.cy;
+    const d = Math.hypot(rx, ry);
+    const nx = rx / d;
+    const ny = ry / d;
+    // roll surface velocity at the foot of the node
+    const ux = -roll.omega * roll.R * ny;
+    const uy = roll.omega * roll.R * nx;
+    const relx = vx - ux;
+    const rely = vy - uy;
+    const vn = relx * nx + rely * ny;
+    if (vn >= 0) return false; // separating
+    const tx = relx - vn * nx;
+    const ty = rely - vn * ny;
+    const vt = Math.hypot(tx, ty);
+    let sx = 0;
+    let sy = 0;
+    if (vt > -mu * vn) {
+      const s = 1 + (mu * vn) / vt; // Coulomb: slip, tangential velocity reduced by μ|vn|
+      sx = tx * s;
+      sy = ty * s;
+    }
+    const o = 8 * slot;
+    out[o] = ux + sx;
+    out[o + 1] = uy + sy;
+    out[o + 2] = rx;
+    out[o + 3] = ry;
+    out[o + 4] = nx;
+    out[o + 5] = ny;
+    out[o + 6] = d - roll.R;
+    return true;
+  }
+
   private gridUpdate(): void {
     const { gm, gvx, gvy, gpush, nxN, nyN, h, ox, oy, dt } = this;
     const mu = this.params.rolling.mu;
@@ -580,6 +623,7 @@ export class Sim {
     const tqAcc = [0, 0];
     const nNodes = nxN * nyN;
     const mMin = 1e-12 * this.mass[0];
+    const proj = this.projBuf;
     for (let idx = 0; idx < nNodes; idx++) {
       const m = gm[idx];
       if (m <= mMin) {
@@ -592,52 +636,48 @@ export class Sim {
       const col = Math.floor(idx / nyN);
       const xi = ox + col * h;
       const yi = oy + (idx % nyN) * h;
-      for (let k = 0; k < 2; k++) {
-        if (this.gpen[k][idx] >= 0) continue;
-        const roll = this.rolls[k];
-        const rx = xi - roll.cx;
-        const ry = yi - roll.cy;
-        const d = Math.hypot(rx, ry);
-        const nx = rx / d;
-        const ny = ry / d;
-        // roll surface velocity at the foot of the node
-        const ux = -roll.omega * roll.R * ny;
-        const uy = roll.omega * roll.R * nx;
-        const relx = vx - ux;
-        const rely = vy - uy;
-        const vn = relx * nx + rely * ny;
-        if (vn >= 0) continue; // separating
-        this.gcon[idx] |= 1 << k;
-        const tx = relx - vn * nx;
-        const ty = rely - vn * ny;
-        const vt = Math.hypot(tx, ty);
-        let sx = 0;
-        let sy = 0;
-        if (vt > -mu * vn) {
-          const s = 1 + (mu * vn) / vt; // Coulomb: slip, tangential velocity reduced by μ|vn|
-          sx = tx * s;
-          sy = ty * s;
-        }
-        const nvx = ux + sx;
-        const nvy = uy + sy;
-        // impulse on the sheet → force; the roll gets the opposite
-        const fx = m * (nvx - vx) * invDt;
-        const fy = m * (nvy - vy) * invDt;
-        fyAcc[k] += -fy;
-        tqAcc[k] += -(rx * fy - ry * fx);
-        const b = col - binCol0;
-        if (b >= 0 && b < nBins) {
-          binN[b] += fx * nx + fy * ny;
-          // tangent with +x orientation
-          let tnx = -ny;
-          let tny = nx;
-          if (tnx < 0) {
-            tnx = -tnx;
-            tny = -tny;
+      // Each roll projects the velocity before contact. A node both rolls would hold (a gap of a cell or
+      // two) takes the nearer roll only, or the mean of the two at the same distance (on the mid-plane):
+      // one after the other favoured the roll projected last and broke the pass's symmetry.
+      const on0 = this.gpen[0][idx] < 0 && this.projectRoll(0, vx, vy, xi, yi, mu, proj, 0);
+      const on1 = this.gpen[1][idx] < 0 && this.projectRoll(1, vx, vy, xi, yi, mu, proj, 1);
+      let w0 = on0 ? 1 : 0;
+      let w1 = on1 ? 1 : 0;
+      if (on0 && on1) {
+        const g = proj[6] - proj[14]; // distances to the two surfaces
+        w0 = Math.abs(g) <= 1e-12 * h ? 0.5 : g < 0 ? 1 : 0;
+        w1 = 1 - w0;
+      }
+      if (w0 > 0 || w1 > 0) {
+        let nvx = 0;
+        let nvy = 0;
+        for (let k = 0; k < 2; k++) {
+          const wk = k === 0 ? w0 : w1;
+          if (!(wk > 0)) continue;
+          const o = 8 * k;
+          const [kvx, kvy, rx, ry, nx, ny] = [proj[o], proj[o + 1], proj[o + 2], proj[o + 3], proj[o + 4], proj[o + 5]];
+          this.gcon[idx] |= 1 << k;
+          nvx += wk * kvx;
+          nvy += wk * kvy;
+          // impulse on the sheet → force; the roll gets the opposite
+          const fx = wk * m * (kvx - vx) * invDt;
+          const fy = wk * m * (kvy - vy) * invDt;
+          fyAcc[k] += -fy;
+          tqAcc[k] += -(rx * fy - ry * fx);
+          const b = col - binCol0;
+          if (b >= 0 && b < nBins) {
+            binN[b] += fx * nx + fy * ny;
+            // tangent with +x orientation
+            let tnx = -ny;
+            let tny = nx;
+            if (tnx < 0) {
+              tnx = -tnx;
+              tny = -tny;
+            }
+            const ft = fx * tnx + fy * tny;
+            binT[b] += ft;
+            accTau[b] += ft;
           }
-          const ft = fx * tnx + fy * tny;
-          binT[b] += ft;
-          accTau[b] += ft;
         }
         vx = nvx;
         vy = nvy;
@@ -820,6 +860,7 @@ export class Sim {
    */
   private followRoll(fyAcc: number[], tqAcc: number[]): void {
     const { n, active, touch, px, py, gvx, gvy, gm, gcon, gfolN, gfolD, mass, h, invH, ox, oy, nyN, dt } = this;
+    const nNodes = this.nxN * nyN;
     const k4 = 4 * invH * invH;
     const w = [0, 0, 0, 0, 0, 0, 0, 0, 0];
     const touched: number[] = [];
@@ -868,19 +909,22 @@ export class Sim {
             const wm = w[a * 3 + c] * mass[p];
             // a node the point does not weigh (fx or fy exactly 0.5) gets no request: 0/0 otherwise
             if (!(wm > 0)) continue;
-            if (gfolD[idx] === 0) touched.push(idx);
-            gfolN[idx] += wm * want;
-            gfolD[idx] += wm;
+            // per roll: a node both rolls hold (a gap of a cell or two) takes each roll's requests along its own normal
+            const kIdx = k * nNodes + idx;
+            if (gfolD[kIdx] === 0) touched.push(kIdx);
+            gfolN[kIdx] += wm * want;
+            gfolD[kIdx] += wm;
           }
         }
       }
     }
     const invDt = 1 / dt;
-    for (const idx of touched) {
-      const dv = gfolN[idx] / gfolD[idx];
-      gfolN[idx] = 0;
-      gfolD[idx] = 0;
-      const k = gcon[idx] & 1 ? 0 : 1;
+    for (const kIdx of touched) {
+      const dv = gfolN[kIdx] / gfolD[kIdx];
+      gfolN[kIdx] = 0;
+      gfolD[kIdx] = 0;
+      const k = kIdx < nNodes ? 0 : 1;
+      const idx = kIdx - k * nNodes;
       const roll = this.rolls[k];
       const col = Math.floor(idx / nyN);
       const rx = ox + col * h - roll.cx;
