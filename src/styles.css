@@ -894,6 +894,37 @@ details.group > summary {
   color: var(--ink-soft);
 }
 
+/* ── tandem: the stands side by side in the roll-bite area ────────────── */
+.stand-row {
+  position: absolute;
+  inset: 0;
+  display: flex;
+}
+
+.stand-slot {
+  position: relative;
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+.stand-slot + .stand-slot {
+  border-left: 1px solid var(--rule);
+}
+
+.stand-label {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  font-size: var(--fs-s);
+  color: var(--ink-soft);
+  pointer-events: none;
+}
+
+.stand-slot.current .stand-label {
+  color: var(--ink);
+  font-weight: 700;
+}
+
 /* ── section / plan view ──────────────────────────────────────────────── */
 body:not([data-view='plan']) .plan-only,
 body[data-view='plan'] .section-only {
@@ -998,6 +1029,14 @@ body[data-view='plan'] .section-only {
   .stage,
   .plan-stage {
     order: 1;
+  }
+  /* the stands one above the other on a phone */
+  .stand-row {
+    flex-direction: column;
+  }
+  .stand-slot + .stand-slot {
+    border-left: 0;
+    border-top: 1px solid var(--rule);
   }
   .record {
     order: 2;

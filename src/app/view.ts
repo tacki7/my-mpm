@@ -31,6 +31,34 @@ export interface ViewState {
   dirs: boolean;
 }
 
+/**
+ * Colour range of the frames' field over their active, unfailed points (or the field's fixed range):
+ * symmetric about 0 for a signed field. Several frames (the stands of a tandem) share one range.
+ */
+export function fieldRange(frames: Frame[]): [number, number] {
+  const info = fieldInfo(frames[0].field);
+  if (info.range) return info.range;
+  let lo = Infinity;
+  let hi = -Infinity;
+  for (const f of frames) {
+    for (let p = 0; p < f.val.length; p++) {
+      if ((f.flags[p] & 3) !== 1) continue;
+      const v = f.val[p];
+      if (v < lo) lo = v;
+      if (v > hi) hi = v;
+    }
+  }
+  if (!(hi > lo)) {
+    lo = 0;
+    hi = 1;
+  }
+  if (info.scale === 'diverging') {
+    const m = Math.max(Math.abs(lo), Math.abs(hi));
+    return [-m, m];
+  }
+  return [Math.min(0, lo), hi];
+}
+
 export class BiteView {
   private readonly ctx: CanvasRenderingContext2D;
   private w = 0;
@@ -41,6 +69,12 @@ export class BiteView {
   /** points followed by the stress explorer, ringed on top of the sheet */
   marks: { id: number; kind: 'selected' | 'first-crack' | 'max-damage' }[] = [];
   state: ViewState = { exaggeration: 1, range: [0, 1], zoom: 1, panX: 0, panY: 0, exMode: 'auto', dirs: false };
+  /**
+   * Tandem: the views of the stands share one scale, the first stand's (default window width and automatic
+   * exaggeration), so the strip is seen getting thinner; and one colour range over all of them. null: own.
+   */
+  scaleFrom: Geometry | null = null;
+  rangeOverride: [number, number] | null = null;
   private readonly canvas: HTMLCanvasElement;
   /** when each crack's stamp first appeared (key: id and time of the crack, so a new run starts over) */
   private readonly stampBorn = new Map<string, number>();
@@ -63,7 +97,7 @@ export class BiteView {
 
   /** width of the default window [m] */
   private baseWidth(): number {
-    const g = this.geometry!;
+    const g = this.scaleFrom ?? this.geometry!;
     return Math.max(3.4 * g.contactLength, 16 * g.h0);
   }
 
@@ -79,7 +113,8 @@ export class BiteView {
     const sx = (this.w * st.zoom) / this.baseWidth();
     const x0 = this.homeX() + st.panX;
     const y0 = st.panY;
-    const ez = st.exMode === 'auto' ? Math.min(12, Math.max(1, (0.3 * this.h) / (g.h0 * sx))) : st.exMode;
+    const h0 = (this.scaleFrom ?? g).h0;
+    const ez = st.exMode === 'auto' ? Math.min(12, Math.max(1, (0.3 * this.h) / (h0 * sx))) : st.exMode;
     const sy = sx * ez;
     const X = (x: number) => this.w / 2 + (x - x0) * sx;
     const Y = (y: number) => this.h / 2 - (y - y0) * sy;
@@ -286,27 +321,7 @@ export class BiteView {
 
   /** Range of the field over the active, unfailed points (or its fixed range). */
   private updateRange(f: Frame): void {
-    const info = fieldInfo(f.field);
-    if (info.range) {
-      this.state.range = info.range;
-      return;
-    }
-    let lo = Infinity;
-    let hi = -Infinity;
-    for (let p = 0; p < f.val.length; p++) {
-      if ((f.flags[p] & 3) !== 1) continue;
-      const v = f.val[p];
-      if (v < lo) lo = v;
-      if (v > hi) hi = v;
-    }
-    if (!(hi > lo)) {
-      lo = 0;
-      hi = 1;
-    }
-    if (info.scale === 'diverging') {
-      const m = Math.max(Math.abs(lo), Math.abs(hi));
-      this.state.range = [-m, m];
-    } else this.state.range = [Math.min(0, lo), hi];
+    this.state.range = this.rangeOverride ?? fieldRange([f]);
   }
 
   private drawParticles(T: ReturnType<BiteView['transform']>, f: Frame): void {
