@@ -81,8 +81,11 @@ try {
   ok(pathLen >= 2, 'the selected point has a loading path', `${pathLen} points, εp ${sim.ep.toFixed(4)}`);
 
   // ── front tension: the first point to fail reaches D = 1 on its path ────────
+  // The tension is set here, not left to the preset (its value is being tuned): with
+  // 6 cells and 8 mm the sheet cracks from about 550 MPa (2026-09-19: 550 → first crack at
+  // step 13 461, 600 → 12 108; the preset's 480 does not crack).
   worker = null;
-  await c.navigate(page('?preset=front-tension&autorun=1&cells=6&L=8'));
+  await c.navigate(page('?preset=front-tension&tf=600&autorun=1&cells=6&L=8'));
   let cracked = true;
   await c.waitFor('__mpm.cracks.length > 0', 240000).catch(() => (cracked = false));
   await c.evaluate("document.getElementById('pause').click()");
