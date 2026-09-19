@@ -1,6 +1,8 @@
 // A coarse rolling pass end to end (6 cells through 1 mm, 8 mm of sheet, about
 // 20 000 steps): the sheet is bitten, rolled and leaves; force, gauge, slip and
-// the pressure field stay in physical bands; a ductile sheet does not crack.
+// the pressure field stay in physical bands; a ductile sheet does not crack; the
+// friction hill carries the roll force, is smooth, and has its neutral point in
+// the bite where the forward slip puts it.
 // The bands are loose on purpose (the mesh is coarse); docs/validation.md holds
 // the converged numbers.
 // @check
@@ -14,14 +16,28 @@ P.rolling.sheetLength = 8e-3;
 const sim = new Sim(P);
 
 const steady = [];
+const hill = [];
 let spurious = 0;
 let badJ = 0;
 let nan = 0;
 while (sim.step < 60000) {
   for (let k = 0; k < 1000; k++) sim.advance();
   const d = sim.diagnostics();
+  const prof = sim.pressureProfile();
   if (d.phase === 'steady') {
     steady.push(d);
+    // integral of the pressure, and the mean jump between neighbouring bins inside the bite / the mean pressure there
+    let F = 0;
+    let sum = 0;
+    let jump = 0;
+    for (let b = 0; b < sim.nBins; b++) {
+      F += prof.p[b] * sim.binW;
+      if (prof.x[b] > -sim.contactLength && prof.x[b + 1] < 0) {
+        sum += prof.p[b];
+        jump += Math.abs(prof.p[b + 1] - prof.p[b]);
+      }
+    }
+    hill.push({ F, saw: jump / sum, xn: d.neutralX, ford: -Math.sqrt(Math.max(0, d.forwardSlip ?? 0) * P.rolling.rollRadius * (d.exitThickness ?? NaN)) });
     for (let p = 0; p < sim.n; p++) {
       if (!sim.active[p]) continue;
       const J = sim.f00[p] * sim.f11[p] - sim.f01[p] * sim.f10[p];
@@ -43,5 +59,9 @@ between(mean(steady.map((d) => d.forwardSlip ?? NaN)) * 100, 0, 6, 'forward slip
 ok(nan === 0, 'no NaN in positions or stresses', `${nan}`);
 ok(badJ === 0, 'volume ratio J stays within 0.98..1.02 (plastic flow is isochoric)', `${badJ} point-samples outside`);
 ok(spurious === 0, 'no hydrostatic tension (η > 1) inside the roll bite', `${spurious} point-samples`);
+between(mean(hill.map((h) => h.F)) / mean(steady.map((d) => d.rollForce)), 0.9, 1.1, 'integral of the pressure profile / roll force');
+between(Math.max(...hill.map((h) => h.saw)), 0, 0.25, 'friction hill is smooth (mean jump between neighbouring bins / mean pressure; 1.3 when bins caught 0–2 grid columns)');
+ok(hill.every((h) => h.xn != null && h.xn > -sim.contactLength && h.xn < 0), 'neutral point inside the bite', hill.map((h) => (h.xn == null ? 'none' : (h.xn * 1e3).toFixed(3) + ' mm')).join(', '));
+between(mean(hill.map((h) => h.xn / h.ford)), 0.75, 1.25, "neutral point / Ford's xn = −√(f R h1) from the forward slip");
 ok(last.nFailed === 0, 'ductile SPCC at 25 % does not crack', `${last.nFailed} failed, max D ${last.maxDamage.toFixed(3)}`);
 done();

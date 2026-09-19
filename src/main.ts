@@ -258,6 +258,7 @@ function drawCharts() {
     marks: [
       { x: -g.contactLength * 1e3, label: '入口' },
       { x: 0, label: '出口' },
+      ...(last?.diag.neutralX != null ? [{ x: last.diag.neutralX * 1e3, label: '中立点' }] : []),
     ],
   });
 }
