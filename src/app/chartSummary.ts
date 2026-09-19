@@ -13,6 +13,8 @@ export interface ChartFacts {
   profile: Profile | null;
   /** the point shown in the stress state (null: none yet) */
   point: Track | null;
+  /** a tandem: every stand's steady mean hill so far (the finished stands' and the one on show); one stand: empty */
+  stands?: { label: string; profile: Profile }[];
 }
 
 const ROLE: Record<TrackRole, string> = { selected: '選んだ点', 'first-crack': '最初の亀裂', 'max-damage': '損傷最大' };
@@ -58,13 +60,19 @@ export class ChartSummary {
       `（${when}）` +
       (f.force == null ? '定常の荷重の読みは無い' : `定常の荷重（グラフの平均）${kN(f.force)}`) +
       (f.slab.outside ? `。スラブ法は方法の外（${f.slab.outside}）` : `。スラブ法 ${kN(f.slab.force)}${ratio != null ? `、比 ${ratio.toFixed(2)}` : ''}`);
-    let peak = -Infinity;
-    let at = 0;
-    if (f.profile) for (let i = 0; i < f.profile.p.length; i++) if (f.profile.p[i] > peak) [peak, at] = [f.profile.p[i], f.profile.x[i]];
-    this.hill.textContent =
-      `（${when}）` +
-      (f.profile && peak > 0 ? `定常の平均の圧力のピーク ${(peak * 1e-6).toFixed(0)} MPa（出口から x = ${(at * 1e3).toFixed(2)} mm）` : '定常の平均の圧力は無い') +
-      (f.slab.outside ? '' : `。スラブ法の中立点 x = ${(f.slab.xNeutral * 1e3).toFixed(2)} mm`);
+    const peakOf = (pr: Profile | null) => {
+      let peak = -Infinity;
+      let at = 0;
+      if (pr) for (let i = 0; i < pr.p.length; i++) if (pr.p[i] > peak) [peak, at] = [pr.p[i], pr.x[i]];
+      return peak > 0 ? `${(peak * 1e-6).toFixed(0)} MPa（出口から x = ${(at * 1e3).toFixed(2)} mm）` : null;
+    };
+    // a tandem: one sentence per stand on the chart
+    const hills = f.stands?.length
+      ? f.stands.map((k) => `${k.label} の定常の平均の圧力のピーク ${peakOf(k.profile) ?? '無し'}`).join('。')
+      : peakOf(f.profile) != null
+        ? `定常の平均の圧力のピーク ${peakOf(f.profile)}`
+        : '定常の平均の圧力は無い';
+    this.hill.textContent = `（${when}）` + hills + (f.slab.outside ? '' : `。スラブ法の中立点 x = ${(f.slab.xNeutral * 1e3).toFixed(2)} mm`);
     const s = f.point?.state;
     this.locus.textContent =
       `（${when}）` +

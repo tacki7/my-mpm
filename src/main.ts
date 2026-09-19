@@ -4,7 +4,7 @@ import { PRESETS, presetById } from './mpm/presets.ts';
 import type { Diagnostics, FieldName } from './mpm/solver.ts';
 import { css, lattice, split, temper } from './app/colormap.ts';
 import { FIELDS, damageLabel, fieldInfo } from './app/fields.ts';
-import { Explorer } from './app/explorer.ts';
+import { Explorer, standColor } from './app/explorer.ts';
 import { buildExport } from './app/export.ts';
 import { buildPanel } from './app/panel.ts';
 import { setupSplitters } from './app/splitters.ts';
@@ -24,12 +24,15 @@ import { ChartSummary } from './app/chartSummary.ts';
 import { PresetNote } from './app/presetNote.ts';
 import { radioGroup } from './app/radioGroup.ts';
 import { say } from './app/liveText.ts';
-import { SteadyForce, SteadyProfile, drawForceChart, drawHillChart, slabRatio, slabReference, type ForceChartData, type StandStart } from './app/slabOverlay.ts';
+import { SteadyForce, SteadyProfile, drawForceChart, drawHillChart, slabRatio, type HillStand, type HillChartData, type Profile, slabReference, type ForceChartData, type StandStart } from './app/slabOverlay.ts';
 
 let forceChart: ForceChartData | null = null;
+let hillChart: HillChartData | null = null;
 const steadyForce = new SteadyForce();
 /** the friction hill over the steady phase of the stand on show (it stays after the sheet has left the rolls) */
 const steadyProfile = new SteadyProfile();
+/** a tandem: the finished stands' steady friction hills, kept on the chart in their colours */
+const hillStands: HillStand[] = [];
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -200,6 +203,9 @@ function startWorker() {
       standResults[m.stand] = m.result;
       updateStandTable();
       if (m.next && !m.refresh) {
+        // the finished stand's steady friction hill stays on the chart
+        const hill = steadyProfile.mean;
+        if (hill && geometry) hillStands.push({ label: `#${m.stand + 1}`, color: standColor(m.stand), profile: hill, contactLength: geometry.contactLength });
         standGeometries[m.stand + 1] = m.next;
         geometry = m.next;
         view.geometry = m.next;
@@ -244,6 +250,7 @@ function restart() {
   standStarts = [];
   steadyForce.reset();
   steadyProfile.reset();
+  hillStands.length = 0;
   chartSummary.clear();
   last = null;
   view.frame = null;
@@ -316,7 +323,7 @@ function onFrame(f: Frame) {
   // the charts' words for a screen reader: when the steady reading comes and at the end of the pass
   chartSummary.update(f.passDone ? 'done' : steadyForce.mean != null ? `steady ${f.stand}` : null, runStands, () => {
     const s = standStarts[f.stand];
-    return { force: steadyForce.mean, slab: slabReference(s?.P ?? params, s?.ep0), profile: steadyProfile.mean, point: explorer.shown };
+    return { force: steadyForce.mean, slab: slabReference(s?.P ?? params, s?.ep0), profile: steadyProfile.mean, point: explorer.shown, stands: hillsOf(f.stand) };
   });
 }
 
@@ -453,13 +460,22 @@ function drawLegend() {
     ${last && last.diag.nFailed > 0 ? '<div class="failed-key"><span class="swatch"></span>藍墨の点は亀裂になった点。朱の印は亀裂の番号（右の記録と同じ）</div>' : ''}`;
 }
 
+/** a tandem's steady hills for the screen reader's words: the finished stands' and the one on show (one stand: none) */
+function hillsOf(stand: number): { label: string; profile: Profile }[] {
+  if (runStands <= 1) return [];
+  const m = steadyProfile.mean;
+  return [...hillStands, ...(m ? [{ label: `#${stand + 1}`, profile: m }] : [])];
+}
+
 function drawCharts() {
   const g = geometry;
   if (!g) return;
   // a tandem: each stand's slab level and mark; the friction hill of the stand on show
   const shown = standStarts[last?.stand ?? 0];
   forceChart = drawForceChart($<HTMLCanvasElement>('chart-force'), $('legend-force'), history.t, history.F, params, steadyForce.mean, runStands > 1 ? standStarts : undefined);
-  drawHillChart($<HTMLCanvasElement>('chart-hill'), $('legend-hill'), last?.profile, g.contactLength, last?.diag, shown?.P ?? params, shown?.ep0, steadyProfile.mean);
+  const k = last?.stand ?? 0;
+  hillChart = drawHillChart($<HTMLCanvasElement>('chart-hill'), $('legend-hill'), last?.profile, g.contactLength, last?.diag, shown?.P ?? params, shown?.ep0, steadyProfile.mean,
+    runStands > 1 ? { finished: hillStands, shown: { label: `#${k + 1}`, color: standColor(k) } } : undefined);
   explorer.draw();
 }
 
@@ -539,13 +555,26 @@ window.__mpm = {
       ratio: slabRatio(s, steadyForce.mean),
     };
   },
-  /** the friction hill: the frame's profile and the steady phase's mean (null before it), x [m], p and τ [Pa] */
+  /**
+   * the friction hill: the frame's profile and the steady phase's mean (null before it), x [m], p and τ [Pa]; a tandem:
+   * every stand's steady mean on the chart (the finished ones and the one on show), its label, colour and contact length
+   */
   get hill() {
     const m = steadyProfile.mean;
     const copy = (pr: { x: ArrayLike<number>; p: ArrayLike<number>; tau: ArrayLike<number> }) => ({ x: Array.from(pr.x), p: Array.from(pr.p), tau: Array.from(pr.tau) });
-    return { frame: last ? copy(last.profile) : null, steady: m ? copy(m) : null };
+    const k = last?.stand ?? 0;
+    const stands = runStands > 1 ? [...hillStands, ...(m && geometry ? [{ label: `#${k + 1}`, color: standColor(k), profile: m, contactLength: geometry.contactLength }] : [])] : [];
+    return {
+      frame: last ? copy(last.profile) : null,
+      steady: m ? copy(m) : null,
+      stands: stands.map((s) => ({ label: s.label, color: s.color, contactLength: s.contactLength, ...copy(s.profile) })),
+    };
   },
   /** what the force chart last drew: time [ms], one frame's means and the moving average [kN/mm], the window [ms] */
+  /** what the friction hill chart last drew: its guide marks (a tandem: each stand's entry, in its colour) and lines */
+  get hillChart() {
+    return hillChart;
+  },
   get forceChart() {
     return forceChart;
   },
