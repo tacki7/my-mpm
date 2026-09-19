@@ -8,10 +8,13 @@
 // Scenes (all when none is named):
 //   standard      σeq, the metal flow, η and a point picked past the exit (8 cells, 16 mm, stopped at step 20000 in the steady phase),
 //                 then the rest of the pass: the results table's steady values and the friction hill's steady mean
-//   front-tension the sheet necking and breaking near the head, just after the first crack (damage; the view
-//                 moved there by a click on the overview strip's crack mark)
+//   front-tension the sheet broken near the head, 1500 steps after the first crack (damage; the view moved there by
+//                 a click on the overview strip's crack mark)
 //   central-burst the cracks at mid-thickness (η)
+//   crack-faces   the central burst's crack chain close up (η, 4000 steps after the first crack), with one velocity
+//                 field and with the faces split ('dfg'): the roll bite only, two pictures
 //   plan          the plan view: the edge cracking as a band along the edge (Cockcroft-Latham 0.1, damage)
+//   plan-dfg      the same with the faces split ('dfg')
 //   tandem        three stands: the slots, the stand table and the loading path coloured by stand
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
@@ -40,6 +43,15 @@ const shot = async (name) => {
   await c.screenshot(f, { x: 0, y: 0, width: 1600, height: 1000, scale: 0.75 });
   console.log(`shot  ${f}`);
 };
+// the roll bite's part of the page only (the view with its legend and overview strip)
+const shotBite = async (name) => {
+  await painted();
+  await c.sleep(300);
+  const f = join(dir, name);
+  const b = await c.evaluate(`(() => { const r = document.getElementById('bite').getBoundingClientRect(); return { x: r.x, y: r.y, width: r.width, height: r.height }; })()`);
+  await c.screenshot(f, { ...b, scale: 0.75 });
+  console.log(`shot  ${f}`);
+};
 const open = async (q) => {
   await c.navigate(page(q));
   await c.waitFor('window.__mpm?.ready', 30000);
@@ -57,6 +69,17 @@ const pauseAfter = async (cond, timeout) => {
   await c.waitFor(cond, timeout);
   await c.evaluate(`document.getElementById('pause').click()`);
   await c.waitFor('!__mpm.running && !__mpm.pressing', 20000);
+};
+
+// the plan view's edge cracks (Cockcroft-Latham 0.1, W 20 mm, 20 cells), stopped at step 6000 with the band in the bite
+const planScene = async (extra, name) => {
+  await open(`?view=plan&W=20&wcells=20&L=16&damage=cockcroft-latham&cond=${b64({ damage: { clCrit: 0.1 } })}&pfield=damage&autorun=1${extra}`);
+  await c.waitFor('__mpm.plan.cracks.length > 0', 300000);
+  await pauseAfter('__mpm.plan.diag?.step >= 6000', 300000).catch(async () => {
+    await c.waitFor('!__mpm.plan.running', 20000);
+  });
+  await c.waitFor('!__mpm.plan.running', 20000);
+  await shot(name);
 };
 
 const scenes = {
@@ -98,7 +121,7 @@ const scenes = {
     await open('?preset=front-tension&field=damage&autorun=1');
     await c.waitFor('__mpm.cracks.length > 0', 600000);
     const first = await c.evaluate('__mpm.cracks[0].step');
-    await pauseAfter(`__mpm.diag.step >= ${first + 150}`, 300000);
+    await pauseAfter(`__mpm.diag.step >= ${first + 1500}`, 300000);
     // the sheet breaks near the head, past the window: a real click on the overview strip's vermilion crack mark
     const mark = await c.evaluate(`(() => {
       const ov = document.getElementById('overview');
@@ -124,14 +147,25 @@ const scenes = {
     await pauseAfter(`__mpm.diag.step >= ${first + 6000}`, 900000);
     await shot('central-burst-eta.png');
   },
+  async 'crack-faces'() {
+    for (const mode of ['none', 'dfg']) {
+      await open(`?preset=central-burst&field=eta&autorun=1&crack=${mode}`);
+      await c.waitFor('__mpm.cracks.length > 0', 900000);
+      const first = await c.evaluate('__mpm.cracks[0].step');
+      await pauseAfter(`__mpm.diag.step >= ${first + 4000}`, 900000);
+      // a real wheel on the crack chain (a little right of the picture's middle, on the mid-plane) zooms in on it
+      const at = await c.evaluate(`(() => { const b = document.getElementById('bite').getBoundingClientRect(); return { x: b.x + 0.52 * b.width, y: b.y + b.height / 2 }; })()`);
+      const z0 = await c.evaluate('__mpm.view.zoom');
+      await c.send('Input.dispatchMouseEvent', { type: 'mouseWheel', x: at.x, y: at.y, deltaX: 0, deltaY: -900 });
+      await c.waitFor(`__mpm.view.zoom > ${z0} * 3`, 5000);
+      await shotBite(`central-burst-${mode}.png`);
+    }
+  },
   async plan() {
-    await open(`?view=plan&W=20&wcells=20&L=16&damage=cockcroft-latham&cond=${b64({ damage: { clCrit: 0.1 } })}&pfield=damage&autorun=1`);
-    await c.waitFor('__mpm.plan.cracks.length > 0', 300000);
-    await pauseAfter('__mpm.plan.diag?.step >= 6000', 300000).catch(async () => {
-      await c.waitFor('!__mpm.plan.running', 20000);
-    });
-    await c.waitFor('!__mpm.plan.running', 20000);
-    await shot('plan-edge-crack.png');
+    await planScene('', 'plan-edge-crack.png');
+  },
+  async 'plan-dfg'() {
+    await planScene('&crack=dfg', 'plan-edge-crack-dfg.png');
   },
   async tandem() {
     await open('?stands=3&cells=6&L=8&field=seq&autorun=1');
