@@ -150,6 +150,9 @@ export class Explorer {
       ['dJC', '損傷 JC', s.dJC, s.dJC.toFixed(3), model === 'johnson-cook' ? '判定' : ''],
       ['dHM', '損傷 HM', s.dHM, s.dHM.toFixed(3), model === 'hancock-mackenzie' ? '判定' : ''],
       ['dCL', '損傷 CL', s.dCL, s.dCL.toFixed(3), model === 'cockcroft-latham' ? '判定' : ''],
+      ...(this.params?.damage.yield === 'gtn' || model === 'gtn'
+        ? ([['por', '空孔率 f', s.por, s.por.toFixed(4), model === 'gtn' ? '判定' : '']] as [string, string, number, string, string][])
+        : []),
       ['failed', '状態', s.failed ? 1 : 0, s.failed ? '亀裂' : '健全', ''],
     ];
     if (s.failed) {
@@ -265,15 +268,18 @@ export class Explorer {
     const item = (color: string, text: string, dotted = false) =>
       `<span class="item"><span class="swatch${dotted ? ' dotted' : ''}" style="--c:${color}"></span>${text}</span>`;
     const items = [
-      item('#2c4a8c', `εf(η) ${gov ? gov.label : '（判定しない）'}`),
+      item('#2c4a8c', `εf(η) ${gov ? gov.label : d.model === 'gtn' ? '（判定は空孔率）' : '（判定しない）'}`),
       ...this.tracks.map((t) => item(colorOf(t.role), `${ROLES.find((r) => r.role === t.role)!.label}（D ${t.state.damage.toFixed(2)}）`)),
       ...(shown && gov ? [item(colorOf(shown.role), 'D·εf(η)（D = 1 で曲線に届く）', true)] : []),
     ];
     this.legend.innerHTML = items.join('');
     const parts = [];
+    if (d.model === 'gtn') parts.push(`判定は空孔率（f ≥ fc ${d.gtn.fc}）なので εf(η) の曲線は無い。D = f/fc。`);
     if (d.model === 'johnson-cook') parts.push(`JC の曲線は表示中の点のひずみ速度 ε̇* ${rate.toPrecision(3)}・温度 T* ${Ts.toFixed(2)} で描く。`);
     if (duct !== 1) parts.push(`弱い部分の点なので延性 ${duct} 倍。`);
-    parts.push('実線は (η, εp) の経路。D = ∫ dεp / εf(η) なので η が変わると曲線の手前や先で D = 1 になる。点線は同じ損傷を今の η の比例負荷で与えるひずみ D·εf(η) で、D = 1 のとき曲線に載る。');
+    if (gov)
+      parts.push('実線は (η, εp) の経路。D = ∫ dεp / εf(η) なので η が変わると曲線の手前や先で D = 1 になる。点線は同じ損傷を今の η の比例負荷で与えるひずみ D·εf(η) で、D = 1 のとき曲線に載る。');
+    else parts.push('線は (η, εp) の経路。');
     this.note.textContent = parts.join('');
   }
 }

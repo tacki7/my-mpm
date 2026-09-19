@@ -110,6 +110,7 @@ export class Tracker {
       dJC: s.dJC[p],
       dHM: s.dHM[p],
       dCL: s.dCL[p],
+      por: s.por[p],
       damage: s.governingDamage(p),
       failed: s.failed[p] === 1,
       sheetX: s.xHead0 - s.x0[p],

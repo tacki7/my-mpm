@@ -45,6 +45,8 @@ export interface PointState {
   dJC: number;
   dHM: number;
   dCL: number;
+  /** porosity (GTN; 0 with von Mises) */
+  por: number;
   /** the indicator that decides failure */
   damage: number;
   failed: boolean;
