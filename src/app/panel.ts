@@ -19,6 +19,8 @@ interface NumField {
 interface Group {
   title: string;
   fields: NumField[];
+  /** folded away until opened (settings changed less often) */
+  fold?: boolean;
 }
 
 const mm = 1e-3;
@@ -54,6 +56,7 @@ const RAW: Group[] = [
   },
   {
     title: '空孔（GTN）',
+    fold: true,
     fields: [
       { key: 'f0', label: '初期空孔率 f0', unit: '', step: 0.001, min: 0, max: 0.2, get: (p) => p.damage.gtn.f0, set: (p, v) => (p.damage.gtn.f0 = v), hint: '論文の鋼は 0.005。冷延材なら 0 でもよい' },
       { key: 'fc', label: '限界空孔率 fc', unit: '', step: 0.005, min: 0.001, max: 0.5, get: (p) => p.damage.gtn.fc, set: (p, v) => (p.damage.gtn.fc = v), hint: 'これを超えると f* が k 倍の速さで増える。判定を GTN にすると f ≥ fc で亀裂' },
@@ -61,6 +64,7 @@ const RAW: Group[] = [
   },
   {
     title: '計算',
+    fold: true,
     fields: [
       { key: 'cells', label: '板厚方向のセル数', unit: '', step: 1, min: 4, max: 40, get: (p) => p.numerics.cellsThrough, set: (p, v) => (p.numerics.cellsThrough = Math.round(v)) },
       { key: 'ms', label: '質量スケーリング', unit: '倍', step: 1000, min: 1, max: 1e6, get: (p) => p.numerics.massScale, set: (p, v) => (p.numerics.massScale = v), hint: '大きいほど速いが慣性が効く。ロール周速² × 倍率 ≲ 1e4 を目安に' },
@@ -124,12 +128,11 @@ export function buildPanel(root: HTMLElement, onEdit: () => void): Panel {
       ['gtn', 'GTN（空孔率で軟化する）'],
     ]),
   );
-  matGroup.append(
-    select('nucleation', '空孔の核生成（GTN）', [
-      ['tension', '平均応力が引張のときだけ'],
-      ['always', 'いつでも（論文の式）'],
-    ]),
-  );
+  // only used with the GTN yield condition: it lives in that (folded) group
+  const nucleation = select('nucleation', '空孔の核生成', [
+    ['tension', '平均応力が引張のときだけ'],
+    ['always', 'いつでも（論文の式）'],
+  ]);
   matGroup.append(
     select('damage', '亀裂を判定する基準', [
       ['johnson-cook', 'Johnson-Cook（三軸度・速度・温度）'],
@@ -147,8 +150,16 @@ export function buildPanel(root: HTMLElement, onEdit: () => void): Panel {
   );
 
   for (const g of GROUPS) {
-    const fs = el('fieldset', 'group');
-    fs.append(el('legend', undefined, g.title));
+    // a folded group is a <details> (its summary is the title); the others a <fieldset>
+    let fs: HTMLElement;
+    if (g.fold) {
+      fs = el('details', 'group fold');
+      fs.append(el('summary', undefined, g.title));
+    } else {
+      fs = el('fieldset', 'group');
+      fs.append(el('legend', undefined, g.title));
+    }
+    if (g.title === '空孔（GTN）') fs.append(nucleation);
     for (const f of g.fields) {
       const row = el('label', 'field');
       const head = el('span', 'field-label', f.label);

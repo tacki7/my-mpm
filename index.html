@@ -43,7 +43,7 @@
           <div class="view-tools" id="view-tools" aria-label="表示の操作"></div>
           <canvas class="overview" id="overview" aria-label="板の全長。クリックでそこを表示"></canvas>
           <div class="legend" id="legend"></div>
-          <div class="phase" id="phase"></div>
+          <div class="phase" id="phase" aria-live="polite"></div>
         </div>
         <div class="charts">
           <figure>
@@ -66,11 +66,11 @@
           <h2>圧延結果</h2>
           <table id="results"></table>
         </section>
-        <section class="explorer" id="explorer" aria-label="応力状態"></section>
         <section class="cracks">
           <h2>亀裂の記録</h2>
-          <ol id="crack-log"></ol>
+          <ol id="crack-log" aria-live="polite"></ol>
         </section>
+        <section class="explorer" id="explorer" aria-label="応力状態"></section>
       </aside>
     </main>
     <script type="module" src="/src/main.ts"></script>

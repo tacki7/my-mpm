@@ -13,6 +13,8 @@ const PAD = 1; // px added around each point's cell so that neighbours overlap
 const GLYPH = 18; // px between principal-direction glyphs
 
 export type Exaggeration = 'auto' | 1 | 2 | 4;
+const PRESS_MS = 420; // a crack's stamp is pressed onto the sheet in this time (no motion if reduced)
+const reducedMotion = () => window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
 
 export interface ViewState {
   /** thickness exaggeration in use (from exMode) */
@@ -40,6 +42,8 @@ export class BiteView {
   marks: { id: number; kind: 'selected' | 'first-crack' | 'max-damage' }[] = [];
   state: ViewState = { exaggeration: 1, range: [0, 1], zoom: 1, panX: 0, panY: 0, exMode: 'auto', dirs: false };
   private readonly canvas: HTMLCanvasElement;
+  /** when each crack's stamp first appeared (key: id and time of the crack, so a new run starts over) */
+  private readonly stampBorn = new Map<string, number>();
 
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
@@ -437,25 +441,66 @@ export class BiteView {
     ctx.restore();
   }
 
+  /** Press every stamp again (headless checks capture the moment). */
+  pressAgain(): void {
+    const now = reducedMotion() ? performance.now() - PRESS_MS : performance.now();
+    for (const k of this.stampBorn.keys()) this.stampBorn.set(k, now);
+  }
+
+  /** A stamp is being pressed: the page keeps redrawing until it has settled. */
+  animating(): boolean {
+    const now = performance.now();
+    for (const t of this.stampBorn.values()) if (now - t < PRESS_MS) return true;
+    return false;
+  }
+
+  /**
+   * The inspection stamps. A new one is pressed: it comes down large and faint, lands with a
+   * slight turn, and a ring of ink spreads from it once; then it stays, turned like the stamps of
+   * the crack record.
+   */
   private drawStamps(T: ReturnType<BiteView['transform']>, f: Frame): void {
     const ctx = this.ctx;
+    const now = performance.now();
+    const still = reducedMotion();
     ctx.save();
     for (const c of f.cracks) {
+      const key = `${c.id}:${c.t}`;
+      if (!this.stampBorn.has(key)) this.stampBorn.set(key, still ? now - PRESS_MS : now);
       const x = T.X(c.cx);
       const y = T.Y(c.cy);
       if (x < -30 || x > this.w + 30) continue;
+      const k = Math.min(1, (now - this.stampBorn.get(key)!) / PRESS_MS);
+      const down = 1 - (1 - k) * (1 - k) * (1 - k); // eases in to the sheet
+      const scale = 1 + 0.9 * (1 - down);
+      const turn = ((-8 - 14 * (1 - down)) * Math.PI) / 180;
+      ctx.save();
+      ctx.translate(x, y);
+      if (k < 1 && k > 0.55) {
+        // the ink spreading as it lands
+        const s = (k - 0.55) / 0.45;
+        ctx.strokeStyle = `rgba(194,59,34,${0.4 * (1 - s)})`;
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.arc(0, 0, 14 + 12 * s, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+      ctx.rotate(turn);
+      ctx.scale(scale, scale);
+      ctx.globalAlpha = 0.35 + 0.65 * down;
       ctx.strokeStyle = '#c23b22';
       ctx.fillStyle = 'rgba(194,59,34,0.08)';
       ctx.lineWidth = 2;
       ctx.beginPath();
-      ctx.arc(x, y, 14, 0, Math.PI * 2);
+      ctx.arc(0, 0, 14, 0, Math.PI * 2);
       ctx.fill();
       ctx.stroke();
       ctx.fillStyle = '#c23b22';
       ctx.font = uiFont(12, 600);
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      ctx.fillText(String(c.id + 1), x, y + 0.5);
+      ctx.fillText(String(c.id + 1), 0, 0.5);
+      ctx.restore();
     }
     ctx.restore();
   }

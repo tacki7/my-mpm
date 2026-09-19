@@ -100,7 +100,7 @@ try {
   })()`;
   // start from the last tab so that the first click is a change too
   await c.evaluate(`__mpm.setField(${JSON.stringify(tabs.at(-1)?.id)})`);
-  await c.waitFor(`document.getElementById('legend').textContent.includes(${JSON.stringify(tabs.at(-1)?.label)})`, 10000);
+  await c.waitFor(`document.getElementById('legend').dataset.field === ${JSON.stringify(tabs.at(-1)?.id)}`, 10000);
   await painted();
   let prev = await c.evaluate(canvasHash);
   for (const tab of tabs) {
@@ -117,7 +117,7 @@ try {
         await c.send('Input.dispatchMouseEvent', { type, x: r.x, y: r.y, button: 'left', clickCount: 1 });
       }
       // the worker answers with a frame in the new field; the legend is redrawn with it
-      await c.waitFor(`document.getElementById('legend').textContent.includes(${JSON.stringify(tab.label)})`, 5000);
+      await c.waitFor(`document.getElementById('legend').dataset.field === ${JSON.stringify(tab.id)}`, 5000);
       await painted();
       const now = await c.evaluate(canvasHash);
       const legend = await c.evaluate(`document.getElementById('legend').textContent`);
