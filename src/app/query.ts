@@ -24,6 +24,7 @@ export const LIMITS: Record<string, [number, number]> = {
   r: [0.5, 70],
   R: [5, 2000],
   L: [1, 500],
+  stands: [1, MAX_STANDS],
   mu: [0, 1],
   tb: [0, 5000],
   tf: [0, 5000],
@@ -55,6 +56,7 @@ export function applyQuery(base: SimParams, q: URLSearchParams): SimParams {
     p.rolling.rollRadius = base.rolling.rollRadius;
   }
   num('L', (v) => (p.rolling.sheetLength = v * 1e-3));
+  num('stands', (v) => Number.isInteger(v) && (p.rolling.stands = v));
   num('mu', (v) => (p.rolling.mu = v));
   num('tb', (v) => (p.rolling.backTension = v * 1e6));
   num('tf', (v) => (p.rolling.frontTension = v * 1e6));
@@ -121,6 +123,7 @@ const RULES: Record<string, Rule> = {
   'rolling.reduction': r(0.005, 0.7),
   'rolling.rollRadius': r(5e-3, 2),
   'rolling.sheetLength': r(1e-3, 0.5),
+  'rolling.stands': { range: [1, MAX_STANDS], int: true },
   'rolling.rollSpeed': r(0.05, 20),
   'rolling.millSpeed': r(0.1, 60),
   'rolling.mu': r(0, 1),
@@ -253,6 +256,7 @@ export function conditionsQuery(presetId: string, preset: SimParams, params: Sim
   put('r', r.reduction * 100, b.reduction * 100);
   put('R', r.rollRadius * 1e3, b.rollRadius * 1e3);
   put('L', r.sheetLength * 1e3, b.sheetLength * 1e3);
+  put('stands', r.stands ?? 1, b.stands ?? 1);
   put('mu', r.mu, b.mu);
   put('tb', r.backTension * 1e-6, b.backTension * 1e-6);
   put('tf', r.frontTension * 1e-6, b.frontTension * 1e-6);
@@ -265,12 +269,6 @@ export function conditionsQuery(presetId: string, preset: SimParams, params: Sim
   const rest = diff(applyQuery(preset, q), params);
   if (rest !== undefined) q.set('cond', toBase64Url(JSON.stringify(rest)));
   return q;
-}
-
-/** ?stands=<N>: the stands of a tandem, 1 to MAX_STANDS (anything else: 1). */
-export function standsOf(q: URLSearchParams): number {
-  const v = parseFloat(q.get('stands') ?? '');
-  return Number.isInteger(v) && v >= 1 && v <= MAX_STANDS ? v : 1;
 }
 
 /** ?stopafter=<steps> (exponent notation allowed), or null. */
