@@ -19,6 +19,8 @@ import { passReadout, readoutKind, readoutNote } from './app/passReadout.ts';
 import { BurstHint } from './app/burstHint.ts';
 import type { StandResult } from './mpm/tandem.ts';
 import { attachViewControls } from './app/viewControls.ts';
+import { radioGroup } from './app/radioGroup.ts';
+import { say } from './app/liveText.ts';
 import { SteadyForce, SteadyProfile, drawForceChart, drawHillChart, slabRatio, slabReference, type ForceChartData, type StandStart } from './app/slabOverlay.ts';
 
 let forceChart: ForceChartData | null = null;
@@ -175,6 +177,7 @@ for (const f of FIELDS) {
   b.addEventListener('click', () => setField(f.id));
   tabs.append(b);
 }
+radioGroup(tabs);
 function setField(id: FieldName) {
   field = id;
   for (const b of tabs.querySelectorAll<HTMLButtonElement>('button')) b.setAttribute('aria-checked', String(b.dataset.field === id));
@@ -362,6 +365,7 @@ function updateResults(d: Diagnostics, f: Frame) {
         tr.dataset.steady = r.steady ? '1' : '0';
       }
       const th = document.createElement('th');
+      th.scope = 'row';
       th.textContent = k;
       const td = document.createElement('td');
       td.textContent = v;
@@ -374,7 +378,7 @@ function updateResults(d: Diagnostics, f: Frame) {
   );
   showClock();
   // a tandem that stopped before its last stand says why here too
-  $('phase').textContent = f.stopped ? stopPhrase(f.stopped, f.results.length) : phaseText[d.phase];
+  say($('phase'), f.stopped ? stopPhrase(f.stopped, f.results.length) : phaseText[d.phase]);
 }
 
 /** a tandem: the stands' table (one stand: hidden) */
