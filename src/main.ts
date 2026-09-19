@@ -9,7 +9,9 @@ import { Explorer } from './app/explorer.ts';
 import { buildPanel } from './app/panel.ts';
 import type { CrackView, Frame, FromWorker, Geometry, ToWorker } from './app/protocol.ts';
 import { applyQuery, stopAfterOf } from './app/query.ts';
+import { Overview } from './app/overview.ts';
 import { BiteView } from './app/view.ts';
+import { attachViewControls } from './app/viewControls.ts';
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -35,6 +37,16 @@ let running = false;
 let dirty = false;
 let edited = false;
 let awaitingReady = false; // frames of the run a restart replaced may still be on their way
+
+// ── view: zoom, pan, overview ───────────────────────────────────────────────
+const overview = new Overview($<HTMLCanvasElement>('overview'), view, () => (dirty = true));
+attachViewControls({
+  canvas: $<HTMLCanvasElement>('bite'),
+  toolbar: $('view-tools'),
+  view,
+  redraw: () => (dirty = true),
+  onDirs: (on) => send({ type: 'dirs', on }),
+});
 
 // ── conditions ──────────────────────────────────────────────────────────────
 const presetSel = $<HTMLSelectElement>('preset');
@@ -90,6 +102,8 @@ function startWorker() {
     const m = e.data;
     if (m.type === 'ready') {
       awaitingReady = false;
+      // new conditions, new picture: back to the default window
+      if (!geometry || geometry.h0 !== m.geometry.h0 || geometry.contactLength !== m.geometry.contactLength) view.resetView();
       geometry = m.geometry;
       view.geometry = geometry;
       if (query.get('autorun') === '1' && frames === 0) run();
@@ -289,6 +303,7 @@ function frameLoop() {
     if (dirty) {
       dirty = false;
       view.draw();
+      overview.draw();
       drawLegend();
       drawCharts();
     }
@@ -343,6 +358,17 @@ window.__mpm = {
   },
   /** client coordinates of a material point on the roll-bite canvas (headless checks click there) */
   screenOf: (id: number) => view.screenOf(id),
+  /** zoom, pan (m), exaggeration mode and in use, principal directions */
+  get view() {
+    const s = view.state;
+    return { zoom: s.zoom, panX: s.panX, panY: s.panY, exMode: s.exMode, exaggeration: s.exaggeration, dirs: s.dirs, dirsInFrame: !!last?.dirs };
+  },
+  /** mean time of one roll-bite redraw over n redraws of the current frame [ms] */
+  drawMs(n = 20) {
+    const t0 = performance.now();
+    for (let i = 0; i < n; i++) view.draw();
+    return (performance.now() - t0) / n;
+  },
   history,
   run,
   restart,
