@@ -146,6 +146,7 @@ function restOf(s: Sim, tr: Tracker | null, keep = false): Picture['rest'] {
     results: t.results.map((r) => ({ ...r })),
     passDone: s === sim && finished(),
     stopped: t.stopped,
+    steady: s === sim ? t.steadyMeans() : null,
   };
 }
 
