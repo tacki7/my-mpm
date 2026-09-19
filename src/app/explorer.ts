@@ -3,7 +3,7 @@
 // through which states a point reached D = 1. The paths come from the worker
 // (tracker.ts); here they are only shown.
 import { hmFractureStrain, jcFractureStrain } from '../mpm/material.ts';
-import type { SimParams } from '../mpm/params.ts';
+import type { DamageModel, SimParams } from '../mpm/params.ts';
 import { drawChart, type Series } from './charts.ts';
 import type { Frame, Track, TrackRole } from './protocol.ts';
 import { clFractureStrainPlaneStrain, lodeParameter, principal } from './stress.ts';
@@ -135,6 +135,9 @@ export class Explorer {
     const s = t.state;
     const pr = principal(s.sxx, s.syy, s.sxy, s.szz);
     const model = this.params?.damage.model;
+    // the criterion that fails the point; with none, the indicator the damage D shows (the largest)
+    const most = Math.max(s.dJC, s.dHM, s.dCL);
+    const mark = (m: DamageModel, v: number) => (model === m ? '判定' : model === 'none' && most > 0 && v === most ? '最大' : '');
     const rows: [string, string, number, string, string][] = [
       ['position', '位置', s.sheetX, `先端から ${(s.sheetX * 1e3).toFixed(2)} mm、中心から ${(s.sheetY * 1e3).toFixed(3)} mm`, ''],
       ['sxx', '圧延方向 σxx', s.sxx, (s.sxx * MPa).toFixed(0), 'MPa'],
@@ -147,9 +150,9 @@ export class Explorer {
       ['eta', '三軸度 η', s.eta, s.eta.toFixed(3), ''],
       ['lode', 'Lode パラメータ', lodeParameter(pr), lodeParameter(pr).toFixed(3), ''],
       ['ep', '塑性ひずみ εp', s.ep, s.ep.toFixed(4), ''],
-      ['dJC', '損傷 JC', s.dJC, s.dJC.toFixed(3), model === 'johnson-cook' ? '判定' : ''],
-      ['dHM', '損傷 HM', s.dHM, s.dHM.toFixed(3), model === 'hancock-mackenzie' ? '判定' : ''],
-      ['dCL', '損傷 CL', s.dCL, s.dCL.toFixed(3), model === 'cockcroft-latham' ? '判定' : ''],
+      ['dJC', '損傷 JC', s.dJC, s.dJC.toFixed(3), mark('johnson-cook', s.dJC)],
+      ['dHM', '損傷 HM', s.dHM, s.dHM.toFixed(3), mark('hancock-mackenzie', s.dHM)],
+      ['dCL', '損傷 CL', s.dCL, s.dCL.toFixed(3), mark('cockcroft-latham', s.dCL)],
       ...(this.params?.damage.yield === 'gtn' || model === 'gtn'
         ? ([['por', '空孔率 f', s.por, s.por.toFixed(4), model === 'gtn' ? '判定' : '']] as [string, string, number, string, string][])
         : []),
@@ -282,6 +285,7 @@ export class Explorer {
     const parts = [];
     if (d.model === 'gtn') parts.push(`判定は空孔率（f ≥ fc ${d.gtn.fc}）なので εf(η) の曲線は無い。D = f/fc。`);
     if (d.model === 'localization') parts.push('判定は音響テンソルの特異（det A / 弾性の値 ≤ 0 でせん断帯が生じうる）なので εf(η) の曲線は無い。硬化する材料では起きない。');
+    if (d.model === 'none') parts.push('判定しない（亀裂にしない）。損傷 D は JC・HM・CL の 3 つの最大。');
     if (d.model === 'johnson-cook') parts.push(`JC の曲線は表示中の点のひずみ速度 ε̇* ${rate.toPrecision(3)}・温度 T* ${Ts.toFixed(2)} で描く。`);
     if (duct !== 1) parts.push(`弱い部分の点なので延性 ${duct} 倍。`);
     if (gov)
