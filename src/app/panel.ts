@@ -53,6 +53,13 @@ const RAW: Group[] = [
     ],
   },
   {
+    title: '空孔（GTN）',
+    fields: [
+      { key: 'f0', label: '初期空孔率 f0', unit: '', step: 0.001, min: 0, max: 0.2, get: (p) => p.damage.gtn.f0, set: (p, v) => (p.damage.gtn.f0 = v), hint: '論文の鋼は 0.005。冷延材なら 0 でもよい' },
+      { key: 'fc', label: '限界空孔率 fc', unit: '', step: 0.005, min: 0.001, max: 0.5, get: (p) => p.damage.gtn.fc, set: (p, v) => (p.damage.gtn.fc = v), hint: 'これを超えると f* が k 倍の速さで増える。判定を GTN にすると f ≥ fc で亀裂' },
+    ],
+  },
+  {
     title: '計算',
     fields: [
       { key: 'cells', label: '板厚方向のセル数', unit: '', step: 1, min: 4, max: 40, get: (p) => p.numerics.cellsThrough, set: (p, v) => (p.numerics.cellsThrough = Math.round(v)) },
@@ -112,10 +119,23 @@ export function buildPanel(root: HTMLElement, onEdit: () => void): Panel {
     ),
   );
   matGroup.append(
+    select('yield', '降伏条件', [
+      ['von-mises', 'von Mises（圧力に依存しない）'],
+      ['gtn', 'GTN（空孔率で軟化する）'],
+    ]),
+  );
+  matGroup.append(
+    select('nucleation', '空孔の核生成（GTN）', [
+      ['tension', '平均応力が引張のときだけ'],
+      ['always', 'いつでも（論文の式）'],
+    ]),
+  );
+  matGroup.append(
     select('damage', '亀裂を判定する基準', [
       ['johnson-cook', 'Johnson-Cook（三軸度・速度・温度）'],
       ['hancock-mackenzie', 'Hancock-MacKenzie（三軸度）'],
       ['cockcroft-latham', 'Cockcroft-Latham（最大主応力）'],
+      ['gtn', '空孔率が fc に達する（GTN）'],
       ['none', '判定しない'],
     ]),
   );
@@ -159,6 +179,8 @@ export function buildPanel(root: HTMLElement, onEdit: () => void): Panel {
       for (const g of GROUPS) for (const f of g.fields) inputs.get(f.key)!.value = String(+f.get(p).toPrecision(6));
       const matKey = Object.entries(MATERIALS).find(([, m]) => m.name === p.material.name)?.[0] ?? 'spcc';
       selects.get('material')!.value = matKey;
+      selects.get('yield')!.value = p.damage.yield;
+      selects.get('nucleation')!.value = p.damage.gtn.nucleation;
       selects.get('damage')!.value = p.damage.model;
       selects.get('failure')!.value = p.damage.failure;
     },
@@ -166,6 +188,8 @@ export function buildPanel(root: HTMLElement, onEdit: () => void): Panel {
       const p: SimParams = structuredClone(base);
       const matKey = selects.get('material')!.value;
       if (MATERIALS[matKey] && MATERIALS[matKey].name !== p.material.name) p.material = { ...MATERIALS[matKey] };
+      p.damage.yield = selects.get('yield')!.value as SimParams['damage']['yield'];
+      p.damage.gtn.nucleation = selects.get('nucleation')!.value as SimParams['damage']['gtn']['nucleation'];
       p.damage.model = selects.get('damage')!.value as SimParams['damage']['model'];
       p.damage.failure = selects.get('failure')!.value as SimParams['damage']['failure'];
       for (const g of GROUPS) {

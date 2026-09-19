@@ -23,6 +23,8 @@ export const FIELDS: FieldInfo[] = [
   { id: 'syy', label: '板厚方向応力 σyy', unit: 'MPa', scale: 'diverging' },
   { id: 'sxy', label: 'せん断応力 σxy', unit: 'MPa', scale: 'diverging' },
   { id: 'lagrange', label: 'メタルフロー', unit: '', scale: 'lattice', range: [0, 1] },
+  // 0 everywhere unless the yield condition is GTN
+  { id: 'porosity', label: '空孔率 f', unit: '', scale: 'sequential' },
 ];
 
 export function fieldInfo(id: FieldName): FieldInfo {
