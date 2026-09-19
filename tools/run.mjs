@@ -3,13 +3,13 @@
 //   node tools/run.mjs [--h0 1] [--r 0.25] [--R 100] [--L 16] [--mu 0.08] [--cells 10]
 //                      [--mat spcc|s4340|al6061] [--damage johnson-cook|hancock-mackenzie|cockcroft-latham|gtn|localization|none]
 //                      [--yield von-mises|gtn] [--preset <id>] [--chi 0.9] [--nonlocal <ℓ mm>]
-//                      [--tb 0] [--tf 0] [--every 2000] [--max 400000] [--contact surface|stencil] [--json]
+//                      [--tb 0] [--tf 0] [--every 2000] [--max 400000] [--contact surface|stencil] [--vrc 1] [--json]
 //
-// Lengths in mm, tensions in MPa. Prints a line every --every steps and a summary
-// at the end (or one JSON object with --json).
+// Lengths in mm, tensions in MPa. An option left out keeps the preset's value (or the
+// default): `--preset front-tension` runs with its front tension. Prints a line every
+// --every steps and a summary at the end (or one JSON object with --json).
 import { Sim } from '../src/mpm/solver.ts';
-import { defaultParams, MATERIALS } from '../src/mpm/params.ts';
-import { presetById } from '../src/mpm/presets.ts';
+import { runParams } from './run-params.mjs';
 
 const args = process.argv.slice(2);
 const opt = (name, def) => {
@@ -18,27 +18,8 @@ const opt = (name, def) => {
 };
 const flag = (name) => args.includes(`--${name}`);
 
-const preset = opt('preset', null);
-const P = preset ? presetById(preset).build() : defaultParams();
-const r = P.rolling;
-r.h0 = +opt('h0', r.h0 * 1e3) * 1e-3;
-r.reduction = +opt('r', r.reduction);
-r.rollRadius = +opt('R', r.rollRadius * 1e3) * 1e-3;
-r.sheetLength = +opt('L', r.sheetLength * 1e3) * 1e-3;
-r.mu = +opt('mu', r.mu);
-r.backTension = +opt('tb', 0) * 1e6;
-r.frontTension = +opt('tf', 0) * 1e6;
-P.numerics.cellsThrough = +opt('cells', P.numerics.cellsThrough);
-P.numerics.massScale = +opt('ms', P.numerics.massScale);
-if (flag('nojbar')) P.numerics.jbar = false;
-P.numerics.contact = opt('contact', P.numerics.contact); // 'stencil': the contact of before (a band 1.5 cells deep); the same as before only with numerics.volRelaxContact 5 as well
-const mat = opt('mat', null);
-if (mat) P.material = { ...MATERIALS[mat] };
-P.damage.model = opt('damage', P.damage.model);
-P.damage.yield = opt('yield', P.damage.yield);
-P.material.chi = +opt('chi', P.material.chi); // Taylor-Quinney coefficient: 0 = no heating
-P.damage.nonlocalLength = +opt('nonlocal', P.damage.nonlocalLength * 1e3) * 1e-3; // mm
-P.damage.gtn.nucleation = opt('nucleation', P.damage.gtn.nucleation);
+// the preset (or the defaults) and the options given; one left out keeps the preset's value
+const P = runParams(args);
 const every = +opt('every', 2000);
 const maxSteps = +opt('max', 400000);
 const json = flag('json');
