@@ -158,6 +158,24 @@ toEnd(two);
 ok(two.done && two.results.length === 2 && two.results[1].maxDamage >= two.results[0].maxDamage && two.results[1].h0 < two.results[0].h0,
   'two stands: done, thinner in the second, damage adds up', two.results.map((r) => `h0 ${(r.h0 * 1e3).toFixed(3)} mm, D ${r.maxDamage.toFixed(4)}`).join('; '));
 
+// the stands do not depend on how the caller reads: two tandems, one read every 100 steps (a page), one never,
+// end their stands at the same steps with the same results, and stand 2's points are the same bit for bit
+{
+  const P = short(defaultParams());
+  const a = new TandemSim(P, 2);
+  const b = new TandemSim(P, 2);
+  let k = 0;
+  while (!a.done || !b.done) {
+    if (!a.done) a.advance();
+    if (!b.done) b.advance();
+    if (++k % 100 === 0) a.diagnostics();
+  }
+  const same = ['px', 'py', 'sxx', 'pres', 'ep', 'dJC'].every((f) => a.sim[f].every((v, i) => Object.is(v, b.sim[f][i])));
+  ok(JSON.stringify(a.results) === JSON.stringify(b.results) && same && a.stepOffset === b.stepOffset,
+    'two stands: read every 100 steps or never, the stands end at the same steps with the same results and points',
+    a.results.map((r) => `${r.steps} steps, F ${(r.steadyForce ?? 0) * 1e-6}`).join('; '));
+}
+
 // high friction: the rows shear in the bite
 remapCheck('high friction', short(presetById('high-friction').build()));
 
