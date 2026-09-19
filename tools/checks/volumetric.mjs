@@ -4,9 +4,14 @@
 //   σzz −156 MPa where ν(σxx + σyy) was −2 MPa)
 // - no pressure diffusion: σm/2k at the plate centre in mid-bite (Hill's slip-line field: +0.39 at
 //   this H/L) is not pulled negative. Re-smoothing the total J every step diffused the pressure with
-//   D ≈ h²/(4Δt) and gave ≈ −0.3 here. The mass-scaling pair (1e4 against 2e3) is a looser guard:
-//   with this contact and 8 cells the old scheme differs by only +0.02 and passes it; the centre
-//   value is what catches it.
+//   D ≈ h²/(4Δt) and gave −0.29 to −0.32 here (8–12 cells, either contact). This is the main test.
+// - the mass-scaling pair (2e3 minus 1e4): diffusion pulls the centre further negative the more steps
+//   a pass takes, so a shorter step (lower mass scaling) lowers it: with the surface contact the total
+//   J gives −0.04 to −0.05 (8–12 cells). It catches diffusion only with that contact (with the stencil
+//   contact the total J gave ±0.02). A positive difference is inertia, not diffusion: with no volume
+//   averaging at all it reaches +0.043 (12 cells), the volume rate gives +0.03 to +0.06 (8–12 cells).
+//   So the bound is −0.03 below, and a loose +0.1 above that only catches a scheme whose inertial
+//   effect runs away with the time step.
 // docs/validation.md「体積の平均化」holds the converged numbers.
 // @check
 import { ok, between, done } from './lib.mjs';
@@ -74,5 +79,5 @@ ok(a.nan === 0 && b.nan === 0, 'no NaN', `${a.nan}, ${b.nan}`);
 ok(a.elN > 1000, 'elastic points ahead of the bite were sampled', `${a.elN}`);
 between(a.elastic, 0, 1e-6, 'plane strain ahead of the bite: mean |σzz − ν(σxx + σyy)| / 2k');
 between(a.centre, -0.2, 0.4, 'σm/2k at the plate centre in mid-bite, mass scaling 1e4 (smoothing the total J: ≈ −0.3)');
-between(b.centre - a.centre, -0.03, 0.03, 'the same with mass scaling 2e3 minus 1e4 (loose; smoothing the total J: +0.02, caught by the centre value instead)');
+between(b.centre - a.centre, -0.03, 0.1, 'the same with mass scaling 2e3 minus 1e4 (diffusion pulls it negative: total J −0.05; inertia makes it positive)');
 done();

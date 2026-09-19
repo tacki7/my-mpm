@@ -1,8 +1,8 @@
 // Compare the ways the roll contact marks grid nodes (`numerics.contact`) on the
 // standard pass. Not part of the gate; the numbers go to docs/validation.md.
 //
-//   node tools/contact-compare.mjs [--contact stencil,surface] [--cells 6,10,14]
-//                                  [--jbar on,off] [--L 8] [--window 250] [--mu 0.08]
+//   node tools/contact-compare.mjs [--contact stencil,surface] [--cells 6,10,14] [--volumetric rate,total]
+//                                  [--jbar on,off] [--vrc 1] [--L 8] [--window 250] [--mu 0.08]
 //
 // For each run, over the steady phase: roll force and torque, exit thickness,
 // forward slip, neutral point, the integral of the node-impulse pressure against
@@ -22,14 +22,18 @@ const opt = (name, def) => {
 const contacts = opt('contact', 'stencil,surface').split(',');
 const cellsList = opt('cells', '6').split(',').map(Number);
 const jbars = opt('jbar', 'on').split(',');
+const vols = opt('volumetric', 'rate').split(',');
+const vrc = opt('vrc', null); // numerics.volRelaxContact
 const L = +opt('L', 8) * 1e-3;
 const win = +opt('window', 250);
 const mu = +opt('mu', 0.08);
 const LAYERS = 4;
 const mean = (a) => (a.length ? a.reduce((s, v) => s + v, 0) / a.length : NaN);
 
-function run(contact, cells, jbar) {
+function run(contact, cells, jbar, vol) {
   const P = defaultParams();
+  P.numerics.volumetric = vol;
+  if (vrc != null) P.numerics.volRelaxContact = +vrc;
   P.numerics.cellsThrough = cells;
   P.numerics.contact = contact;
   P.numerics.jbar = jbar;
@@ -151,6 +155,8 @@ function run(contact, cells, jbar) {
   const F = mean(rows.map((r) => r.d.rollForce));
   return {
     contact,
+    volumetric: jbar ? vol : '—',
+    vrc: P.numerics.volRelaxContact,
     cells,
     jbar,
     samples: rows.length,
@@ -173,6 +179,9 @@ function run(contact, cells, jbar) {
 
 for (const cells of cellsList) {
   for (const jb of jbars) {
-    for (const contact of contacts) console.log(JSON.stringify(run(contact, cells, jb !== 'off')));
+    // without the volume averaging the scheme does not matter
+    for (const vol of jb === 'off' ? [vols[0]] : vols) {
+      for (const contact of contacts) console.log(JSON.stringify(run(contact, cells, jb !== 'off', vol)));
+    }
   }
 }

@@ -146,8 +146,9 @@ export interface NumericsParams {
    */
   volRelax?: number;
   /**
-   * 'rate': the same within two cells of a roll surface, where the contact projection pins the
-   * velocity of a ~1.5-cell band and the discrete flow cannot stay isochoric. Default 5
+   * 'rate': the same within two cells of a roll surface. Default 1. With the 'stencil' contact, which
+   * holds a ~1.5-cell band to the roll so that the discrete flow cannot stay isochoric there, 5 made
+   * up for the band (and 1 locks: 5.05 kN/mm on the standard pass at 6 cells)
    */
   volRelaxContact?: number;
   /** which nodes the roll contact constrains */
@@ -310,7 +311,7 @@ export function defaultParams(): SimParams {
       jbar: true,
       volumetric: 'rate',
       volRelax: 1,
-      volRelaxContact: 5,
+      volRelaxContact: 1,
       contact: 'surface',
     },
     defects: [],

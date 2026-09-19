@@ -674,7 +674,7 @@ export class Sim {
     const jbar = num.jbar;
     const rate = num.volumetric !== 'total';
     const cIn = num.volRelax ?? 1;
-    const cContact = num.volRelaxContact ?? 5;
+    const cContact = num.volRelaxContact ?? 1;
     // contact band: within 2h of a roll surface, i.e. |x − c| < R + 2h (squared, no sqrt per point)
     const [r0, r1] = this.rolls;
     const b0 = (r0.R + 2 * h) * (r0.R + 2 * h);
