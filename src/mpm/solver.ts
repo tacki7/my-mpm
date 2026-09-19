@@ -195,6 +195,9 @@ export class Sim {
   /** tension stresses applied at this step, after ramping [Pa] */
   backNow = 0;
   frontNow = 0;
+  /** column height / Σ|F e_y| dp of the tail and head columns (see endScale) */
+  private backScale = 1;
+  private frontScale = 1;
   /** time the front tension was switched on (head past the exit probe), and the back tension released (tail at the entry); −1: not yet */
   private frontOnAt = -1;
   private backOffAt = -1;
@@ -418,8 +421,8 @@ export class Sim {
     const k4 = 4 * invH * invH;
     this.updateTension();
     // force per end point [N/m] per unit of its current height (a stress on the end face)
-    const tractionB = -this.backNow * this.dp;
-    const tractionF = this.frontNow * this.dp;
+    const tractionB = -this.backNow * this.dp * this.backScale;
+    const tractionF = this.frontNow * this.dp * this.frontScale;
     const pushing = this.pusherActive;
     for (let p = 0; p < n; p++) {
       if (!active[p]) continue;
@@ -908,13 +911,41 @@ export class Sim {
     if (r.backTension !== 0) {
       if (this.backOffAt < 0 && this.tailX() >= -this.contactLength) this.backOffAt = t;
       let back = r.backTension * Math.min(1, t / ramp);
-      if (this.backOffAt >= 0) back *= Math.max(0, 1 - (t - this.backOffAt) / ramp);
-      this.backNow = back;
+      // let go within the time the tail takes to cross the bite, not the (possibly longer) ramp
+      const release = Math.min(ramp, this.contactLength / this.vIn);
+      if (this.backOffAt >= 0) back *= Math.max(0, 1 - (t - this.backOffAt) / release);
+      this.backScale = this.endScale(1);
+      this.backNow = this.backScale > 0 ? back : 0;
     }
     if (r.frontTension !== 0) {
       if (this.frontOnAt < 0 && this.headX() > this.xExitProbe) this.frontOnAt = t;
-      this.frontNow = this.frontOnAt >= 0 ? r.frontTension * Math.min(1, (t - this.frontOnAt) / ramp) : 0;
+      const front = this.frontOnAt >= 0 ? r.frontTension * Math.min(1, (t - this.frontOnAt) / ramp) : 0;
+      this.frontScale = this.endScale(2);
+      this.frontNow = this.frontScale > 0 ? front : 0;
     }
+  }
+
+  /**
+   * Height of an end column (tag 1 tail, 2 head) over the sum of its points' deformed y edges
+   * |F e_y| dp. Each point's end load is σ dp |F e_y| times this, so the total is σ × the
+   * column's actual height even when the column is sheared or its points have spread apart.
+   * 0 when the column has no active point left (it has left the grid).
+   */
+  private endScale(tg: number): number {
+    const { n, tag, active, py, dp } = this;
+    let top = -INF;
+    let bot = INF;
+    let sum = 0;
+    const from = tg === 1 ? 0 : n - 1;
+    const step = tg === 1 ? 1 : -1;
+    for (let p = from; p >= 0 && p < n && tag[p] === tg; p += step) {
+      if (!active[p]) continue;
+      const e = dp * Math.hypot(this.f01[p], this.f11[p]);
+      sum += e;
+      if (py[p] + e / 2 > top) top = py[p] + e / 2;
+      if (py[p] - e / 2 < bot) bot = py[p] - e / 2;
+    }
+    return sum > 0 ? (top - bot) / sum : 0;
   }
 
   /** Release the pusher once the head is well out of the bite (friction has to draw the sheet from then on). */

@@ -51,19 +51,19 @@ function sectionStress(sim, x0, x1) {
 {
   const P = coarse();
   P.rolling.backTension = 100 * MPa;
+  // long enough to have entry strip left behind the pusher's release (head past the probe)
+  P.rolling.sheetLength = 12e-3;
   const V = P.rolling.rollSpeed;
   const sim = new Sim(P);
   const entry = [];
   let slowTail = 0;
   let afterExit = 0;
-  while (sim.step < 60000) {
+  while (sim.step < 80000) {
     for (let i = 0; i < 50; i++) sim.advance();
     const tail = sim.tailX();
-    // the strip just ahead of the tail, while the tail is still well before the bite (after the ramp)
-    // (and while the pusher carries no load: until the rolls grip, it holds the tail against the back tension)
-    const d = sim.diagnostics();
-    const free = d.pusherForce < 0.02 * P.rolling.backTension * P.rolling.h0;
-    if (sim.t > 3e-3 && free && tail < -sim.contactLength - 1.5e-3) entry.push(sectionStress(sim, tail + 0.5e-3, tail + 1.1e-3));
+    // the strip just ahead of the tail once the pusher has let go (from then on only the
+    // back tension and the rolls act on it), while the tail is still well before the bite
+    if (!sim.pusherActive && tail < -sim.contactLength - 1.5e-3) entry.push(sectionStress(sim, tail + 0.5e-3, tail + 1.1e-3));
     // once the tail has left the rolls nothing pulls it back: it keeps the exit speed
     if (tail > 0 && tail < 1e3) {
       afterExit++;
@@ -72,10 +72,10 @@ function sectionStress(sim, x0, x1) {
       for (let p = 0; p < sim.n && sim.tag[p] === 1; p++) if (sim.active[p]) (v += sim.vx[p]), c++;
       if (v / c < 0.8 * V) slowTail++;
     }
-    if (d.phase === 'done') break;
+    if (sim.diagnostics().phase === 'done') break;
   }
   const d = sim.diagnostics();
-  ok(entry.length >= 5, 'entry strip sampled while the rolls pull against the back tension', `${entry.length} samples`);
+  ok(entry.length >= 20, 'entry strip sampled after the pusher has let go', `${entry.length} samples`);
   near(entry.reduce((a, b) => a + b, 0) / Math.max(1, entry.length) / MPa, 100, 0.1, 'entry strip stress [MPa] under 100 MPa back tension');
   ok(afterExit > 0 && slowTail === 0, 'the tail keeps its speed after leaving the rolls (no back tension left)', `${slowTail} of ${afterExit} samples below 0.8 V`);
   ok(d.phase === 'done' && Number.isFinite(d.tailX) && d.tailX < 1e3, 'the rolled sheet leaves on the exit side (not dragged back off the grid)', `phase ${d.phase}, tail ${d.tailX}`);
