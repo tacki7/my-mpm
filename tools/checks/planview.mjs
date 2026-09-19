@@ -183,7 +183,7 @@ between(force / forceSamples / sim.halfWidth0 / slab.force, 0.9, 1.05, 'roll for
   near(f3 / f4, 1, 0.03, `μ 0.3: roll force per unit width at mass scaling 1e3 / 1e4 (${(f4 * 1e-6).toFixed(2)} kN/mm at 1e4)`);
 }
 ok(fr.nodes > 0 && fr.sliding > 0 && fr.over === 0 && fr.reversed === 0 && fr.offRoll === 0,
-  'friction on the grid (μ 0.08 and 0.3): at most the Coulomb capacity per node, never past the roll speed, sticking to it when less is enough',
+  'friction on the grid (μ 0.08 and 0.3): at most the Coulomb capacity per node, never past the roll speed (sticking: on one node, below)',
   `${fr.nodes} node looks, ${fr.sliding} sliding, ${fr.sticking} sticking; over the capacity ${fr.over}, past the roll speed ${fr.reversed}, under it but slipping ${fr.offRoll}`);
 ok(fr.sumWorst < 1e-9, "the points' friction adds up to the nodes'", `worst ${fr.sumWorst.toExponential(2)}`);
 
