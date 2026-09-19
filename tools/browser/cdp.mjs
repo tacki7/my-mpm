@@ -13,8 +13,11 @@ export async function connect(port) {
   let id = 0;
   const pending = new Map();
   const errors = [];
+  const listeners = [];
   ws.onmessage = (m) => {
     const d = JSON.parse(m.data);
+    for (const fn of listeners) fn(d);
+    if (d.sessionId && !d.id) return; // events of an attached target (a worker): listeners only
     if (d.id && pending.has(d.id)) {
       const { res, rej } = pending.get(d.id);
       pending.delete(d.id);
@@ -27,10 +30,11 @@ export async function connect(port) {
       errors.push('log: ' + d.params.entry.text);
     }
   };
-  const send = (method, params = {}) => new Promise((res, rej) => {
+  // sessionId: a target attached with Target.setAutoAttach({ flatten: true }), e.g. the simulation worker
+  const send = (method, params = {}, sessionId) => new Promise((res, rej) => {
     const i = ++id;
     pending.set(i, { res, rej });
-    ws.send(JSON.stringify({ id: i, method, params }));
+    ws.send(JSON.stringify(sessionId ? { id: i, method, params, sessionId } : { id: i, method, params }));
   });
   await send('Page.enable');
   await send('Runtime.enable');
@@ -66,5 +70,6 @@ export async function connect(port) {
     writeFileSync(path, Buffer.from(r.data, 'base64'));
     return path;
   };
-  return { send, evaluate, waitFor, navigate, setViewport, screenshot, errors, sleep, close: () => ws.close() };
+  const onEvent = (fn) => listeners.push(fn);
+  return { send, evaluate, waitFor, navigate, setViewport, screenshot, errors, sleep, onEvent, close: () => ws.close() };
 }

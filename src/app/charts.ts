@@ -1,5 +1,6 @@
-// Small line charts on canvas: the roll force over time and the contact
-// tractions along the bite (the friction hill).
+// Small line charts on canvas: the roll force over time, the contact tractions
+// along the bite (the friction hill), and the fracture locus of the stress explorer.
+// Lines break at non-finite values and are clipped to the plot area.
 import { uiFont } from './font.ts';
 
 export interface Series {
@@ -16,6 +17,8 @@ export interface ChartSpec {
   series: Series[];
   /** vertical guide lines at these x values, with their labels */
   marks?: { x: number; label: string }[];
+  /** filled (or ringed) points on top of the lines */
+  dots?: { x: number; y: number; color: string; r?: number; ring?: boolean }[];
   xRange?: [number, number];
   yRange?: [number, number];
 }
@@ -41,6 +44,7 @@ export function drawChart(canvas: HTMLCanvasElement, spec: ChartSpec): void {
   let [y0, y1] = spec.yRange ?? [Infinity, -Infinity];
   for (const s of spec.series) {
     for (let i = 0; i < s.x.length; i++) {
+      if (!Number.isFinite(s.x[i]) || !Number.isFinite(s.y[i])) continue;
       if (!spec.xRange) {
         x0 = Math.min(x0, s.x[i]);
         x1 = Math.max(x1, s.x[i]);
@@ -110,21 +114,44 @@ export function drawChart(canvas: HTMLCanvasElement, spec: ChartSpec): void {
     ctx.textBaseline = 'top';
     ctx.fillText(m.label, X(m.x), Tm);
   }
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(L, Tm, W - L - Rm, H - B - Tm);
+  ctx.clip();
   for (const s of spec.series) {
     if (!s.x.length) continue;
     ctx.strokeStyle = s.color;
     ctx.lineWidth = 1.8;
     ctx.setLineDash(s.dash ?? []);
     ctx.beginPath();
+    let pen = false;
     for (let i = 0; i < s.x.length; i++) {
+      if (!Number.isFinite(s.x[i]) || !Number.isFinite(s.y[i])) {
+        pen = false;
+        continue;
+      }
       const px = X(s.x[i]);
       const py = Y(s.y[i]);
-      if (i === 0) ctx.moveTo(px, py);
-      else ctx.lineTo(px, py);
+      if (pen) ctx.lineTo(px, py);
+      else ctx.moveTo(px, py);
+      pen = true;
     }
     ctx.stroke();
   }
   ctx.setLineDash([]);
+  for (const d of spec.dots ?? []) {
+    ctx.beginPath();
+    ctx.arc(X(d.x), Y(d.y), d.r ?? 3.5, 0, Math.PI * 2);
+    if (d.ring) {
+      ctx.strokeStyle = d.color;
+      ctx.lineWidth = 2;
+      ctx.stroke();
+    } else {
+      ctx.fillStyle = d.color;
+      ctx.fill();
+    }
+  }
+  ctx.restore();
 }
 
 function ticks(a: number, b: number, n: number): number[] {

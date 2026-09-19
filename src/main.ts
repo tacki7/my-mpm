@@ -5,6 +5,7 @@ import type { Diagnostics, FieldName } from './mpm/solver.ts';
 import { drawChart } from './app/charts.ts';
 import { css, lattice, split, temper } from './app/colormap.ts';
 import { FIELDS, fieldInfo } from './app/fields.ts';
+import { Explorer } from './app/explorer.ts';
 import { buildPanel } from './app/panel.ts';
 import type { CrackView, Frame, FromWorker, Geometry, ToWorker } from './app/protocol.ts';
 import { applyQuery, stopAfterOf } from './app/query.ts';
@@ -19,6 +20,13 @@ let field: FieldName = (FIELDS.find((f) => f.id === query.get('field'))?.id ?? '
 const stopAfter = stopAfterOf(query);
 
 const view = new BiteView($<HTMLCanvasElement>('bite'));
+const explorer = new Explorer(
+  $('explorer'),
+  $('locus'),
+  (id) => send({ type: 'select', particle: id }),
+  () => (dirty = true),
+);
+$('bite').addEventListener('click', (e) => explorer.select(view.pick(e.clientX, e.clientY)));
 const history: { t: number[]; F: number[] } = { t: [], F: [] };
 let geometry: Geometry | null = null;
 let last: Frame | null = null;
@@ -108,6 +116,8 @@ function restart() {
   frames = 0;
   crackSeen = 0;
   $('crack-log').replaceChildren();
+  explorer.reset();
+  view.marks = [];
   awaitingReady = true;
   send({ type: 'init', params: cloneParams(params), field, stopAfter });
   updateButtons();
@@ -149,6 +159,8 @@ function onFrame(f: Frame) {
   updateButtons();
   updateResults(d, f);
   updateCracks(f.cracks);
+  explorer.update(f, params);
+  view.marks = explorer.marks();
 }
 
 const phaseText: Record<Diagnostics['phase'], string> = {
@@ -269,6 +281,7 @@ function drawCharts() {
       ...(last?.diag.neutralX != null ? [{ x: last.diag.neutralX * 1e3, label: '中立点' }] : []),
     ],
   });
+  explorer.draw();
 }
 
 function frameLoop() {
@@ -321,6 +334,15 @@ window.__mpm = {
   get params() {
     return cloneParams(params);
   },
+  get explorer() {
+    return { role: explorer.shownRole, id: explorer.shown?.id ?? null };
+  },
+  /** the points the stress explorer follows, with their paths (flat η, εp, D) */
+  get tracks() {
+    return last?.tracks ?? [];
+  },
+  /** client coordinates of a material point on the roll-bite canvas (headless checks click there) */
+  screenOf: (id: number) => view.screenOf(id),
   history,
   run,
   restart,

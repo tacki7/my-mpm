@@ -67,9 +67,12 @@ tools/browser/browser.sh stop <cdp>; tools/browser/browser.sh stop <dev>
 読み込みエラー 0 → 粗い圧延を最後まで → 定常の荷重・出側板厚・先進率が帯の中 → 色の量のタブを全部押して再描画 → スクショ → about:blank。
 1 行ずつ PASS / FAIL、どれか FAIL で exit 1。帯は標準条件・6 セル用（URL で条件を変えると外れる）。スクショは自分で見る。
 画面の状態（やり直し・`stopafter`・条件パネルと URL・描画中の例外）を触ったら `CDP_PORT=<cdp> node tools/browser/ui-state.mjs http://localhost:<dev>/`（1〜2 分）。
+応力状態エクスプローラを触ったら `CDP_PORT=<cdp> node tools/browser/explorer.mjs http://localhost:<dev>/ <作業用ディレクトリ>/x.png`
+（実クリックで粒子を選び、表示と `Sim` の値を比べる。`Sim` はワーカーの `self.__sim` を CDP でワーカーに繋いで読む）。
 
 ポートは必ず渡す（既定値は無い）。`window.__mpm` は `frames` `running` `ready` `done` `diag` `cracks`
-`geometry` `params` `history` と `run()` `restart()` `setField(id)` を持つ。
+`geometry` `params` `history` `explorer`（表示中の点）`tracks`（追っている点と経路）と `run()` `restart()` `setField(id)`
+`screenOf(id)`（粒子の画面座標）を持つ。
 
 ## クエリパラメータ
 

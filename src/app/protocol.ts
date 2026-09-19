@@ -6,7 +6,9 @@ export type ToWorker =
   | { type: 'init'; params: SimParams; field: FieldName; stopAfter: number | null }
   | { type: 'run' }
   | { type: 'pause' }
-  | { type: 'field'; field: FieldName };
+  | { type: 'field'; field: FieldName }
+  /** the material point the stress explorer follows (null: none) */
+  | { type: 'select'; particle: number | null };
 
 /** Fixed facts of a run, sent once after init. Lengths in m. */
 export interface Geometry {
@@ -28,6 +30,47 @@ export interface CrackView extends Crack {
   cy: number;
 }
 
+/** Stress state of one material point (Cauchy stress, Pa; lengths m). */
+export interface PointState {
+  sxx: number;
+  syy: number;
+  sxy: number;
+  szz: number;
+  /** pressure, compression positive */
+  pres: number;
+  seq: number;
+  eta: number;
+  s1: number;
+  ep: number;
+  dJC: number;
+  dHM: number;
+  dCL: number;
+  /** the indicator that decides failure */
+  damage: number;
+  failed: boolean;
+  /** where the point sat in the undeformed sheet: from the head end backwards, from the mid-plane */
+  sheetX: number;
+  sheetY: number;
+  /** current position */
+  x: number;
+  y: number;
+  /** the rate and temperature of the Johnson-Cook fracture strain at this point */
+  epsDotStar: number;
+  Ts: number;
+  /** ductility multiplier of a weak defect (1 elsewhere) */
+  duct: number;
+}
+
+export type TrackRole = 'selected' | 'first-crack' | 'max-damage';
+
+/** A followed point: its state now and its loading path, flat (η, εp, D) triples ending at the current state. */
+export interface Track {
+  role: TrackRole;
+  id: number;
+  state: PointState;
+  path: number[];
+}
+
 export interface Frame {
   type: 'frame';
   /** x, y per particle [m] */
@@ -43,6 +86,8 @@ export interface Frame {
   /** contact tractions along x [m] → [Pa] */
   profile: { x: number[]; p: number[]; tau: number[] };
   cracks: CrackView[];
+  /** points followed by the stress explorer */
+  tracks: Track[];
   running: boolean;
   msPerStep: number;
 }
