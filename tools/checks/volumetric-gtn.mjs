@@ -1,6 +1,6 @@
 // The volumetric scheme with GTN and the paper's nucleation (voids also nucleate in compression),
 // 6 cells, 4 mm of sheet, while the bite is at least half full: the plastic dilatation εv stays per point, so
-// it must not show up as pressure noise (averaging J but not εv: neighbour jumps up to 364 MPa) or as
+// it must not show up as pressure noise (averaging J but not εv: neighbour jumps up to 347 MPa) or as
 // spurious tension, and the porosity stays below fc.
 // @check
 import { ok, between, done } from './lib.mjs';
@@ -61,6 +61,6 @@ ok(g.pn > 300, "GTN 'always', 6 cells: the bite was sampled", `${g.pn} point-sam
 ok(g.nan === 0, "GTN 'always', 6 cells: no NaN", `${g.nan}`);
 ok(g.badJ === 0, "GTN 'always': elastic volume ratio within 0.98..1.02", `${g.badJ}`);
 ok(g.eta1 === 0, "GTN 'always': no η > 1 in the bite", `${g.eta1}`);
-between(g.dmax * 1e-6, 0, 200, "GTN 'always': largest pressure jump between lattice neighbours in the bite [MPa] (averaging J but not εv: 364)");
+between(g.dmax * 1e-6, 0, 200, "GTN 'always': largest pressure jump between lattice neighbours in the bite [MPa] (averaging J but not εv: 347)");
 between(g.fMax, 0, 0.05, "GTN 'always': porosity stays below fc");
 done();

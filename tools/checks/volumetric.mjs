@@ -3,8 +3,10 @@
 //   update has to see the same volume change as the pressure (smoothing J but not tr D broke this:
 //   σzz −156 MPa where ν(σxx + σyy) was −2 MPa)
 // - no pressure diffusion: σm/2k at the plate centre in mid-bite (Hill's slip-line field: +0.39 at
-//   this H/L) is not pulled negative, and does not depend on the time step (mass scaling 1e4 against
-//   2e3). Re-smoothing the total J every step diffused the pressure with D ≈ h²/(4Δt).
+//   this H/L) is not pulled negative. Re-smoothing the total J every step diffused the pressure with
+//   D ≈ h²/(4Δt) and gave ≈ −0.3 here. The mass-scaling pair (1e4 against 2e3) is a looser guard:
+//   with this contact and 8 cells the old scheme differs by only +0.02 and passes it; the centre
+//   value is what catches it.
 // docs/validation.md「体積の平均化」holds the converged numbers.
 // @check
 import { ok, between, done } from './lib.mjs';
@@ -72,5 +74,5 @@ ok(a.nan === 0 && b.nan === 0, 'no NaN', `${a.nan}, ${b.nan}`);
 ok(a.elN > 1000, 'elastic points ahead of the bite were sampled', `${a.elN}`);
 between(a.elastic, 0, 1e-6, 'plane strain ahead of the bite: mean |σzz − ν(σxx + σyy)| / 2k');
 between(a.centre, -0.2, 0.4, 'σm/2k at the plate centre in mid-bite, mass scaling 1e4 (smoothing the total J: ≈ −0.3)');
-between(b.centre - a.centre, -0.03, 0.03, 'the same with mass scaling 2e3 minus 1e4 (a scheme that diffuses depends on the time step)');
+between(b.centre - a.centre, -0.03, 0.03, 'the same with mass scaling 2e3 minus 1e4 (loose; smoothing the total J: +0.02, caught by the centre value instead)');
 done();
