@@ -37,5 +37,10 @@ export function runParams(args) {
   num('chi', (v) => (P.material.chi = v)); // Taylor-Quinney coefficient: 0 = no heating
   num('nonlocal', (v) => (P.damage.nonlocalLength = v * 1e-3)); // mm
   text('nucleation', (v) => (P.damage.gtn.nucleation = v));
+  // the faces of a crack (docs/model.md「亀裂の面」); an unknown value is an error, not a silent 'none'
+  text('crack', (v) => {
+    if (v !== 'none' && v !== 'dfg') throw new Error(`--crack ${v}: none or dfg`);
+    P.numerics.crackFields = v;
+  });
   return P;
 }

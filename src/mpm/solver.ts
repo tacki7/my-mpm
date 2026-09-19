@@ -187,6 +187,25 @@ export class Sim {
   readonly gB: Float64Array; // 'rate': mass-weighted relaxation fraction β_i
   readonly gMv: Float64Array; // 'rate': nodal mass of the points in the averages (intact, J > 0)
   readonly gcon: Uint8Array; // this step: bit k set when roll k constrains the node
+  /** length of the node arrays: the nodes, and with crackFields 'dfg' the second field's nodes after them */
+  readonly NN: number;
+  // 'dfg': the failed points' field φ at the nodes — its gradient G (toward the failed side) and the mass-weighted
+  // centre of the failed points around each node; per point and stencil node (9 p + 3 i + j) the field it is on
+  // (1: the second, at nNodes + node) and whether it has any node on the second (null / 0 when no point failed)
+  private readonly gGx: Float64Array;
+  private readonly gGy: Float64Array;
+  private readonly gCx: Float64Array;
+  private readonly gCy: Float64Array;
+  private readonly gCw: Float64Array;
+  private pf: Uint8Array | null = null;
+  private pfBuf = new Uint8Array(0);
+  private readonly pfAny: Uint8Array;
+  private gGLo = 0;
+  private gGHi = 0;
+  private fieldsPrev = false;
+  /** 'dfg': node-steps this step where the two fields came together (contact) and where they moved apart */
+  fieldContacts = 0;
+  fieldApart = 0;
   private readonly projBuf = new Float64Array(20); // gridUpdate: each roll's projection of a node
   // per roll and node (roll k at k · nodes + node): the slip velocity left after the contact (weighted), which
   // followRoll's extra normal impulse may still reduce by Coulomb
@@ -353,23 +372,31 @@ export class Sim {
     this.nxN = Math.ceil((xEnd - this.ox) / h) + 1;
     this.nyN = Math.ceil((2 * yHalf) / h) + 1;
     const nNodes = this.nxN * this.nyN;
-    this.gm = new Float64Array(nNodes);
-    this.gvx = new Float64Array(nNodes);
-    this.gvy = new Float64Array(nNodes);
-    this.gpen = [new Float64Array(nNodes), new Float64Array(nNodes)];
-    this.gpush = new Uint8Array(nNodes);
-    this.gcon = new Uint8Array(nNodes);
-    this.gslipX = new Float64Array(2 * nNodes);
-    this.gslipY = new Float64Array(2 * nNodes);
-    this.contactJn = new Float64Array(nNodes);
-    this.contactJt = new Float64Array(nNodes);
-    this.contactSlip = new Uint8Array(nNodes);
-    this.gfolN = new Float64Array(2 * nNodes);
-    this.gfolD = new Float64Array(2 * nNodes);
-    this.gJ = new Float64Array(nNodes);
-    this.gJe = new Float64Array(nNodes);
-    this.gB = new Float64Array(nNodes);
-    this.gMv = new Float64Array(nNodes);
+    // 'dfg': the second velocity field of the crack faces sits in the node arrays after the first, at nNodes + node
+    const NN = (num.crackFields ?? 'none') === 'dfg' ? 2 * nNodes : nNodes;
+    this.NN = NN;
+    this.gm = new Float64Array(NN);
+    this.gvx = new Float64Array(NN);
+    this.gvy = new Float64Array(NN);
+    this.gpen = [new Float64Array(NN), new Float64Array(NN)];
+    this.gpush = new Uint8Array(NN);
+    this.gcon = new Uint8Array(NN);
+    this.gslipX = new Float64Array(2 * NN);
+    this.gslipY = new Float64Array(2 * NN);
+    this.contactJn = new Float64Array(NN);
+    this.contactJt = new Float64Array(NN);
+    this.contactSlip = new Uint8Array(NN);
+    this.gfolN = new Float64Array(2 * NN);
+    this.gfolD = new Float64Array(2 * NN);
+    this.gJ = new Float64Array(NN);
+    this.gJe = new Float64Array(NN);
+    this.gB = new Float64Array(NN);
+    this.gMv = new Float64Array(NN);
+    this.gGx = new Float64Array(NN > nNodes ? nNodes : 0);
+    this.gGy = new Float64Array(NN > nNodes ? nNodes : 0);
+    this.gCx = new Float64Array(NN > nNodes ? nNodes : 0);
+    this.gCy = new Float64Array(NN > nNodes ? nNodes : 0);
+    this.gCw = new Float64Array(NN > nNodes ? nNodes : 0);
     this.gPrevHi = nNodes;
 
     const R = r.rollRadius;
@@ -466,6 +493,7 @@ export class Sim {
     this.tag = new Uint8Array(n);
     this.touch = new Uint8Array(n);
     this.crackId = new Int32Array(n).fill(-1);
+    this.pfAny = new Uint8Array(NN > nNodes ? n : 0);
 
     // Entry speed from mass flow, a little under the roll speed.
     this.vIn = r.rollSpeed * (1 - r.reduction);
@@ -539,8 +567,25 @@ export class Sim {
     this.contactJn.fill(0, lo, hi);
     this.contactJt.fill(0, lo, hi);
     this.contactSlip.fill(0, lo, hi);
+    // the second field's nodes, when last step had them
+    const N = this.nxN * this.nyN;
+    const lo2 = lo + N;
+    const hi2 = hi + N;
+    if (this.fieldsPrev) {
+      gm.fill(0, lo2, hi2);
+      gvx.fill(0, lo2, hi2);
+      gvy.fill(0, lo2, hi2);
+      gpen0.fill(INF, lo2, hi2);
+      gpen1.fill(INF, lo2, hi2);
+      gpush.fill(0, lo2, hi2);
+      this.gcon.fill(0, lo2, hi2);
+      this.contactJn.fill(0, lo2, hi2);
+      this.contactJt.fill(0, lo2, hi2);
+      this.contactSlip.fill(0, lo2, hi2);
+    }
     this.updatePusher();
     if (!this.pusherActive && !this.stalled && this.step % 50 === 0) this.checkStall();
+    this.pf = this.NN > N ? this.assignFields() : null;
     this.p2g();
     this.gridUpdate();
     if (this.params.numerics.jbar) {
@@ -550,17 +595,25 @@ export class Sim {
         this.gB.fill(0, lo, hi);
         this.gMv.fill(0, lo, hi);
       }
+      if (this.fieldsPrev) {
+        this.gJ.fill(0, lo2, hi2);
+        this.gJe.fill(0, lo2, hi2);
+        this.gB.fill(0, lo2, hi2);
+        this.gMv.fill(0, lo2, hi2);
+      }
     }
     this.g2pVelocity();
     this.g2pUpdate();
     this.gPrevLo = this.gLo;
     this.gPrevHi = this.gHi;
+    this.fieldsPrev = this.pf !== null;
     this.t += this.dt;
     this.step++;
   }
 
   private p2g(): void {
-    const { n, active, px, py, vx, vy, mass, vol0, gm, gvx, gvy, gpush, tag, dt, h, invH, ox, oy, nyN } = this;
+    const { n, active, px, py, vx, vy, mass, vol0, gm, gvx, gvy, gpush, tag, dt, h, invH, ox, oy, nyN, pf, pfAny } = this;
+    const nNodes = this.nxN * nyN;
     const { f00, f01, f10, f11, sxx, syy, sxy, pres, c00, c01, c10, c11, touch } = this;
     const halfDp = 0.5 * this.dp;
     const [gpen0, gpen1] = this.gpen;
@@ -655,6 +708,8 @@ export class Sim {
       const in1 = pen1 < 0;
       touch[p] = (in0 ? 1 : 0) | (in1 ? 2 : 0);
       const pushMark = pushing && tg === 1;
+      // 'dfg': this point's nodes on the second field sit at nNodes + node
+      const fb = pf !== null && pfAny[p] ? 9 * p : -1;
 
       for (let i = 0; i < 3; i++) {
         const wx = i === 0 ? wx0 : i === 1 ? wx1 : wx2;
@@ -663,7 +718,7 @@ export class Sim {
         for (let j = 0; j < 3; j++) {
           const w = wx * (j === 0 ? wy0 : j === 1 ? wy1 : wy2);
           const dy = (j - fy) * h;
-          const idx = col + j;
+          const idx = fb >= 0 && pf![fb + 3 * i + j] ? col + j + nNodes : col + j;
           gm[idx] += w * m;
           gvx[idx] += w * (mvx + a00 * dx + a01 * dy);
           gvy[idx] += w * (mvy + a10 * dx + a11 * dy);
@@ -727,6 +782,165 @@ export class Sim {
     return true;
   }
 
+  /**
+   * 'dfg': which velocity field each point is on at each of its 9 stencil nodes (1: the second), or null when no
+   * point has failed (then everything is the single field, bit for bit). φ = 1 on failed points; at the nodes its
+   * gradient G_i = Σ V_p φ_p ∇w(x_i − x_p) points toward the failed points, and C_i is their centre (weights w m).
+   * A node splits where |G_i| > 0; there a point is on the far side of the crack (the second field) when it lies
+   * beyond C_i along G_i ('centroid'), or when its own interpolated gradient opposes G_i ('gradient'). Only the
+   * interval of node numbers [lo, hi + span) from the lowest to the highest failed point's stencil (every column in
+   * between, whole), and the points whose stencils reach into it, are visited.
+   */
+  private assignFields(): Uint8Array | null {
+    const { n, active, failed, px, py, mass, vol0, f00, f01, f10, f11, invH, ox, oy, nyN, gGx, gGy, gCx, gCy, gCw } = this;
+    let lo = Infinity;
+    let hi = -Infinity;
+    for (let p = 0; p < n; p++) {
+      if (!active[p] || !failed[p]) continue;
+      const base = Math.floor((px[p] - ox) * invH - 0.5) * nyN + Math.floor((py[p] - oy) * invH - 0.5);
+      if (base < lo) lo = base;
+      if (base > hi) hi = base;
+    }
+    // last step's region is cleared first (what it wrote), then this step's
+    gGx.fill(0, this.gGLo, this.gGHi);
+    gGy.fill(0, this.gGLo, this.gGHi);
+    gCx.fill(0, this.gGLo, this.gGHi);
+    gCy.fill(0, this.gGLo, this.gGHi);
+    gCw.fill(0, this.gGLo, this.gGHi);
+    if (lo === Infinity) {
+      this.gGLo = this.gGHi = 0;
+      return null;
+    }
+    const span = 2 * nyN + 3;
+    this.gGLo = lo;
+    this.gGHi = hi + span;
+    const pf = this.pfBuf.length === 9 * n ? this.pfBuf : (this.pfBuf = new Uint8Array(9 * n));
+    this.pfAny.fill(0);
+    const wx = [0, 0, 0];
+    const wy = [0, 0, 0];
+    const dx = [0, 0, 0];
+    const dy = [0, 0, 0];
+    const weights = (p: number): number => {
+      const gx = (px[p] - ox) * invH;
+      const gy = (py[p] - oy) * invH;
+      const bx = Math.floor(gx - 0.5);
+      const by = Math.floor(gy - 0.5);
+      const fx = gx - bx;
+      const fy = gy - by;
+      wx[0] = 0.5 * (1.5 - fx) * (1.5 - fx);
+      wx[1] = 0.75 - (fx - 1) * (fx - 1);
+      wx[2] = 0.5 * (fx - 0.5) * (fx - 0.5);
+      wy[0] = 0.5 * (1.5 - fy) * (1.5 - fy);
+      wy[1] = 0.75 - (fy - 1) * (fy - 1);
+      wy[2] = 0.5 * (fy - 0.5) * (fy - 0.5);
+      // d w / d(x_i) = −d w / d(x_p): the weight falls off as the node moves away from the point
+      dx[0] = (1.5 - fx) * invH;
+      dx[1] = 2 * (fx - 1) * invH;
+      dx[2] = -(fx - 0.5) * invH;
+      dy[0] = (1.5 - fy) * invH;
+      dy[1] = 2 * (fy - 1) * invH;
+      dy[2] = -(fy - 0.5) * invH;
+      return bx * nyN + by;
+    };
+    for (let p = 0; p < n; p++) {
+      if (!active[p] || !failed[p]) continue;
+      const V = vol0[p] * (f00[p] * f11[p] - f01[p] * f10[p]);
+      const m = mass[p];
+      const base = weights(p);
+      for (let i = 0; i < 3; i++) {
+        for (let j = 0; j < 3; j++) {
+          const idx = base + i * nyN + j;
+          gGx[idx] += V * dx[i] * wy[j];
+          gGy[idx] += V * wx[i] * dy[j];
+          const wm = wx[i] * wy[j] * m;
+          gCx[idx] += wm * px[p];
+          gCy[idx] += wm * py[p];
+          gCw[idx] += wm;
+        }
+      }
+    }
+    const byCentroid = (this.params.numerics.crackSide ?? 'centroid') === 'centroid';
+    let any = false;
+    for (let p = 0; p < n; p++) {
+      if (!active[p]) continue;
+      const b0 = Math.floor((px[p] - ox) * invH - 0.5) * nyN + Math.floor((py[p] - oy) * invH - 0.5);
+      if (b0 + span <= lo || b0 >= hi + span) continue;
+      const base = weights(p);
+      let gpx = 0;
+      let gpy = 0;
+      let split = false;
+      for (let i = 0; i < 3; i++) {
+        for (let j = 0; j < 3; j++) {
+          const idx = base + i * nyN + j;
+          if (gGx[idx] !== 0 || gGy[idx] !== 0) split = true;
+          gpx += wx[i] * wy[j] * gGx[idx];
+          gpy += wx[i] * wy[j] * gGy[idx];
+        }
+      }
+      if (!split) continue;
+      let far = 0;
+      for (let i = 0; i < 3; i++) {
+        for (let j = 0; j < 3; j++) {
+          const idx = base + i * nyN + j;
+          const Gx = gGx[idx];
+          const Gy = gGy[idx];
+          let f = 0;
+          if (Gx !== 0 || Gy !== 0) {
+            if (byCentroid) {
+              const w = gCw[idx];
+              f = (px[p] - gCx[idx] / w) * Gx + (py[p] - gCy[idx] / w) * Gy > 0 ? 1 : 0;
+            } else f = gpx * Gx + gpy * Gy < 0 ? 1 : 0;
+          }
+          pf[9 * p + 3 * i + j] = f;
+          far |= f;
+        }
+      }
+      if (far) {
+        this.pfAny[p] = 1;
+        any = true;
+      }
+    }
+    return any ? pf : null;
+  }
+
+  /**
+   * 'dfg': the two fields at a node where both have mass meet by frictionless contact before anything else acts
+   * on them. The normal n = G/|G| points from the node's side of the crack (first field) to the far side
+   * (second); when they approach, (v1 − v2)·n > 0, their normal velocities are made equal, keeping the
+   * momentum; when they separate they are left alone. On momenta (the node update divides by the mass after).
+   */
+  private fieldContact(mMin: number): void {
+    const { gm, gvx, gvy, gGx, gGy } = this;
+    const N = this.nxN * this.nyN;
+    for (let node = this.gLo; node < this.gHi; node++) {
+      const i2 = node + N;
+      const m1 = gm[node];
+      const m2 = gm[i2];
+      if (m1 <= mMin || m2 <= mMin) continue;
+      const Gx = gGx[node];
+      const Gy = gGy[node];
+      const G = Math.hypot(Gx, Gy);
+      if (G === 0) continue;
+      const nx = Gx / G;
+      const ny = Gy / G;
+      const v1n = (gvx[node] * nx + gvy[node] * ny) / m1;
+      const v2n = (gvx[i2] * nx + gvy[i2] * ny) / m2;
+      if (v1n - v2n <= 0) {
+        this.fieldApart++;
+        continue;
+      }
+      this.fieldContacts++;
+      // the common normal velocity (centre of mass); each field's normal momentum is set to it
+      const vc = (m1 * v1n + m2 * v2n) / (m1 + m2);
+      const d1 = m1 * (vc - v1n);
+      const d2 = m2 * (vc - v2n);
+      gvx[node] += d1 * nx;
+      gvy[node] += d1 * ny;
+      gvx[i2] += d2 * nx;
+      gvy[i2] += d2 * ny;
+    }
+  }
+
   private gridUpdate(): void {
     const { gm, gvx, gvy, gpush, nyN, h, ox, oy, dt } = this;
     const mu = this.params.rolling.mu;
@@ -740,7 +954,16 @@ export class Sim {
     const nNodes = this.nxN * nyN;
     const mMin = 1e-12 * this.mass[0];
     const proj = this.projBuf;
-    for (let idx = this.gLo; idx < this.gHi; idx++) {
+    const NN = this.NN;
+    const two = this.pf !== null;
+    // every step, so a step with no second field reads 0 (not the last step that had one)
+    this.fieldContacts = 0;
+    this.fieldApart = 0;
+    if (two) this.fieldContact(mMin);
+    for (let half = 0; half < (two ? 2 : 1); half++) {
+    const off = half * nNodes;
+    for (let node = this.gLo; node < this.gHi; node++) {
+      const idx = node + off;
       const m = gm[idx];
       if (m <= mMin) {
         gvx[idx] = 0;
@@ -749,9 +972,9 @@ export class Sim {
       }
       let vx = gvx[idx] / m;
       let vy = gvy[idx] / m;
-      const col = Math.floor(idx / nyN);
+      const col = Math.floor(node / nyN);
       const xi = ox + col * h;
-      const yi = oy + (idx % nyN) * h;
+      const yi = oy + (node % nyN) * h;
       // Each roll projects the velocity before contact. A node both rolls would hold (a gap of a cell or
       // two) takes the nearer roll only, or the mean of the two at the same distance (on the mid-plane):
       // one after the other favoured the roll projected last and broke the pass's symmetry.
@@ -784,7 +1007,7 @@ export class Sim {
           const jn = (fx * nx + fy * ny) * dt;
           this.contactJn[idx] += jn;
           this.contactJt[idx] += Math.hypot(fx * dt - jn * nx, fy * dt - jn * ny);
-          const kIdx = k * nNodes + idx;
+          const kIdx = k * NN + idx;
           this.gslipX[kIdx] = wk * proj[o + 7];
           this.gslipY[kIdx] = wk * proj[o + 8];
           if (proj[o + 7] !== 0 || proj[o + 8] !== 0) this.contactSlip[idx] = 1;
@@ -815,6 +1038,7 @@ export class Sim {
       gvx[idx] = vx;
       gvy[idx] = vy;
     }
+    }
     if (this.params.numerics.contact === 'surface') this.followRoll(fyAcc, tqAcc);
     this.accSteps++;
     this.binSteps++;
@@ -841,7 +1065,8 @@ export class Sim {
    */
   private g2pVelocity(): void {
     const { n, active, px, py, vx, vy, gm, gvx, gvy, gJ, gJe, gB, gMv, mass, dt, h, invH, ox, oy, nyN } = this;
-    const { c00, c01, c10, c11, f00, f01, f10, f11, failed, pres, vr } = this;
+    const { c00, c01, c10, c11, f00, f01, f10, f11, failed, pres, vr, pf, pfAny } = this;
+    const nNodes = this.nxN * nyN;
     const k4 = 4 * invH * invH;
     const num = this.params.numerics;
     const jbar = num.jbar;
@@ -861,6 +1086,8 @@ export class Sim {
       const by = Math.floor(gy - 0.5);
       const fx = gx - bx;
       const fy = gy - by;
+      // 'dfg': the point's nodes on the second field sit at nNodes + node
+      const fb = pf !== null && pfAny[p] ? 9 * p : -1;
       const wx0 = 0.5 * (1.5 - fx) * (1.5 - fx);
       const wx1 = 0.75 - (fx - 1) * (fx - 1);
       const wx2 = 0.5 * (fx - 0.5) * (fx - 0.5);
@@ -880,7 +1107,7 @@ export class Sim {
         for (let j = 0; j < 3; j++) {
           const w = wx * (j === 0 ? wy0 : j === 1 ? wy1 : wy2);
           const dy = (j - fy) * h;
-          const idx = col + j;
+          const idx = fb >= 0 && pf![fb + 3 * i + j] ? col + j + nNodes : col + j;
           const gvxi = gvx[idx];
           const gvyi = gvy[idx];
           nvx += w * gvxi;
@@ -929,6 +1156,21 @@ export class Sim {
           const b = c * v;
           mb = m * (b < 1 ? b : 1);
         }
+        if (fb >= 0) {
+          // a point near a crack adds to the averages of the field it is on at each node
+          for (let i = 0; i < 3; i++) {
+            const wx = i === 0 ? wx0 : i === 1 ? wx1 : wx2;
+            for (let j = 0; j < 3; j++) {
+              const w = wx * (j === 0 ? wy0 : j === 1 ? wy1 : wy2);
+              const idx = (bx + i) * nyN + by + j + (pf![fb + 3 * i + j] ? nNodes : 0);
+              gJ[idx] += w * mth;
+              gJe[idx] += w * mfe;
+              gB[idx] += w * mb;
+              gMv[idx] += w * m;
+            }
+          }
+          continue;
+        }
         for (let i = 0; i < 3; i++) {
           const wx = i === 0 ? wx0 : i === 1 ? wx1 : wx2;
           const col = (bx + i) * nyN + by;
@@ -955,6 +1197,13 @@ export class Sim {
       const dJ = ((1 + dt * l00) * (1 + dt * l11) - dt * dt * l01 * l10) * Jold;
       this.dJ[p] = dJ;
       const mdJ = mass[p] * dJ;
+      if (fb >= 0) {
+        for (let i = 0; i < 3; i++) {
+          const wx = i === 0 ? wx0 : i === 1 ? wx1 : wx2;
+          for (let j = 0; j < 3; j++) gJ[(bx + i) * nyN + by + j + (pf![fb + 3 * i + j] ? nNodes : 0)] += wx * (j === 0 ? wy0 : j === 1 ? wy1 : wy2) * mdJ;
+        }
+        continue;
+      }
       for (let i = 0; i < 3; i++) {
         const wx = i === 0 ? wx0 : i === 1 ? wx1 : wx2;
         const col = (bx + i) * nyN + by;
@@ -965,20 +1214,25 @@ export class Sim {
     }
     if (!jbar) return;
     const gMa = rate ? gMv : gm;
-    for (let idx = this.gLo; idx < this.gHi; idx++) {
-      const m = gMa[idx];
-      if (m > 0) gJ[idx] /= m;
+    const halves = pf !== null ? 2 : 1;
+    for (let half = 0; half < halves; half++) {
+      for (let idx = this.gLo + half * nNodes; idx < this.gHi + half * nNodes; idx++) {
+        const m = gMa[idx];
+        if (m > 0) gJ[idx] /= m;
+      }
     }
     // 'rate': nodal relaxation fraction β_i and β_i f̄_i (f̄_i: mass-weighted mean elastic log volume).
     // The point then relaxes by Δf_p = Σ_i w_ip β_i (f̄_i − f_p): symmetric in the mass-weighted sense,
     // so it conserves Σ m f (no volume leaks where β varies) and leaves a uniform field alone.
     if (rate) {
-      for (let idx = this.gLo; idx < this.gHi; idx++) {
-        const m = gMv[idx];
-        if (m > 0) {
-          const b = gB[idx] / m;
-          gB[idx] = b;
-          gJe[idx] = (b * gJe[idx]) / m;
+      for (let half = 0; half < halves; half++) {
+        for (let idx = this.gLo + half * nNodes; idx < this.gHi + half * nNodes; idx++) {
+          const m = gMv[idx];
+          if (m > 0) {
+            const b = gB[idx] / m;
+            gB[idx] = b;
+            gJe[idx] = (b * gJe[idx]) / m;
+          }
         }
       }
     }
@@ -995,7 +1249,7 @@ export class Sim {
    * rather than the surface's. The impulse goes to the roll force, torque and profile like the contact's.
    */
   private followRoll(fyAcc: number[], tqAcc: number[]): void {
-    const { n, active, touch, px, py, gvx, gvy, gm, gcon, gfolN, gfolD, mass, h, invH, ox, oy, nyN, dt } = this;
+    const { n, active, touch, px, py, gvx, gvy, gm, gcon, gfolN, gfolD, mass, h, invH, ox, oy, nyN, dt, pf, pfAny, NN } = this;
     const nNodes = this.nxN * nyN;
     const mu = this.params.rolling.mu;
     const k4 = 4 * invH * invH;
@@ -1012,6 +1266,8 @@ export class Sim {
       const wx = [0.5 * (1.5 - fx) * (1.5 - fx), 0.75 - (fx - 1) * (fx - 1), 0.5 * (fx - 0.5) * (fx - 0.5)];
       const wy = [0.5 * (1.5 - fy) * (1.5 - fy), 0.75 - (fy - 1) * (fy - 1), 0.5 * (fy - 0.5) * (fy - 0.5)];
       for (let a = 0; a < 3; a++) for (let c = 0; c < 3; c++) w[a * 3 + c] = wx[a] * wy[c];
+      // 'dfg': the point's nodes on the second field sit at nNodes + node
+      const fb = pf !== null && pfAny[p] ? 9 * p : -1;
       for (let k = 0; k < 2; k++) {
         if (!(touch[p] & (1 << k))) continue;
         const roll = this.rolls[k];
@@ -1027,7 +1283,7 @@ export class Sim {
         let dnn = 0; // n·L·n, L the APIC velocity gradient (4/h²) Σ w v ⊗ (x_i − x_p)
         for (let a = 0; a < 3; a++) {
           for (let c = 0; c < 3; c++) {
-            const idx = (bx + a) * nyN + by + c;
+            const idx = (bx + a) * nyN + by + c + (fb >= 0 && pf![fb + 3 * a + c] ? nNodes : 0);
             const wi = w[a * 3 + c];
             const vn = (gvx[idx] - ux) * nx + (gvy[idx] - uy) * ny;
             e += wi * vn;
@@ -1041,13 +1297,13 @@ export class Sim {
         const want = -edge / W;
         for (let a = 0; a < 3; a++) {
           for (let c = 0; c < 3; c++) {
-            const idx = (bx + a) * nyN + by + c;
+            const idx = (bx + a) * nyN + by + c + (fb >= 0 && pf![fb + 3 * a + c] ? nNodes : 0);
             if (!(gcon[idx] & (1 << k))) continue;
             const wm = w[a * 3 + c] * mass[p];
             // a node the point does not weigh (fx or fy exactly 0.5) gets no request: 0/0 otherwise
             if (!(wm > 0)) continue;
             // per roll: a node both rolls hold (a gap of a cell or two) takes each roll's requests along its own normal
-            const kIdx = k * nNodes + idx;
+            const kIdx = k * NN + idx;
             if (gfolD[kIdx] === 0) touched.push(kIdx);
             gfolN[kIdx] += wm * want;
             gfolD[kIdx] += wm;
@@ -1060,12 +1316,13 @@ export class Sim {
       const dv = gfolN[kIdx] / gfolD[kIdx];
       gfolN[kIdx] = 0;
       gfolD[kIdx] = 0;
-      const k = kIdx < nNodes ? 0 : 1;
-      const idx = kIdx - k * nNodes;
+      const k = kIdx < NN ? 0 : 1;
+      const idx = kIdx - k * NN;
+      const node = idx < nNodes ? idx : idx - nNodes;
       const roll = this.rolls[k];
-      const col = Math.floor(idx / nyN);
+      const col = Math.floor(node / nyN);
       const rx = ox + col * h - roll.cx;
-      const ry = oy + (idx % nyN) * h - roll.cy;
+      const ry = oy + (node % nyN) * h - roll.cy;
       const d = Math.hypot(rx, ry);
       const nx = rx / d;
       const ny = ry / d;
@@ -1112,10 +1369,10 @@ export class Sim {
     }
     // a node still slides if some roll that holds it left it a slip
     for (const kIdx of touched) {
-      const idx = kIdx < nNodes ? kIdx : kIdx - nNodes;
+      const idx = kIdx < NN ? kIdx : kIdx - NN;
       let slides = 0;
       for (let k = 0; k < 2; k++) {
-        const j = k * nNodes + idx;
+        const j = k * NN + idx;
         if (gcon[idx] & (1 << k) && (this.gslipX[j] !== 0 || this.gslipY[j] !== 0)) slides = 1;
       }
       this.contactSlip[idx] = slides;
@@ -1124,7 +1381,8 @@ export class Sim {
 
   /** Grid → particles, pass 2: move, update F and the stress, accumulate damage. */
   private g2pUpdate(): void {
-    const { n, active, px, py, vx, vy, gJ, gJe, gB, dt, h, invH, ox, oy, nxN, nyN } = this;
+    const { n, active, px, py, vx, vy, gJ, gJe, gB, dt, h, invH, ox, oy, nxN, nyN, pf, pfAny } = this;
+    const nNodes = nxN * nyN;
     const { c00, c01, c10, c11, dJ, f00, f01, f10, f11, failed, pres, vr, sxx, syy, szz, sxy, temp, vol0, ev, por, drW, drE, dJC, dHM, dCL, duct, locHit, strengthEp, strength } = this;
     const P = this.params;
     const mat = P.material;
@@ -1166,9 +1424,23 @@ export class Sim {
         let Jbar = 0;
         let rA = 0; // 'rate': Σ w β_i f̄_i
         let rB = 0; // 'rate': Σ w β_i
+        // 'dfg': a point near a crack reads the averages of the field it is on at each node
+        const fb = pf !== null && pfAny[p] ? 9 * p : -1;
         for (let i = 0; i < 3; i++) {
           const wx = i === 0 ? 0.5 * (1.5 - fx) * (1.5 - fx) : i === 1 ? 0.75 - (fx - 1) * (fx - 1) : 0.5 * (fx - 0.5) * (fx - 0.5);
           const col = (bx + i) * nyN + by;
+          if (fb >= 0) {
+            for (let j = 0; j < 3; j++) {
+              const w = wx * (j === 0 ? wy0 : j === 1 ? wy1 : wy2);
+              const idx = col + j + (pf![fb + 3 * i + j] ? nNodes : 0);
+              Jbar += w * gJ[idx];
+              if (rate) {
+                rA += w * gJe[idx];
+                rB += w * gB[idx];
+              }
+            }
+            continue;
+          }
           Jbar += wx * (wy0 * gJ[col] + wy1 * gJ[col + 1] + wy2 * gJ[col + 2]);
           if (rate) {
             rA += wx * (wy0 * gJe[col] + wy1 * gJe[col + 1] + wy2 * gJe[col + 2]);

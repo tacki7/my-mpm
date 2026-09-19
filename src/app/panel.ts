@@ -177,6 +177,12 @@ export function buildPanel(root: HTMLElement, onEdit: () => void): Panel {
       ['erode', '応力をすべて失う（論文の方法）'],
     ]),
   );
+  matGroup.append(
+    select('crack', '亀裂の面', [
+      ['none', '分けない（1 つの速度場）'],
+      ['dfg', '場を分ける（面が開く）'],
+    ]),
+  );
 
   for (const g of GROUPS) {
     // a folded group is a <details> (its summary is the title); the others a <fieldset>
@@ -239,6 +245,7 @@ export function buildPanel(root: HTMLElement, onEdit: () => void): Panel {
       selects.get('nucleation')!.value = p.damage.gtn.nucleation;
       selects.get('damage')!.value = p.damage.model;
       selects.get('failure')!.value = p.damage.failure;
+      selects.get('crack')!.value = p.numerics.crackFields ?? 'none';
     },
     read(base) {
       const p: SimParams = structuredClone(base);
@@ -248,6 +255,7 @@ export function buildPanel(root: HTMLElement, onEdit: () => void): Panel {
       p.damage.gtn.nucleation = selects.get('nucleation')!.value as SimParams['damage']['gtn']['nucleation'];
       p.damage.model = selects.get('damage')!.value as SimParams['damage']['model'];
       p.damage.failure = selects.get('failure')!.value as SimParams['damage']['failure'];
+      p.numerics.crackFields = selects.get('crack')!.value as NonNullable<SimParams['numerics']['crackFields']>;
       for (const g of GROUPS) {
         for (const f of g.fields) {
           const input = inputs.get(f.key)!;

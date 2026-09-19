@@ -2,7 +2,7 @@
 // and headless checks). Lengths in mm, tensions in MPa. Invalid values are ignored,
 // and so are h0, r and R together when the rolls could not bite with them.
 //   ?preset=<id>&h0=1&r=25&R=100&L=16&mu=0.08&tb=0&tf=0&mat=spcc&damage=johnson-cook
-//   &yield=gtn&f0=0.005&fc=0.05&nucleation=tension
+//   &yield=gtn&f0=0.005&fc=0.05&nucleation=tension&crack=none|dfg
 //   &cells=10&ms=10000&field=eta&autorun=1&stopafter=<steps>
 //   &cond=<base64url JSON>: every other condition, as the leaves that differ from the
 //   preset (conditionsQuery writes it, so a shared URL starts exactly the same run)
@@ -37,6 +37,7 @@ export const LIMITS: Record<string, [number, number]> = {
 const DAMAGE: DamageModel[] = ['johnson-cook', 'hancock-mackenzie', 'cockcroft-latham', 'gtn', 'localization', 'none'];
 const YIELD: YieldModel[] = ['von-mises', 'gtn'];
 const NUCLEATION: GtnParams['nucleation'][] = ['tension', 'always'];
+const CRACK_FIELDS: NonNullable<SimParams['numerics']['crackFields']>[] = ['none', 'dfg'];
 
 export function applyQuery(base: SimParams, q: URLSearchParams): SimParams {
   const p = cloneParams(base);
@@ -72,6 +73,8 @@ export function applyQuery(base: SimParams, q: URLSearchParams): SimParams {
   if (y && YIELD.includes(y)) p.damage.yield = y;
   const nu = q.get('nucleation') as GtnParams['nucleation'] | null;
   if (nu && NUCLEATION.includes(nu)) p.damage.gtn.nucleation = nu;
+  const crack = q.get('crack') as NonNullable<SimParams['numerics']['crackFields']> | null;
+  if (crack && CRACK_FIELDS.includes(crack)) p.numerics.crackFields = crack;
   const cond = q.get('cond');
   if (cond) {
     const rolling = { ...p.rolling };
@@ -195,6 +198,8 @@ const RULES: Record<string, Rule> = {
   'numerics.volumetric': { oneOf: ['rate', 'total'] },
   'numerics.volRelax': r(0, 10),
   'numerics.volRelaxContact': r(0, 10),
+  'numerics.crackFields': { oneOf: CRACK_FIELDS },
+  'numerics.crackSide': { oneOf: ['centroid', 'gradient'] },
   'numerics.contact': { oneOf: ['surface', 'stencil'] },
 };
 
@@ -284,6 +289,7 @@ export function conditionsQuery(presetId: string, preset: SimParams, params: Sim
   if (mat && params.material.name !== preset.material.name) q.set('mat', mat);
   if (params.damage.model !== preset.damage.model) q.set('damage', params.damage.model);
   if (params.damage.yield !== preset.damage.yield) q.set('yield', params.damage.yield);
+  if ((params.numerics.crackFields ?? 'none') !== (preset.numerics.crackFields ?? 'none')) q.set('crack', params.numerics.crackFields ?? 'none');
   const rest = diff(applyQuery(preset, q), params);
   if (rest !== undefined) q.set('cond', toBase64Url(JSON.stringify(rest)));
   return q;

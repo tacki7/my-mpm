@@ -3,7 +3,8 @@
 //   node tools/run.mjs [--h0 1] [--r 0.25] [--R 100] [--L 16] [--mu 0.08] [--cells 10]
 //                      [--mat spcc|s4340|al6061] [--damage johnson-cook|hancock-mackenzie|cockcroft-latham|gtn|localization|none]
 //                      [--yield von-mises|gtn] [--preset <id>] [--chi 0.9] [--nonlocal <ℓ mm>]
-//                      [--tb 0] [--tf 0] [--every 2000] [--max 400000] [--contact surface|stencil] [--vrc 1] [--json]
+//                      [--tb 0] [--tf 0] [--every 2000] [--max 400000] [--contact surface|stencil] [--vrc 1]
+//                      [--crack none|dfg] [--json]
 //
 // Lengths in mm, tensions in MPa. An option left out keeps the preset's value (or the
 // default): `--preset front-tension` runs with its front tension. Prints a line every
