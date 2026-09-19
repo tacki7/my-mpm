@@ -71,6 +71,7 @@ tools/browser/browser.sh stop <cdp>; tools/browser/browser.sh stop <dev>
 （実クリックで粒子を選び、表示と `Sim` の値を比べる。`Sim` はワーカーの `self.__sim` を CDP でワーカーに繋いで読む）。
 ロールバイトの表示（ズーム・パン・倍率・俯瞰・主応力の向き）を触ったら `CDP_PORT=<cdp> node tools/browser/view.mjs http://localhost:<dev>/ <作業用ディレクトリ>/v`
 （ホイール・ダブルクリック・ドラッグ・キーは CDP の実イベント。`v-*.png` を自分で見る）。
+条件パネル（材料の定数・欠陥・入力の検証）を触ったら `CDP_PORT=<cdp> node tools/browser/panel.mjs http://localhost:<dev>/ <作業用ディレクトリ>/p.png`。
 
 ポートは必ず渡す（既定値は無い）。`window.__mpm` は `frames` `running` `ready` `done` `diag` `cracks`
 `geometry` `params` `history` `explorer`（表示中の点）`tracks`（追っている点と経路）`view`（拡大率・パン・倍率・主応力の向き）と

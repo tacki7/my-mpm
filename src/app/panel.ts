@@ -1,6 +1,9 @@
 // The conditions panel: numeric inputs bound to SimParams (shown in mm / MPa).
 // The fields the URL can also set take their ranges from it (query.ts LIMITS).
 import { MATERIALS, hasBite, type SimParams } from '../mpm/params.ts';
+import { buildDefectEditor } from './defectEditor.ts';
+import { checkRange } from './fieldCheck.ts';
+import { buildMaterialEditor } from './materialEditor.ts';
 import { LIMITS } from './query.ts';
 
 interface NumField {
@@ -50,6 +53,8 @@ const RAW: Group[] = [
       { key: 'D1', label: 'D1', unit: '', step: 0.01, min: -5, max: 5, get: (p) => p.damage.D1, set: (p, v) => (p.damage.D1 = v) },
       { key: 'D2', label: 'D2', unit: '', step: 0.05, min: -5, max: 10, get: (p) => p.damage.D2, set: (p, v) => (p.damage.D2 = v) },
       { key: 'D3', label: 'D3', unit: '', step: 0.05, min: -5, max: 5, get: (p) => p.damage.D3, set: (p, v) => (p.damage.D3 = v), hint: '負なら三軸度が高いほど破断ひずみが小さい' },
+      { key: 'D4', label: 'D4（ひずみ速度）', unit: '', step: 0.001, min: -1, max: 1, get: (p) => p.damage.D4, set: (p, v) => (p.damage.D4 = v) },
+      { key: 'D5', label: 'D5（温度）', unit: '', step: 0.01, min: -5, max: 5, get: (p) => p.damage.D5, set: (p, v) => (p.damage.D5 = v) },
       { key: 'cl', label: 'Cockcroft-Latham 限界値', unit: '', step: 0.05, min: 0.01, max: 5, get: (p) => p.damage.clCrit, set: (p, v) => (p.damage.clCrit = v) },
       { key: 'cut', label: '損傷が進まない三軸度', unit: '', step: 0.05, min: -2, max: 0, get: (p) => p.damage.etaCutoff, set: (p, v) => (p.damage.etaCutoff = v), hint: 'これより圧縮側では損傷を積算しない（Bao-Wierzbicki は −1/3）' },
     ],
@@ -112,6 +117,10 @@ export function buildPanel(root: HTMLElement, onEdit: () => void): Panel {
     selects.set(key, s);
     return row;
   };
+
+  const materialEditor = buildMaterialEditor(onEdit);
+  const defectEditor = buildDefectEditor(onEdit);
+  const checks: (() => void)[] = [];
 
   const matGroup = el('fieldset', 'group');
   matGroup.append(el('legend', undefined, '材料'));
@@ -178,18 +187,31 @@ export function buildPanel(root: HTMLElement, onEdit: () => void): Panel {
       if (f.unit) box.append(el('span', 'unit', f.unit));
       row.append(box);
       if (f.hint) row.append(el('span', 'hint', f.hint));
+      checks.push(checkRange(inp, row, () => [f.min, f.max], f.unit));
       fs.append(row);
       inputs.set(f.key, inp);
     }
     root.append(fs);
-    if (g.title === '潤滑と張力') root.append(matGroup);
+    if (g.title === '潤滑と張力') root.append(matGroup, materialEditor.root, defectEditor.root);
   }
+
+  // another material: its constants in the editor (edited ones would otherwise carry over)
+  selects.get('material')!.addEventListener('change', () => {
+    const m = MATERIALS[selects.get('material')!.value];
+    if (!m) return;
+    materialEditor.load(m);
+    materialEditor.compareWith(m);
+  });
 
   return {
     show(p) {
       for (const g of GROUPS) for (const f of g.fields) inputs.get(f.key)!.value = String(+f.get(p).toPrecision(6));
+      for (const c of checks) c();
       const matKey = Object.entries(MATERIALS).find(([, m]) => m.name === p.material.name)?.[0] ?? 'spcc';
       selects.get('material')!.value = matKey;
+      materialEditor.load(p.material);
+      materialEditor.compareWith(MATERIALS[matKey] ?? null);
+      defectEditor.show(p);
       selects.get('yield')!.value = p.damage.yield;
       selects.get('nucleation')!.value = p.damage.gtn.nucleation;
       selects.get('damage')!.value = p.damage.model;
@@ -215,6 +237,8 @@ export function buildPanel(root: HTMLElement, onEdit: () => void): Panel {
         p.rolling.reduction = base.rolling.reduction;
         p.rolling.rollRadius = base.rolling.rollRadius;
       }
+      p.material = materialEditor.read(p.material);
+      p.defects = defectEditor.read(p); // after the sheet's size, which bounds them
       return p;
     },
   };
