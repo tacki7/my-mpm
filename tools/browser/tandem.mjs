@@ -5,7 +5,8 @@
 // redraw the finished ones too; the stress explorer's loading path runs through the three stands (numbered, a
 // colour each, in the legend); the force chart has a slab level per stand; the table has a column per
 // stand; the CSV files are downloaded with a stand column on the whole pass's clock, and the PNG holds
-// the three pictures; a narrow screen (700 px) stacks the pictures without a sideways scroll; and back
+// the three pictures; moving a boundary between the panes resizes the slots with the roll bite; a narrow
+// screen (700 px) stacks the pictures without a sideways scroll; and back
 // to one stand, the page is as before (no slots, no table). Not a `@check` (it needs the dev server and
 // Chrome).
 //
@@ -123,6 +124,8 @@ try {
     after.map((s, k) => `#${s.stand + 1} ${s.phase} step ${s.step} of ${page3[k].steps}`).join(', '),
   );
   ok((await c.evaluate('__mpm.diag.phase')) === 'done', "the page's numbers stay those of the end", await c.evaluate('__mpm.diag.phase'));
+  const endLabels = await c.evaluate(`[...document.querySelectorAll('.stand-label')].map((e) => e.textContent)`);
+  ok(endLabels.join('|') === '#1|#2|#3', 'the pass over, no stand is labelled as running', endLabels.join(' '));
   const widths = after.map((s) => s.width);
   const biteW = await c.evaluate(`document.querySelector('.bite').getBoundingClientRect().width`);
   ok(widths.every((w) => Math.abs(w - biteW / STANDS) < 4), 'the pictures share the width of the roll bite', `${widths.map((w) => w.toFixed(0)).join(' / ')} px of ${biteW.toFixed(0)}`);
@@ -130,6 +133,23 @@ try {
   ok(inked.length === STANDS && inked.every((n) => n > 20), 'every picture is drawn (colours on each canvas)', inked.join(' / '));
   await c.screenshot(join(dir, 'tandem.png'));
   console.log(`shot  ${join(dir, 'tandem.png')}`);
+
+  // ── a boundary moved (src/app/splitters.ts): the slots follow the roll bite's new width and are drawn again
+  const key = (k) => c.send('Input.dispatchKeyEvent', { type: 'keyDown', key: k, code: k, windowsVirtualKeyCode: { ArrowLeft: 37, ArrowRight: 39 }[k] });
+  await c.evaluate("document.querySelector('.split-right').focus()");
+  for (let i = 0; i < 4; i++) await key('ArrowRight');
+  await painted();
+  await painted();
+  const moved = await slots();
+  const biteW2 = await c.evaluate(`document.querySelector('.bite').getBoundingClientRect().width`);
+  const inked2 = await c.evaluate(`[...document.querySelectorAll('.stand-slot canvas:not([hidden])')].map((cv) => { const x = cv.getContext('2d').getImageData(0, 0, cv.width, cv.height).data; const seen = new Set(); for (let i = 0; i < x.length; i += 4 * 97) seen.add((x[i] << 16) | (x[i + 1] << 8) | x[i + 2]); return [cv.width, Math.round(cv.getBoundingClientRect().width * devicePixelRatio), seen.size]; })`);
+  ok(
+    biteW2 > biteW + 30 && moved.every((s) => Math.abs(s.width - biteW2 / STANDS) < 4) && inked2.every(([w, css, n]) => Math.abs(w - css) <= 1 && n > 20),
+    'the record narrowed by the right boundary: the slots share the wider roll bite and are drawn again at their size',
+    `bite ${biteW.toFixed(0)} → ${biteW2.toFixed(0)} px, slots ${moved.map((s) => s.width.toFixed(0)).join(' / ')}, canvases ${inked2.map(([w]) => w).join(' / ')}`,
+  );
+  for (let i = 0; i < 4; i++) await key('ArrowLeft');
+  await painted();
 
   // ── another field and the principal directions: the finished stands are drawn again
   await click('#field-tabs button[data-field="eta"]');
