@@ -56,12 +56,16 @@ function loop(): void {
   const t0 = performance.now();
   let steps = 0;
   while (performance.now() - t0 < FRAME_MS - 6) {
-    for (let k = 0; k < 20; k++) sim.advance();
-    steps += 20;
+    const chunk = stopAfter === null ? 20 : Math.min(20, stopAfter - sim.step);
+    for (let k = 0; k < chunk; k++) sim.advance();
+    steps += Math.max(0, chunk);
     if (stopAfter !== null && sim.step >= stopAfter) break;
   }
-  msPerStep = (performance.now() - t0) / steps;
-  const done = sim.phase() === 'done' || (stopAfter !== null && sim.step >= stopAfter);
+  if (steps) msPerStep = (performance.now() - t0) / steps;
+  // stop there once; "続ける" runs on from it
+  const reached = stopAfter !== null && sim.step >= stopAfter;
+  if (reached) stopAfter = null;
+  const done = sim.phase() === 'done' || reached;
   if (done) running = false;
   frame();
   if (running) timer = setTimeout(loop, 0);

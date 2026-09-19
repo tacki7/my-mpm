@@ -1,5 +1,7 @@
 // The conditions panel: numeric inputs bound to SimParams (shown in mm / MPa).
-import { MATERIALS, type SimParams } from '../mpm/params.ts';
+// The fields the URL can also set take their ranges from it (query.ts LIMITS).
+import { MATERIALS, hasBite, type SimParams } from '../mpm/params.ts';
+import { LIMITS } from './query.ts';
 
 interface NumField {
   key: string;
@@ -22,7 +24,7 @@ interface Group {
 const mm = 1e-3;
 const MPa = 1e6;
 
-const GROUPS: Group[] = [
+const RAW: Group[] = [
   {
     title: '板とロール',
     fields: [
@@ -60,6 +62,11 @@ const GROUPS: Group[] = [
     ],
   },
 ];
+
+const GROUPS: Group[] = RAW.map((g) => ({
+  ...g,
+  fields: g.fields.map((f) => (LIMITS[f.key] ? { ...f, min: LIMITS[f.key][0], max: LIMITS[f.key][1] } : f)),
+}));
 
 export interface Panel {
   /** write the params into the inputs */
@@ -131,7 +138,9 @@ export function buildPanel(root: HTMLElement, onEdit: () => void): Panel {
       inp.type = 'number';
       inp.name = f.key;
       inp.step = String(f.step);
-      inp.min = String(f.min);
+      // The spin buttons count steps from min: start them from a multiple of the
+      // step (10000 → 11000, not 10001); read() still clamps to the real min.
+      inp.min = String(+(Math.floor(f.min / f.step + 1e-9) * f.step).toPrecision(12));
       inp.max = String(f.max);
       inp.addEventListener('input', onEdit);
       box.append(inp);
@@ -164,6 +173,12 @@ export function buildPanel(root: HTMLElement, onEdit: () => void): Panel {
           const v = parseFloat(inputs.get(f.key)!.value);
           if (Number.isFinite(v)) f.set(p, Math.min(f.max, Math.max(f.min, v)));
         }
+      }
+      if (!hasBite(p.rolling)) {
+        // the rolls could not bite with this h0, r and R: keep the ones that ran
+        p.rolling.h0 = base.rolling.h0;
+        p.rolling.reduction = base.rolling.reduction;
+        p.rolling.rollRadius = base.rolling.rollRadius;
       }
       return p;
     },

@@ -1,5 +1,6 @@
 // Small line charts on canvas: the roll force over time and the contact
 // tractions along the bite (the friction hill).
+import { uiFont } from './font.ts';
 
 export interface Series {
   x: ArrayLike<number>;
@@ -61,7 +62,7 @@ export function drawChart(canvas: HTMLCanvasElement, spec: ChartSpec): void {
   const Y = (y: number) => H - B - ((y - y0) / (y1 - y0)) * (H - B - Tm);
 
   const ink = '#1d2a3a';
-  ctx.font = '11px var(--font-ui)';
+  ctx.font = uiFont(11);
   ctx.fillStyle = ink;
   ctx.strokeStyle = 'rgba(29,42,58,0.14)';
   ctx.lineWidth = 1;

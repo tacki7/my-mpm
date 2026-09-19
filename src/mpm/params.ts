@@ -222,3 +222,9 @@ export function biteGeometry(r: RollingParams) {
   const biteAngle = Math.asin(Math.min(1, contactLength / r.rollRadius));
   return { gap, dh, contactLength, biteAngle };
 }
+
+/** The rolls can bite: each roll takes off less than its radius (otherwise the contact arc is not defined). */
+export function hasBite(r: RollingParams): boolean {
+  const dh = r.h0 * r.reduction;
+  return dh > 0 && dh < 2 * r.rollRadius;
+}
