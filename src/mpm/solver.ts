@@ -202,6 +202,15 @@ export class Sim {
   private readonly pfAny: Uint8Array;
   private gGLo = 0;
   private gGHi = 0;
+  // 'dfg': the node numbers [fLo, fHi) that can be on the second field this step (the box of the failed points'
+  // stencils, set by assignFields); the loops over the second field's nodes stay inside it
+  private fLo = 0;
+  private fHi = 0;
+  // assignFields: a point's weights and their gradients along x and y
+  private readonly swx = new Float64Array(3);
+  private readonly swy = new Float64Array(3);
+  private readonly sdx = new Float64Array(3);
+  private readonly sdy = new Float64Array(3);
   private fieldsPrev = false;
   /** 'dfg': node-steps this step where the two fields came together (contact) and where they moved apart */
   fieldContacts = 0;
@@ -788,18 +797,24 @@ export class Sim {
    * gradient G_i = Σ V_p φ_p ∇w(x_i − x_p) points toward the failed points, and C_i is their centre (weights w m).
    * A node splits where |G_i| > 0; there a point is on the far side of the crack (the second field) when it lies
    * beyond C_i along G_i ('centroid'), or when its own interpolated gradient opposes G_i ('gradient'). Only the
-   * interval of node numbers [lo, hi + span) from the lowest to the highest failed point's stencil (every column in
-   * between, whole), and the points whose stencils reach into it, are visited.
+   * box of the failed points' stencils (their base columns c0..c1 and rows r0..r1, nodes to c1 + 2 and r1 + 2) is
+   * cleared and filled, and only the points whose stencils reach into it are visited; the failed points are found by
+   * the typed array's own search. The sums run over the failed points in the same order as a plain loop would.
    */
   private assignFields(): Uint8Array | null {
     const { n, active, failed, px, py, mass, vol0, f00, f01, f10, f11, invH, ox, oy, nyN, gGx, gGy, gCx, gCy, gCw } = this;
-    let lo = Infinity;
-    let hi = -Infinity;
-    for (let p = 0; p < n; p++) {
-      if (!active[p] || !failed[p]) continue;
-      const base = Math.floor((px[p] - ox) * invH - 0.5) * nyN + Math.floor((py[p] - oy) * invH - 0.5);
-      if (base < lo) lo = base;
-      if (base > hi) hi = base;
+    let c0 = Infinity;
+    let c1 = -Infinity;
+    let r0 = Infinity;
+    let r1 = -Infinity;
+    for (let p = failed.indexOf(1); p >= 0; p = failed.indexOf(1, p + 1)) {
+      if (!active[p]) continue;
+      const bx = Math.floor((px[p] - ox) * invH - 0.5);
+      const by = Math.floor((py[p] - oy) * invH - 0.5);
+      if (bx < c0) c0 = bx;
+      if (bx > c1) c1 = bx;
+      if (by < r0) r0 = by;
+      if (by > r1) r1 = by;
     }
     // last step's region is cleared first (what it wrote), then this step's
     gGx.fill(0, this.gGLo, this.gGHi);
@@ -807,19 +822,17 @@ export class Sim {
     gCx.fill(0, this.gGLo, this.gGHi);
     gCy.fill(0, this.gGLo, this.gGHi);
     gCw.fill(0, this.gGLo, this.gGHi);
-    if (lo === Infinity) {
+    if (c0 === Infinity) {
       this.gGLo = this.gGHi = 0;
+      this.fLo = this.fHi = 0;
       return null;
     }
-    const span = 2 * nyN + 3;
-    this.gGLo = lo;
-    this.gGHi = hi + span;
+    // every node of the box lies in [c0 nyN + r0, (c1 + 2) nyN + r1 + 3)
+    this.gGLo = this.fLo = c0 * nyN + r0;
+    this.gGHi = this.fHi = (c1 + 2) * nyN + r1 + 3;
     const pf = this.pfBuf.length === 9 * n ? this.pfBuf : (this.pfBuf = new Uint8Array(9 * n));
     this.pfAny.fill(0);
-    const wx = [0, 0, 0];
-    const wy = [0, 0, 0];
-    const dx = [0, 0, 0];
-    const dy = [0, 0, 0];
+    const { swx: wx, swy: wy, sdx: dx, sdy: dy } = this;
     const weights = (p: number): number => {
       const gx = (px[p] - ox) * invH;
       const gy = (py[p] - oy) * invH;
@@ -842,8 +855,8 @@ export class Sim {
       dy[2] = -(fy - 0.5) * invH;
       return bx * nyN + by;
     };
-    for (let p = 0; p < n; p++) {
-      if (!active[p] || !failed[p]) continue;
+    for (let p = failed.indexOf(1); p >= 0; p = failed.indexOf(1, p + 1)) {
+      if (!active[p]) continue;
       const V = vol0[p] * (f00[p] * f11[p] - f01[p] * f10[p]);
       const m = mass[p];
       const base = weights(p);
@@ -863,8 +876,10 @@ export class Sim {
     let any = false;
     for (let p = 0; p < n; p++) {
       if (!active[p]) continue;
-      const b0 = Math.floor((px[p] - ox) * invH - 0.5) * nyN + Math.floor((py[p] - oy) * invH - 0.5);
-      if (b0 + span <= lo || b0 >= hi + span) continue;
+      const bx = Math.floor((px[p] - ox) * invH - 0.5);
+      if (bx + 2 < c0 || bx > c1 + 2) continue;
+      const by = Math.floor((py[p] - oy) * invH - 0.5);
+      if (by + 2 < r0 || by > r1 + 2) continue;
       const base = weights(p);
       let gpx = 0;
       let gpy = 0;
@@ -912,7 +927,8 @@ export class Sim {
   private fieldContact(mMin: number): void {
     const { gm, gvx, gvy, gGx, gGy } = this;
     const N = this.nxN * this.nyN;
-    for (let node = this.gLo; node < this.gHi; node++) {
+    const to = Math.min(this.gHi, this.fHi);
+    for (let node = Math.max(this.gLo, this.fLo); node < to; node++) {
       const i2 = node + N;
       const m1 = gm[node];
       const m2 = gm[i2];
@@ -962,7 +978,10 @@ export class Sim {
     if (two) this.fieldContact(mMin);
     for (let half = 0; half < (two ? 2 : 1); half++) {
     const off = half * nNodes;
-    for (let node = this.gLo; node < this.gHi; node++) {
+    // the second field has mass only in the failed points' box (its other nodes stay cleared)
+    const from = half === 0 ? this.gLo : Math.max(this.gLo, this.fLo);
+    const to = half === 0 ? this.gHi : Math.min(this.gHi, this.fHi);
+    for (let node = from; node < to; node++) {
       const idx = node + off;
       const m = gm[idx];
       if (m <= mMin) {
@@ -1216,7 +1235,9 @@ export class Sim {
     const gMa = rate ? gMv : gm;
     const halves = pf !== null ? 2 : 1;
     for (let half = 0; half < halves; half++) {
-      for (let idx = this.gLo + half * nNodes; idx < this.gHi + half * nNodes; idx++) {
+      const from = half === 0 ? this.gLo : nNodes + Math.max(this.gLo, this.fLo);
+      const to = half === 0 ? this.gHi : nNodes + Math.min(this.gHi, this.fHi);
+      for (let idx = from; idx < to; idx++) {
         const m = gMa[idx];
         if (m > 0) gJ[idx] /= m;
       }
@@ -1226,7 +1247,9 @@ export class Sim {
     // so it conserves Σ m f (no volume leaks where β varies) and leaves a uniform field alone.
     if (rate) {
       for (let half = 0; half < halves; half++) {
-        for (let idx = this.gLo + half * nNodes; idx < this.gHi + half * nNodes; idx++) {
+        const from = half === 0 ? this.gLo : nNodes + Math.max(this.gLo, this.fLo);
+        const to = half === 0 ? this.gHi : nNodes + Math.min(this.gHi, this.fHi);
+        for (let idx = from; idx < to; idx++) {
           const m = gMv[idx];
           if (m > 0) {
             const b = gB[idx] / m;
