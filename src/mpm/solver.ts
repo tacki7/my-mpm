@@ -189,6 +189,15 @@ export class Sim {
   readonly contactJn: Float64Array;
   readonly contactJt: Float64Array;
   readonly contactSlip: Uint8Array;
+  /**
+   * The grid nodes the active points' stencils cover this step, [gLo, gHi), and last step's: only those are
+   * written, so only last step's range needs clearing (the first step clears all) and only this step's is
+   * visited. The rest of the grid keeps its cleared values, as if the whole grid were cleared every step.
+   */
+  private gLo = 0;
+  private gHi = 0;
+  private gPrevLo = 0;
+  private gPrevHi = 0;
   // 'surface': per roll and node (roll k at k · nodes + node), Σ w m (requested normal velocity change) and Σ w m
   private readonly gfolN: Float64Array;
   private readonly gfolD: Float64Array;
@@ -350,6 +359,7 @@ export class Sim {
     this.gJe = new Float64Array(nNodes);
     this.gB = new Float64Array(nNodes);
     this.gMv = new Float64Array(nNodes);
+    this.gPrevHi = nNodes;
 
     const R = r.rollRadius;
     const cy = R + this.gap / 2;
@@ -505,30 +515,35 @@ export class Sim {
   advance(): void {
     const { gm, gvx, gvy, gpush } = this;
     const [gpen0, gpen1] = this.gpen;
-    gm.fill(0);
-    gvx.fill(0);
-    gvy.fill(0);
-    gpen0.fill(INF);
-    gpen1.fill(INF);
-    gpush.fill(0);
-    this.gcon.fill(0);
-    this.contactJn.fill(0);
-    this.contactJt.fill(0);
-    this.contactSlip.fill(0);
+    // clear what last step wrote (the whole grid at the first step)
+    const lo = this.gPrevLo;
+    const hi = this.gPrevHi;
+    gm.fill(0, lo, hi);
+    gvx.fill(0, lo, hi);
+    gvy.fill(0, lo, hi);
+    gpen0.fill(INF, lo, hi);
+    gpen1.fill(INF, lo, hi);
+    gpush.fill(0, lo, hi);
+    this.gcon.fill(0, lo, hi);
+    this.contactJn.fill(0, lo, hi);
+    this.contactJt.fill(0, lo, hi);
+    this.contactSlip.fill(0, lo, hi);
     this.updatePusher();
     if (!this.pusherActive && !this.stalled && this.step % 50 === 0) this.checkStall();
     this.p2g();
     this.gridUpdate();
     if (this.params.numerics.jbar) {
-      this.gJ.fill(0);
+      this.gJ.fill(0, lo, hi);
       if (this.params.numerics.volumetric !== 'total') {
-        this.gJe.fill(0);
-        this.gB.fill(0);
-        this.gMv.fill(0);
+        this.gJe.fill(0, lo, hi);
+        this.gB.fill(0, lo, hi);
+        this.gMv.fill(0, lo, hi);
       }
     }
     this.g2pVelocity();
     this.g2pUpdate();
+    this.gPrevLo = this.gLo;
+    this.gPrevHi = this.gHi;
     this.t += this.dt;
     this.step++;
   }
@@ -551,6 +566,9 @@ export class Sim {
     // 'surface': a penetrating point marks only the nodes on its roll side and its nearest row (the top roll is roll 0)
     const rollSide = this.params.numerics.contact === 'surface';
     const hh = 0.5 * h;
+    // the lowest and highest stencil base (bx, by) index: the stencils cover [loBase, hiBase + 2 nyN + 3)
+    let loBase = INF;
+    let hiBase = -INF;
     for (let p = 0; p < n; p++) {
       if (!active[p]) continue;
       const xp = px[p];
@@ -559,6 +577,9 @@ export class Sim {
       const gy = (yp - oy) * invH;
       const bx = Math.floor(gx - 0.5);
       const by = Math.floor(gy - 0.5);
+      const base = bx * nyN + by;
+      if (base < loBase) loBase = base;
+      if (base > hiBase) hiBase = base;
       const fx = gx - bx;
       const fy = gy - by;
       const wx0 = 0.5 * (1.5 - fx) * (1.5 - fx);
@@ -642,6 +663,13 @@ export class Sim {
         }
       }
     }
+    if (loBase === INF) {
+      this.gLo = 0;
+      this.gHi = 0;
+    } else {
+      this.gLo = loBase;
+      this.gHi = hiBase + 2 * nyN + 3;
+    }
   }
 
   /**
@@ -689,7 +717,7 @@ export class Sim {
   }
 
   private gridUpdate(): void {
-    const { gm, gvx, gvy, gpush, nxN, nyN, h, ox, oy, dt } = this;
+    const { gm, gvx, gvy, gpush, nyN, h, ox, oy, dt } = this;
     const mu = this.params.rolling.mu;
     const pushing = this.pusherActive;
     const vPush = this.vIn;
@@ -698,10 +726,10 @@ export class Sim {
     let pushImpulse = 0;
     const fyAcc = [0, 0];
     const tqAcc = [0, 0];
-    const nNodes = nxN * nyN;
+    const nNodes = this.nxN * nyN;
     const mMin = 1e-12 * this.mass[0];
     const proj = this.projBuf;
-    for (let idx = 0; idx < nNodes; idx++) {
+    for (let idx = this.gLo; idx < this.gHi; idx++) {
       const m = gm[idx];
       if (m <= mMin) {
         gvx[idx] = 0;
@@ -917,7 +945,7 @@ export class Sim {
     }
     if (!jbar) return;
     const gMa = rate ? gMv : gm;
-    for (let idx = 0; idx < gJ.length; idx++) {
+    for (let idx = this.gLo; idx < this.gHi; idx++) {
       const m = gMa[idx];
       if (m > 0) gJ[idx] /= m;
     }
@@ -925,7 +953,7 @@ export class Sim {
     // The point then relaxes by Δf_p = Σ_i w_ip β_i (f̄_i − f_p): symmetric in the mass-weighted sense,
     // so it conserves Σ m f (no volume leaks where β varies) and leaves a uniform field alone.
     if (rate) {
-      for (let idx = 0; idx < gB.length; idx++) {
+      for (let idx = this.gLo; idx < this.gHi; idx++) {
         const m = gMv[idx];
         if (m > 0) {
           const b = gB[idx] / m;
