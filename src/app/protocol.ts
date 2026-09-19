@@ -121,6 +121,8 @@ export interface Frame {
   stopped: TandemStop | null;
   /** the stand on show's steady means so far (TandemSim's readings; null for a kept picture) */
   steady: SteadyMeans | null;
+  /** the stand on show's mid-plane η in the bite over its steady phase so far (src/mpm/midplane.ts; null before any) */
+  midEta: number | null;
 }
 
 /** A stand finished: its last frame and geometry (the page keeps them), its result, and the next stand's geometry. */

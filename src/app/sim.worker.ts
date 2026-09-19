@@ -10,6 +10,7 @@ import { READ_STEPS, TandemSim, type StandDone } from '../mpm/tandem.ts';
 import { Tracker } from './tracker.ts';
 import { FIELDS } from './fields.ts';
 import { windowCentre, windowWidth } from './biteWindow.ts';
+import { LOOK, MidPlaneEta } from '../mpm/midplane.ts';
 
 let tandem: TandemSim | null = null;
 let sim: Sim | null = null;
@@ -28,6 +29,13 @@ let pictures: (Picture | null)[] = [];
  * means the page shows (Sim.diagnostics() and pressureProfile() average over the steps since their last call) */
 let lastDiag: Diagnostics | null = null;
 let lastProfile: Frame['profile'] | null = null;
+/** the current stand's mid-plane η over its steady phase, read every LOOK steps as tools/burst-map.mjs reads it */
+let midPlane: { sim: Sim; eta: MidPlaneEta } | null = null;
+function lookMidPlane(s: Sim): void {
+  if (midPlane?.sim !== s) midPlane = { sim: s, eta: new MidPlaneEta(s) }; // a new stand starts its own
+  if (s.step % LOOK === 0) midPlane.eta.look(s);
+}
+
 /** a tandem: each stand change's parentOf (next stand's point → the point it came from), to follow a pick made before it */
 let changes: Int32Array[] = [];
 let scale: { contactLength: number; h0: number } | null = null;
@@ -147,6 +155,7 @@ function restOf(s: Sim, tr: Tracker | null, keep = false): Picture['rest'] {
     passDone: s === sim && finished(),
     stopped: t.stopped,
     steady: s === sim ? t.steadyMeans() : null,
+    midEta: s === sim && midPlane?.sim === s ? midPlane.eta.middle : null,
   };
 }
 
@@ -260,6 +269,7 @@ function loop(): void {
     const t = tandem!;
     for (let k = 0; k < chunk; k++) {
       t.advance();
+      lookMidPlane(t.sim);
       // a tandem's pass is over: no steps past the last stand's end (its stands end at any step, not a chunk's)
       if (t.stands > 1 && t.done) break;
     }
@@ -296,6 +306,7 @@ self.onmessage = (e: MessageEvent<ToWorker>) => {
         tracker = new Tracker(sim);
         pictures = [];
         changes = [];
+        midPlane = null;
         lastDiag = null;
         lastProfile = null;
         scale = { contactLength: sim.contactLength, h0: sim.params.rolling.h0 };

@@ -556,6 +556,24 @@ button.pending {
   margin-top: 22px;
 }
 
+/* the shape against the central-burst map: one line in plain words, the measured η, the map's conditions small */
+.burst-hint {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--rule);
+  font-size: var(--fs-s);
+}
+
+.burst-hint span {
+  display: block;
+  margin-top: 3px;
+}
+
+.burst-hint .burst-note {
+  font-size: var(--fs-xs);
+  color: var(--ink-soft);
+}
+
 .stand-results thead th {
   text-align: right;
   font-weight: 600;
