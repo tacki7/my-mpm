@@ -48,7 +48,11 @@ const RAW: Group[] = [
         min: 1,
         max: 5,
         get: (p) => p.rolling.stands ?? 1,
-        set: (p, v) => (p.rolling.stands = Math.round(v)),
+        // one stand is written as no stands at all (as the presets have it), so that it is not a difference
+        set: (p, v) => {
+          if (Math.round(v) === 1) delete p.rolling.stands;
+          else p.rolling.stands = Math.round(v);
+        },
         hint: 'タンデム（圧下率は各スタンドの入側板厚に対して）。後のスタンドほど重く、r 25 % の 5 スタンドで 1 スタンドの約 60 倍（r が大きいほど増える）',
         sectionOnly: true,
       },

@@ -84,11 +84,16 @@ export function applyQuery(base: SimParams, q: URLSearchParams): SimParams {
     }
     if (!hasBite(p.rolling)) p.rolling = rolling;
   }
+  // one stand is written as no stands at all, as the presets have it (so it is no difference for conditionsQuery)
+  if (p.rolling.stands === 1) delete p.rolling.stands;
   // a URL must not start a run too big for the page (whoever opens a shared link). A tandem too big keeps its
   // stands if the preset's grid is enough, else goes back to one stand; then, as for one stand, the preset's size
   if (points(p) > MAX_POINTS && (p.rolling.stands ?? 1) > 1) {
     p.numerics.cellsThrough = base.numerics.cellsThrough;
-    if (points(p) > MAX_POINTS) p.rolling.stands = base.rolling.stands ?? 1;
+    if (points(p) > MAX_POINTS) {
+      if (base.rolling.stands === undefined) delete p.rolling.stands;
+      else p.rolling.stands = base.rolling.stands;
+    }
   }
   if (points(p) > MAX_POINTS) {
     p.rolling = { ...base.rolling };

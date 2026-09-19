@@ -227,6 +227,7 @@ export class PlanMode {
   /** the conditions URL: the section model's keys, and the view and width settings */
   query(): URLSearchParams {
     const q = conditionsQuery(this.o.presetId(), this.o.preset(), this.params ?? this.o.conditions());
+    q.delete('stands'); // the plan view rolls one stand
     q.set('view', 'plan');
     for (const [k, v] of planSettingsQuery(this.settings)) q.set(k, v);
     if (this.field !== 'sxx') q.set('pfield', this.field);
