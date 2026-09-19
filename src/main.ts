@@ -78,7 +78,7 @@ const tabs = $('field-tabs');
 for (const f of FIELDS) {
   const b = document.createElement('button');
   b.type = 'button';
-  b.textContent = f.label;
+  b.textContent = f.tab ?? f.label;
   b.setAttribute('role', 'radio');
   b.dataset.field = f.id;
   b.addEventListener('click', () => setField(f.id));
@@ -196,7 +196,7 @@ function updateResults(d: Diagnostics, f: Frame) {
     ['亀裂になった点', String(d.nFailed), '個'],
     ['粒子数', String(d.nActive), '個'],
     ['時間刻み', (d.dt * 1e9).toFixed(1), 'ns'],
-    ['計算の速さ', f.msPerStep ? f.msPerStep.toFixed(2) : '—', 'ms/step'],
+    ['1 ステップの計算時間', f.msPerStep ? f.msPerStep.toFixed(2) : '—', 'ms'],
   ];
   const tb = $('results');
   tb.replaceChildren(
@@ -234,13 +234,18 @@ function updateCracks(cracks: CrackView[]) {
     const c = cracks[i];
     const li = document.createElement('li');
     const stamp = document.createElement('span');
-    stamp.className = 'stamp';
+    stamp.className = 'stamp pressed';
     stamp.textContent = String(c.id + 1);
+    stamp.setAttribute('aria-hidden', 'true');
     const body = document.createElement('div');
+    const name = document.createElement('span');
+    name.className = 'sr-only';
+    name.textContent = `亀裂 ${c.id + 1}：`;
     const where = Math.abs(c.sheetY) < 0.15 * params.rolling.h0 ? '板厚中心' : c.sheetY > 0 ? '上面側' : '下面側';
     body.innerHTML = `<strong>${(c.t * 1e3).toFixed(2)} ms　${where}</strong>
       <span>先端から ${(c.sheetX * 1e3).toFixed(2)} mm、中心から ${(c.sheetY * 1e3).toFixed(3)} mm の点</span>
       <span>η ${c.eta.toFixed(2)}　σ1 ${(c.s1 * 1e-6).toFixed(0)} MPa　εp ${c.ep.toFixed(3)}</span>`;
+    body.prepend(name);
     li.append(stamp, body);
     ol.append(li);
   }
@@ -264,10 +269,12 @@ function drawLegend() {
   }
   const unit = info.unit ? ` ${info.unit}` : '';
   const fmt = (v: number) => (Math.abs(v) >= 100 ? v.toFixed(0) : Math.abs(v) >= 1 ? v.toFixed(2) : v.toFixed(3));
+  $('legend').dataset.field = field; // what it shows (checks wait on this, the tabs may use shorter names)
   $('legend').innerHTML = `
     <div class="bar" style="background:linear-gradient(90deg,${stops.join(',')})"></div>
     <div class="ends"><span>${info.scale === 'lattice' ? '' : fmt(lo) + unit}</span><span>${info.label}</span><span>${info.scale === 'lattice' ? '' : fmt(hi) + unit}</span></div>
-    <div class="exag">板厚方向を ${view.state.exaggeration.toFixed(1)} 倍に拡大して表示</div>`;
+    <div class="exag">板厚方向を ${view.state.exaggeration.toFixed(1)} 倍に拡大して表示</div>
+    ${last && last.diag.nFailed > 0 ? '<div class="failed-key"><span class="swatch"></span>藍墨の点は亀裂になった点。朱の印は亀裂の番号（右の記録と同じ）</div>' : ''}`;
 }
 
 function drawCharts() {
@@ -306,7 +313,7 @@ function frameLoop() {
       overview.draw();
       drawLegend();
       drawCharts();
-    }
+    } else if (view.animating()) view.draw(); // a crack's stamp is being pressed
   } finally {
     requestAnimationFrame(frameLoop); // one failing draw must not stop the drawing
   }
@@ -368,6 +375,19 @@ window.__mpm = {
     const t0 = performance.now();
     for (let i = 0; i < n; i++) view.draw();
     return (performance.now() - t0) / n;
+  },
+  /** a crack's stamp is still being pressed onto the sheet */
+  get pressing() {
+    return view.animating();
+  },
+  /** press the stamps again, on the sheet and in the record (to capture the moment) */
+  pressAgain() {
+    view.pressAgain();
+    for (const s of document.querySelectorAll<HTMLElement>('#crack-log .stamp')) {
+      s.classList.remove('pressed');
+      void s.offsetWidth; // restart the CSS animation
+      s.classList.add('pressed');
+    }
   },
   history,
   run,
