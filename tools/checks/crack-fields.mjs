@@ -228,7 +228,7 @@ function fieldWatch() {
 
 // followRoll's condition (solver.ts): over the points touching a roll that sit on the second field at a node, the
 // edge's approach to the roll, Σ max(0, −edge) where edge = Σ w (v_i − u)·n − (half the point's height) n·L·n from
-// the nodes of the field the point is on
+// the nodes of the field the point is on. It copies followRoll's edge: when followRoll changes, change this with it
 function approach(s) {
   const { px, py, gvx, gvy, gcon, invH, ox, oy, nyN, h, pf, pfAny } = s;
   if (!pf) return 0;
