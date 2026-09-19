@@ -242,8 +242,9 @@ ok(fr.sumWorst < 1e-9, "the points' friction adds up to the nodes'", `worst ${fr
 
 // ── the edge: brittle → it fails from the edge (the tensile band); less brittle → nothing
 //    fails, unless a notch in the edge concentrates the tension: then it fails at its root.
-//    (The failed band runs along the edge, not across: with one velocity field the crack
-//    faces do not open — docs/model.md.)
+//    (The failed band runs along the edge, not across, with the faces split ('dfg') or not: the
+//    edge is under an even tension along the bite and fails all at once, and the inside is in
+//    compression, so no tip runs inwards — docs/model.md「平面図モデル」, T50.)
 function crackRun(cl, notch = 0) {
   const s = new PlanSim(condition((b) => {
     b.damage.model = 'cockcroft-latham';
