@@ -16,6 +16,7 @@ import {
   type SimParams,
   type YieldModel,
 } from '../mpm/params.ts';
+import { MAX_STANDS } from './tandemStub.ts';
 
 /** Accepted ranges in display units; the conditions panel uses the same ones. */
 export const LIMITS: Record<string, [number, number]> = {
@@ -264,6 +265,12 @@ export function conditionsQuery(presetId: string, preset: SimParams, params: Sim
   const rest = diff(applyQuery(preset, q), params);
   if (rest !== undefined) q.set('cond', toBase64Url(JSON.stringify(rest)));
   return q;
+}
+
+/** ?stands=<N>: the stands of a tandem, 1 to MAX_STANDS (anything else: 1). */
+export function standsOf(q: URLSearchParams): number {
+  const v = parseFloat(q.get('stands') ?? '');
+  return Number.isInteger(v) && v >= 1 && v <= MAX_STANDS ? v : 1;
 }
 
 /** ?stopafter=<steps> (exponent notation allowed), or null. */

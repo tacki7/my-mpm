@@ -1,7 +1,9 @@
 // Worker side of the stress explorer: the loading path of every material point,
 // sampled by plastic strain (so the point that fails first, or the most damaged
 // one, has its whole history when it is picked), and the state of the points
-// being followed. Reads the simulation only.
+// being followed. Reads the simulation only. In a tandem the tracker of each stand after the first has the
+// one before as its parent: a point's path starts with its parent point's (parentOf, from the transfer), and
+// each sample knows its stand.
 import { localization } from '../mpm/bifurcation.ts';
 import { homologousTemperature } from '../mpm/material.ts';
 import type { Sim } from '../mpm/solver.ts';
@@ -11,8 +13,17 @@ const DEP = 0.004; // a new path point per this much plastic strain
 const DETA = 0.1; // ... or per this change of triaxiality while flowing
 const CAP = 600; // path points per material point (a pass stays far below)
 
+/** the tracker of the stand before and the transfer's map, new point → the point it was copied from */
+export interface TrackerParent {
+  tracker: Tracker;
+  parentOf: Int32Array;
+}
+
 export class Tracker {
   private readonly sim: Sim;
+  /** stand of this tracker (0 first) */
+  readonly stand: number;
+  private readonly parent: TrackerParent | null;
   private readonly paths: (number[] | undefined)[];
   private readonly lastEp: Float64Array;
   private readonly lastEta: Float64Array;
@@ -20,12 +31,39 @@ export class Tracker {
   private readonly initiators = new Map<number, number>(); // point that started a crack → its η at failure
   private firstCrack = -1;
 
-  constructor(sim: Sim) {
+  constructor(sim: Sim, parent: TrackerParent | null = null) {
     this.sim = sim;
+    this.parent = parent;
+    this.stand = parent ? parent.tracker.stand + 1 : 0;
     this.paths = new Array(sim.n);
     this.lastEp = new Float64Array(sim.n);
     this.lastEta = new Float64Array(sim.n);
     this.closed = new Uint8Array(sim.n);
+    if (parent) {
+      // a point carries on from its parent: the same sampling reference, and a failure already recorded stays closed
+      for (let p = 0; p < sim.n; p++) {
+        const q = parent.parentOf[p];
+        if (q < 0) continue;
+        this.lastEp[p] = parent.tracker.lastEp[q];
+        this.lastEta[p] = parent.tracker.lastEta[q];
+        this.closed[p] = parent.tracker.closed[q];
+      }
+    }
+  }
+
+  /** The path of point p with its ancestors' in the stands before: flat (η, εp, D) and the stand of each sample. */
+  fullPath(p: number): { path: number[]; stand: number[] } {
+    const own = this.paths[p] ?? [];
+    const before = this.parent && p >= 0 && this.parent.parentOf[p] >= 0 ? this.parent.tracker.fullPath(this.parent.parentOf[p]) : { path: [], stand: [] };
+    return { path: before.path.concat(own), stand: before.stand.concat(new Array(own.length / 3).fill(this.stand)) };
+  }
+
+  /** the first point of this stand whose parent is point q of the stand before (−1: none) */
+  childOf(q: number): number {
+    if (!this.parent) return q;
+    const map = this.parent.parentOf;
+    for (let p = 0; p < map.length; p++) if (map[p] === q) return p;
+    return -1;
   }
 
   /** Add path points where the plastic strain or the triaxiality moved on; call every few steps. */
@@ -80,9 +118,12 @@ export class Tracker {
 
   private track(role: Track['role'], p: number): Track {
     const state = this.state(p);
-    const path = (this.paths[p] ?? []).slice();
-    if (state.ep > 0 && !this.closed[p]) path.push(state.eta, state.ep, state.damage);
-    return { role, id: p, state, path };
+    const { path, stand } = this.fullPath(p);
+    if (state.ep > 0 && !this.closed[p]) {
+      path.push(state.eta, state.ep, state.damage);
+      stand.push(this.stand);
+    }
+    return { role, id: p, state, path, stand };
   }
 
   private state(p: number): PointState {

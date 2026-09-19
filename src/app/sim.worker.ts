@@ -1,9 +1,15 @@
-// Runs the MPM in its own thread and streams frames to the page (~30 per second).
-import { Sim, type FieldName } from '../mpm/solver.ts';
-import type { FromWorker, ToWorker, Frame } from './protocol.ts';
+// Runs the MPM in its own thread and streams frames to the page (~30 per second). A tandem of several stands
+// runs one stand after the other (TandemSim): when a stand is done the worker sends its last frame and its
+// geometry (the page keeps that picture), and follows the points on into the next stand.
+import type { SimParams } from '../mpm/params.ts';
+import type { Sim, FieldName } from '../mpm/solver.ts';
+import type { FromWorker, ToWorker, Frame, Geometry } from './protocol.ts';
+import { TandemSim } from './tandemStub.ts';
 import { Tracker } from './tracker.ts';
 
+let tandem: TandemSim | null = null;
 let sim: Sim | null = null;
+let params: SimParams | null = null;
 let tracker: Tracker | null = null;
 let selected: number | null = null;
 let field: FieldName = 'seq';
@@ -14,14 +20,30 @@ let msPerStep = 0;
 let dirsOn = false;
 
 const FRAME_MS = 33;
+/** steps between the tandem's own reads (tools/tandem.mjs reads at the same steps, so the results agree) */
+const EVERY = 2000;
 
 function post(msg: FromWorker, transfer: Transferable[] = []) {
   (self as unknown as Worker).postMessage(msg, transfer);
 }
 
-function frame(): void {
-  if (!sim) return;
-  const s = sim;
+function geometryOf(s: Sim): Geometry {
+  return {
+    n: s.n,
+    h0: s.params.rolling.h0,
+    gap: s.gap,
+    dp: s.dp,
+    h: s.h,
+    dt: s.dt,
+    contactLength: s.contactLength,
+    xExitProbe: s.xExitProbe,
+    rolls: s.rolls.map((r) => ({ ...r })),
+    rollSpeed: s.params.rolling.rollSpeed,
+  };
+}
+
+/** a frame of sim s (the current stand, or one just finished) with its tracker; its buffers go with it */
+function makeFrame(s: Sim, tr: Tracker | null): [Frame, Transferable[]] {
   const n = s.n;
   const pos = new Float32Array(2 * n);
   const F = new Float32Array(4 * n);
@@ -55,6 +77,7 @@ function frame(): void {
   const diag = s.diagnostics();
   const prof = s.pressureProfile();
   const cent = s.crackCentroids();
+  const t = tandem!;
   const msg: Frame = {
     type: 'frame',
     pos,
@@ -66,11 +89,52 @@ function frame(): void {
     diag,
     profile: { x: Array.from(prof.x), p: Array.from(prof.p), tau: Array.from(prof.tau) },
     cracks: s.cracks.map((c, i) => ({ ...c, cx: cent[i].x, cy: cent[i].y })),
-    tracks: tracker ? tracker.tracks(selected) : [],
+    tracks: tr ? tr.tracks(selected) : [],
     running,
     msPerStep,
+    stand: tr?.stand ?? t.stand,
+    stands: t.stands,
+    tOffset: t.tOffset,
+    stepOffset: t.stepOffset,
+    results: t.results.map((r) => ({ ...r })),
   };
-  post(msg, [pos.buffer, F.buffer, val.buffer, flags.buffer, ...(dirs ? [dirs.buffer] : [])]);
+  return [msg, [pos.buffer, F.buffer, val.buffer, flags.buffer, ...(dirs ? [dirs.buffer] : [])]];
+}
+
+function frame(): void {
+  if (!sim) return;
+  const [msg, transfer] = makeFrame(sim, tracker);
+  post(msg, transfer);
+}
+
+/** the whole pass's step count (the stands before and this one's) */
+const passStep = () => tandem!.stepOffset + sim!.step;
+
+/** one stand is past: hold its last picture, and follow the points into the next stand */
+function onStandDone(e: { stand: number; sim: Sim; next: Sim | null; parentOf: Int32Array | null; result: import('./tandemStub.ts').StandResult }): void {
+  tracker?.record();
+  const [last, transfer] = makeFrame(e.sim, tracker);
+  last.running = false;
+  post({ type: 'stand', stand: e.stand, frame: last, geometry: geometryOf(e.sim), result: { ...e.result }, next: e.next ? geometryOf(e.next) : null }, transfer);
+  if (!e.next || !e.parentOf) return;
+  const next = new Tracker(e.next, { tracker: tracker!, parentOf: e.parentOf });
+  if (selected !== null) {
+    const child = next.childOf(selected);
+    selected = child >= 0 ? child : null;
+  }
+  tracker = next;
+  sim = e.next;
+  (self as unknown as { __sim: Sim }).__sim = e.next;
+}
+
+/** the pass is over: one stand as before (its phase), a tandem when the last stand has been closed */
+function finished(): boolean {
+  const t = tandem!;
+  if (t.stands === 1) {
+    const ph = sim!.phase();
+    return ph === 'done' || ph === 'stalled';
+  }
+  return t.done;
 }
 
 function loop(): void {
@@ -79,19 +143,18 @@ function loop(): void {
   const t0 = performance.now();
   let steps = 0;
   while (performance.now() - t0 < FRAME_MS - 6) {
-    const chunk = stopAfter === null ? 20 : Math.min(20, stopAfter - sim.step);
-    for (let k = 0; k < chunk; k++) sim.advance();
+    const chunk = stopAfter === null ? 20 : Math.min(20, stopAfter - passStep());
+    for (let k = 0; k < chunk; k++) tandem!.advance();
     tracker?.record();
     steps += Math.max(0, chunk);
-    if (stopAfter !== null && sim.step >= stopAfter) break;
+    if (stopAfter !== null && passStep() >= stopAfter) break;
+    if (tandem!.stands > 1 && tandem!.done) break;
   }
   if (steps) msPerStep = (performance.now() - t0) / steps;
   // stop there once; "続ける" runs on from it
-  const reached = stopAfter !== null && sim.step >= stopAfter;
+  const reached = stopAfter !== null && passStep() >= stopAfter;
   if (reached) stopAfter = null;
-  const ph = sim.phase();
-  const done = ph === 'done' || ph === 'stalled' || reached;
-  if (done) running = false;
+  if (finished() || reached) running = false;
   frame();
   if (running) timer = setTimeout(loop, 0);
 }
@@ -106,26 +169,15 @@ self.onmessage = (e: MessageEvent<ToWorker>) => {
         running = false;
         field = m.field;
         stopAfter = m.stopAfter;
-        sim = new Sim(m.params);
+        params = m.params;
+        tandem = new TandemSim(params, m.stands, EVERY);
+        tandem.onStandDone = onStandDone;
+        sim = tandem.sim;
         tracker = new Tracker(sim);
         selected = null;
         // headless checks read the simulation itself through the worker target (tools/browser/explorer.mjs)
         (self as unknown as { __sim: Sim }).__sim = sim;
-        post({
-          type: 'ready',
-          geometry: {
-            n: sim.n,
-            h0: m.params.rolling.h0,
-            gap: sim.gap,
-            dp: sim.dp,
-            h: sim.h,
-            dt: sim.dt,
-            contactLength: sim.contactLength,
-            xExitProbe: sim.xExitProbe,
-            rolls: sim.rolls.map((r) => ({ ...r })),
-            rollSpeed: m.params.rolling.rollSpeed,
-          },
-        });
+        post({ type: 'ready', geometry: geometryOf(sim) });
         frame();
         break;
       }
