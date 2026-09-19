@@ -148,7 +148,10 @@ export class Sim {
   readonly gvy: Float64Array;
   readonly gpen: Float64Array[]; // per roll: min over contributing particles of (distance to roll surface − particle half size)
   readonly gpush: Uint8Array;
-  readonly gJ: Float64Array; // J-bar: mass-weighted trial volume ratio
+  readonly gJ: Float64Array; // J-bar: mass-weighted trial volume ratio ('total') or volumetric rate ('rate')
+  readonly gJe: Float64Array; // 'rate': β_i × mass-weighted mean of the elastic log volume ln J − ev
+  readonly gB: Float64Array; // 'rate': mass-weighted relaxation fraction β_i
+  readonly gMv: Float64Array; // 'rate': nodal mass of the points in the averages (intact, J > 0)
 
   // particles (lattice order: index = i * NJ + j, i from the tail)
   readonly n: number;
@@ -203,7 +206,8 @@ export class Sim {
   readonly drE: Float64Array;
   readonly locHit: Uint8Array; // 1 once the acoustic tensor turned singular (damage model 'localization')
   readonly duct: Float64Array; // ductility multiplier (defects)
-  readonly dJ: Float64Array; // trial volume ratio J of the current step (J-bar)
+  readonly dJ: Float64Array; // trial volume ratio J ('total') or volumetric rate tr L ('rate') of the current step
+  readonly vr: Float64Array; // 'rate': 3K Δεp / σeq of the last step (the relaxation fraction per unit coefficient)
   readonly active: Uint8Array;
   readonly failed: Uint8Array;
   readonly tag: Uint8Array; // 1 tail column, 2 head column
@@ -283,6 +287,9 @@ export class Sim {
     this.gpen = [new Float64Array(nNodes), new Float64Array(nNodes)];
     this.gpush = new Uint8Array(nNodes);
     this.gJ = new Float64Array(nNodes);
+    this.gJe = new Float64Array(nNodes);
+    this.gB = new Float64Array(nNodes);
+    this.gMv = new Float64Array(nNodes);
 
     const R = r.rollRadius;
     const cy = R + this.gap / 2;
@@ -367,6 +374,7 @@ export class Sim {
     this.locHit = new Uint8Array(n);
     this.duct = F();
     this.dJ = F();
+    this.vr = F();
     this.active = new Uint8Array(n);
     this.failed = new Uint8Array(n);
     this.tag = new Uint8Array(n);
@@ -433,7 +441,14 @@ export class Sim {
     this.updatePusher();
     this.p2g();
     this.gridUpdate();
-    if (this.params.numerics.jbar) this.gJ.fill(0);
+    if (this.params.numerics.jbar) {
+      this.gJ.fill(0);
+      if (this.params.numerics.volumetric !== 'total') {
+        this.gJe.fill(0);
+        this.gB.fill(0);
+        this.gMv.fill(0);
+      }
+    }
     this.g2pVelocity();
     this.g2pUpdate();
     this.t += this.dt;
@@ -600,15 +615,26 @@ export class Sim {
   }
 
   /**
-   * Grid → particles, pass 1: velocity and its gradient. With J-bar on, the
-   * trial volume ratio J is also scattered to the grid (mass-weighted) so pass 2
-   * can use its smoothed value — plastic flow is isochoric, and the pointwise
-   * volume change locks (spurious pressure checkerboard) otherwise.
+   * Grid → particles, pass 1: velocity and its gradient. With J-bar on, a volumetric
+   * quantity is also scattered to the grid (mass-weighted) so pass 2 can use its
+   * smoothed value — plastic flow is isochoric, and the pointwise volume change
+   * locks (spurious pressure checkerboard) otherwise. 'total': the trial volume
+   * ratio J. 'rate': the volumetric rate tr L, and for the relaxation the elastic
+   * log volume ln J − ev with each point's relaxation fraction.
    */
   private g2pVelocity(): void {
-    const { n, active, px, py, vx, vy, gm, gvx, gvy, gJ, mass, dt, h, invH, ox, oy, nyN } = this;
+    const { n, active, px, py, vx, vy, gm, gvx, gvy, gJ, gJe, gB, gMv, mass, dt, h, invH, ox, oy, nyN } = this;
     const k4 = 4 * invH * invH;
-    const jbar = this.params.numerics.jbar;
+    const num = this.params.numerics;
+    const jbar = num.jbar;
+    const rate = num.volumetric !== 'total';
+    const cIn = num.volRelax ?? 1;
+    const cContact = num.volRelaxContact ?? 5;
+    // contact band: within 2h of a roll surface, i.e. |x − c| < R + 2h (squared, no sqrt per point)
+    const [r0, r1] = this.rolls;
+    const b0 = (r0.R + 2 * h) * (r0.R + 2 * h);
+    const b1 = (r1.R + 2 * h) * (r1.R + 2 * h);
+    const invK = 1 / this.el.K;
     for (let p = 0; p < n; p++) {
       if (!active[p]) continue;
       const gx = (px[p] - ox) * invH;
@@ -659,6 +685,50 @@ export class Sim {
       vx[p] = nvx;
       vy[p] = nvy;
       if (!jbar) continue;
+      if (rate) {
+        const m = mass[p];
+        const th = l00 + l11;
+        this.dJ[p] = th;
+        // failed and inverted points take no part in the averages (they keep their own rate):
+        // a crack must not dilate its intact neighbours, and ln J needs J > 0
+        const Jo = this.f00[p] * this.f11[p] - this.f01[p] * this.f10[p];
+        if (this.failed[p] || !(Jo > 0)) continue;
+        const mth = m * th;
+        // elastic log volume ln J − ev = −p/K for an intact point (p was set from this F last step)
+        const mfe = -m * this.pres[p] * invK;
+        // relaxation fraction β = c · 3K Δεp / σeq, with the contact coefficient near a roll
+        let mb = 0;
+        const v = this.vr[p];
+        if (v > 0) {
+          const ax = px[p] - r0.cx;
+          const ay = py[p] - r0.cy;
+          const bx1 = px[p] - r1.cx;
+          const by1 = py[p] - r1.cy;
+          const c = ax * ax + ay * ay < b0 || bx1 * bx1 + by1 * by1 < b1 ? cContact : cIn;
+          const b = c * v;
+          mb = m * (b < 1 ? b : 1);
+        }
+        for (let i = 0; i < 3; i++) {
+          const wx = i === 0 ? wx0 : i === 1 ? wx1 : wx2;
+          const col = (bx + i) * nyN + by;
+          const w0 = wx * wy0;
+          const w1 = wx * wy1;
+          const w2 = wx * wy2;
+          gJ[col] += w0 * mth;
+          gJ[col + 1] += w1 * mth;
+          gJ[col + 2] += w2 * mth;
+          gJe[col] += w0 * mfe;
+          gJe[col + 1] += w1 * mfe;
+          gJe[col + 2] += w2 * mfe;
+          gB[col] += w0 * mb;
+          gB[col + 1] += w1 * mb;
+          gB[col + 2] += w2 * mb;
+          gMv[col] += w0 * m;
+          gMv[col + 1] += w1 * m;
+          gMv[col + 2] += w2 * m;
+        }
+        continue;
+      }
       // trial total volume ratio of this step (averaging the total, not the increment, cannot drift)
       const Jold = this.f00[p] * this.f11[p] - this.f01[p] * this.f10[p];
       const dJ = ((1 + dt * l00) * (1 + dt * l11) - dt * dt * l01 * l10) * Jold;
@@ -672,16 +742,35 @@ export class Sim {
         gJ[col + 2] += wx * wy2 * mdJ;
       }
     }
-    if (jbar) for (let idx = 0; idx < gJ.length; idx++) if (gm[idx] > 0) gJ[idx] /= gm[idx];
+    if (!jbar) return;
+    const gMa = rate ? gMv : gm;
+    for (let idx = 0; idx < gJ.length; idx++) {
+      const m = gMa[idx];
+      if (m > 0) gJ[idx] /= m;
+    }
+    // 'rate': nodal relaxation fraction β_i and β_i f̄_i (f̄_i: mass-weighted mean elastic log volume).
+    // The point then relaxes by Δf_p = Σ_i w_ip β_i (f̄_i − f_p): symmetric in the mass-weighted sense,
+    // so it conserves Σ m f (no volume leaks where β varies) and leaves a uniform field alone.
+    if (rate) {
+      for (let idx = 0; idx < gB.length; idx++) {
+        const m = gMv[idx];
+        if (m > 0) {
+          const b = gB[idx] / m;
+          gB[idx] = b;
+          gJe[idx] = (b * gJe[idx]) / m;
+        }
+      }
+    }
   }
 
   /** Grid → particles, pass 2: move, update F and the stress, accumulate damage. */
   private g2pUpdate(): void {
-    const { n, active, px, py, vx, vy, gJ, dt, h, invH, ox, oy, nxN, nyN } = this;
+    const { n, active, px, py, vx, vy, gJ, gJe, gB, dt, h, invH, ox, oy, nxN, nyN } = this;
     const P = this.params;
     const mat = P.material;
     const dmg = P.damage;
     const jbar = P.numerics.jbar;
+    const rate = P.numerics.volumetric !== 'total';
     const { K, G } = this.el;
     const rateScale = P.rolling.millSpeed / P.rolling.rollSpeed;
     const failMode = dmg.failure;
@@ -700,8 +789,10 @@ export class Sim {
       const l01 = this.c01[p];
       const l10 = this.c10[p];
       const l11 = this.c11[p];
-      // volumetric correction: det(c g F) = c² J_trial = smoothed J
+      // volumetric correction: det(c g F) = c² J_trial = the scheme's J
       let cor = 1;
+      // 'rate': the scheme's volumetric rate, which replaces tr D in the deviatoric update too
+      let th = 0;
       if (jbar) {
         const gx = (xp - ox) * invH;
         const gy = (yp - oy) * invH;
@@ -713,13 +804,34 @@ export class Sim {
         const wy1 = 0.75 - (fy - 1) * (fy - 1);
         const wy2 = 0.5 * (fy - 0.5) * (fy - 0.5);
         let Jbar = 0;
+        let rA = 0; // 'rate': Σ w β_i f̄_i
+        let rB = 0; // 'rate': Σ w β_i
         for (let i = 0; i < 3; i++) {
           const wx = i === 0 ? 0.5 * (1.5 - fx) * (1.5 - fx) : i === 1 ? 0.75 - (fx - 1) * (fx - 1) : 0.5 * (fx - 0.5) * (fx - 0.5);
           const col = (bx + i) * nyN + by;
           Jbar += wx * (wy0 * gJ[col] + wy1 * gJ[col + 1] + wy2 * gJ[col + 2]);
+          if (rate) {
+            rA += wx * (wy0 * gJe[col] + wy1 * gJe[col + 1] + wy2 * gJe[col + 2]);
+            rB += wx * (wy0 * gB[col] + wy1 * gB[col + 1] + wy2 * gB[col + 2]);
+          }
         }
-        const r = Jbar / this.dJ[p];
-        cor = r > 0 ? Math.sqrt(r) : 1;
+        if (rate) {
+          // smoothed rate (Jbar holds it here) plus the relaxation of the elastic log volume toward
+          // its grid mean; J advances exactly by exp(Δt θ), so the volume follows the smoothed rate
+          const Jold = this.f00[p] * this.f11[p] - this.f01[p] * this.f10[p];
+          if (this.failed[p] || !(Jold > 0)) {
+            // not in the averages: its own rate, F ← (I + ΔtL) F
+            th = l00 + l11;
+          } else {
+            th = Jbar + (rA + (rB * this.pres[p]) / K) / dt; // ln Jold − ev = −p/K
+            const Jtr = ((1 + dt * l00) * (1 + dt * l11) - dt * dt * l01 * l10) * Jold;
+            const r = (Jold * Math.exp(dt * th)) / Jtr;
+            cor = r > 0 ? Math.sqrt(r) : 1;
+          }
+        } else {
+          const r = Jbar / this.dJ[p];
+          cor = r > 0 ? Math.sqrt(r) : 1;
+        }
       }
       const nx = xp + dt * vx[p];
       const ny = yp + dt * vy[p];
@@ -749,9 +861,16 @@ export class Sim {
       this.f11[p] = n11;
       const J = n00 * n11 - n01 * n10;
 
-      // rate of deformation (deviatoric part — the volumetric part enters through J) and spin
-      const dxx = l00;
-      const dyy = l11;
+      // rate of deformation (deviatoric part — the volumetric part enters through J) and spin.
+      // 'rate': the in-plane trace of D is replaced by the scheme's rate θ, so the deviator sees the
+      // same volume change as the pressure (s_zz rate 2G(−θ/3); plane strain σzz = ν(σxx + σyy) holds)
+      let dxx = l00;
+      let dyy = l11;
+      if (jbar && rate) {
+        const shift = 0.5 * (th - l00 - l11);
+        dxx += shift;
+        dyy += shift;
+      }
       const dxy = 0.5 * (l01 + l10);
       const w = 0.5 * (l01 - l10);
       const tr3 = (dxx + dyy) / 3;
@@ -783,6 +902,7 @@ export class Sim {
       let dep = 0;
       let flowRate = -1;
       const isFailed = this.failed[p] === 1;
+      this.vr[p] = 0;
       if (isFailed) {
         sx = sy = sz = sh = 0;
         q = 0;
@@ -843,6 +963,9 @@ export class Sim {
       this.s1[p] = s1;
 
       if (dep > 0) {
+        // pressure-projection stabilisation: the unresolved elastic volume relaxes at the rate the
+        // plastic secant viscosity σeq/(3ε̇p) allows, β = c · 3K Δεp / σeq per step (docs/model.md)
+        if (q > 0) this.vr[p] = (3 * K * dep) / q;
         if (dmg.model === 'localization' && localization(this.el, this.hardening(p), sx, sy, sh, sz).ratio <= 0) this.locHit[p] = 1;
         const du = 1 / this.duct[p];
         const Ts = homologousTemperature(mat, this.temp[p]);

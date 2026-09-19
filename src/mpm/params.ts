@@ -111,6 +111,16 @@ export interface RollingParams {
   tensionRamp?: number;
 }
 
+/**
+ * What the anti-locking scheme smooths over the grid (with `jbar` on).
+ * - 'rate': the volumetric rate tr L of each step. The state is not re-smoothed, so the pressure
+ *   is not diffused along the flow; the part of the elastic volume the grid cannot resolve relaxes
+ *   toward its grid mean in proportion to the plastic strain (`volRelax`)
+ * - 'total': the total volume ratio J, replaced by its grid mean every step. Diffuses the pressure
+ *   with D ≈ h²/(4 Δt) (over ~15 mm in one pass of a 10 mm plate at 16 cells)
+ */
+export type VolumetricScheme = 'rate' | 'total';
+
 export interface NumericsParams {
   cellsThrough: number; // grid cells through the entry thickness
   ppc: number; // particles per cell per direction
@@ -118,6 +128,18 @@ export interface NumericsParams {
   cfl: number;
   /** smooth the volume change over the grid (J-bar) to avoid volumetric locking of isochoric plastic flow */
   jbar: boolean;
+  /** what is smoothed (default 'rate') */
+  volumetric?: VolumetricScheme;
+  /**
+   * 'rate': relaxation of the unresolved elastic volume per plastic strain increment, as a multiple
+   * of 3K/σeq (pressure-projection stabilisation with the plastic secant viscosity σeq/(3 ε̇p)). Default 1
+   */
+  volRelax?: number;
+  /**
+   * 'rate': the same within two cells of a roll surface, where the contact projection pins the
+   * velocity of a ~1.5-cell band and the discrete flow cannot stay isochoric. Default 5
+   */
+  volRelaxContact?: number;
 }
 
 /**
@@ -274,6 +296,9 @@ export function defaultParams(): SimParams {
       massScale: 1e4,
       cfl: 0.4,
       jbar: true,
+      volumetric: 'rate',
+      volRelax: 1,
+      volRelaxContact: 5,
     },
     defects: [],
   };
