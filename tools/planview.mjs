@@ -5,9 +5,9 @@
 // gate check (a 100 mm wide strip takes a few minutes).
 //
 //   node tools/planview.mjs [--W 20] [--cells 20] [--L 28] [--tailgap 8] [--h0 1] [--r 0.25] [--R 100]
-//                           [--mu 0.08] [--ms 10000] [--tb 0] [--tf 0]
+//                           [--mu 0.08] [--ms 10000] [--cfl 0.4] [--tb 0] [--tf 0]
 //                           [--damage none|johnson-cook|hancock-mackenzie|cockcroft-latham] [--cl 0.6]
-//                           [--notch <radius mm>] [--json]
+//                           [--notch <radius mm>] [--max 4000000] [--json]
 //
 // Lengths in mm, tensions in MPa; --W is the full width, --cells the grid cells across the
 // half width. --notch cuts a semicircular notch of that radius into the edge half-way along
@@ -33,10 +33,12 @@ r.reduction = +opt('r', r.reduction);
 r.rollRadius = +opt('R', 100) * 1e-3;
 r.sheetLength = +opt('L', 28) * 1e-3;
 const tailGap = +opt('tailgap', 8) * 1e-3;
+const maxSteps = +opt('max', 4e6);
 r.mu = +opt('mu', r.mu);
 r.backTension = +opt('tb', 0) * 1e6;
 r.frontTension = +opt('tf', 0) * 1e6;
 base.numerics.massScale = +opt('ms', base.numerics.massScale);
+base.numerics.cfl = +opt('cfl', base.numerics.cfl);
 base.damage.model = opt('damage', 'none');
 base.damage.clCrit = +opt('cl', base.damage.clCrit);
 const W = +opt('W', 20) * 1e-3;
@@ -53,14 +55,14 @@ const t0 = performance.now();
 const samples = [];
 let steadyLooks = 0;
 let phase = '';
-while (sim.step < 400000) {
+while (sim.step < maxSteps) {
   for (let k = 0; k < 250; k++) sim.advance();
   phase = sim.phase();
   const F = sim.readForce();
+  if (phase === 'done') break;
   if (phase !== 'steady') continue;
   steadyLooks++;
   if (sim.tailX() <= -sim.contactLength - tailGap) samples.push({ F, snap: snapshot() });
-  if (phase === 'done') break;
 }
 const secs = (performance.now() - t0) / 1000;
 
