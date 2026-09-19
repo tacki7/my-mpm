@@ -18,6 +18,8 @@ interface NumField {
   set(p: SimParams, v: number): void;
   /** short explanation shown under the label */
   hint?: string;
+  /** the section model's only (hidden in the plan view, which does not use it) */
+  sectionOnly?: boolean;
 }
 
 interface Group {
@@ -38,6 +40,18 @@ const RAW: Group[] = [
       { key: 'r', label: '圧下率', unit: '%', step: 1, min: 1, max: 60, get: (p) => p.rolling.reduction * 100, set: (p, v) => (p.rolling.reduction = v / 100) },
       { key: 'R', label: 'ロール半径', unit: 'mm', step: 5, min: 5, max: 1000, get: (p) => p.rolling.rollRadius / mm, set: (p, v) => (p.rolling.rollRadius = v * mm) },
       { key: 'L', label: '板の長さ', unit: 'mm', step: 1, min: 2, max: 200, get: (p) => p.rolling.sheetLength / mm, set: (p, v) => (p.rolling.sheetLength = v * mm) },
+      {
+        key: 'stands',
+        label: 'スタンド数',
+        unit: '',
+        step: 1,
+        min: 1,
+        max: 5,
+        get: (p) => p.rolling.stands ?? 1,
+        set: (p, v) => (p.rolling.stands = Math.round(v)),
+        hint: 'タンデム（圧下率は各スタンドの入側板厚に対して）。後のスタンドほど重く、r 25 % の 5 スタンドで 1 スタンドの約 60 倍（r が大きいほど増える）',
+        sectionOnly: true,
+      },
     ],
   },
   {
@@ -172,7 +186,7 @@ export function buildPanel(root: HTMLElement, onEdit: () => void): Panel {
     }
     if (g.title === '空孔（GTN）') fs.append(nucleation);
     for (const f of g.fields) {
-      const row = el('label', 'field');
+      const row = el('label', f.sectionOnly ? 'field section-only' : 'field');
       const head = el('span', 'field-label', f.label);
       row.append(head);
       const box = el('span', 'field-input');

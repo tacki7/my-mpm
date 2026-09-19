@@ -16,6 +16,7 @@ import {
   type SimParams,
   type YieldModel,
 } from '../mpm/params.ts';
+import { MAX_STANDS } from '../mpm/tandem.ts';
 
 /** Accepted ranges in display units; the conditions panel uses the same ones. */
 export const LIMITS: Record<string, [number, number]> = {
@@ -23,6 +24,7 @@ export const LIMITS: Record<string, [number, number]> = {
   r: [0.5, 70],
   R: [5, 2000],
   L: [1, 500],
+  stands: [1, MAX_STANDS],
   mu: [0, 1],
   tb: [0, 5000],
   tf: [0, 5000],
@@ -54,6 +56,7 @@ export function applyQuery(base: SimParams, q: URLSearchParams): SimParams {
     p.rolling.rollRadius = base.rolling.rollRadius;
   }
   num('L', (v) => (p.rolling.sheetLength = v * 1e-3));
+  num('stands', (v) => Number.isInteger(v) && (p.rolling.stands = v));
   num('mu', (v) => (p.rolling.mu = v));
   num('tb', (v) => (p.rolling.backTension = v * 1e6));
   num('tf', (v) => (p.rolling.frontTension = v * 1e6));
@@ -81,7 +84,12 @@ export function applyQuery(base: SimParams, q: URLSearchParams): SimParams {
     }
     if (!hasBite(p.rolling)) p.rolling = rolling;
   }
-  // a URL must not start a run too big for the page (whoever opens a shared link)
+  // a URL must not start a run too big for the page (whoever opens a shared link). A tandem too big keeps its
+  // stands if the preset's grid is enough, else goes back to one stand; then, as for one stand, the preset's size
+  if (points(p) > MAX_POINTS && (p.rolling.stands ?? 1) > 1) {
+    p.numerics.cellsThrough = base.numerics.cellsThrough;
+    if (points(p) > MAX_POINTS) p.rolling.stands = base.rolling.stands ?? 1;
+  }
   if (points(p) > MAX_POINTS) {
     p.rolling = { ...base.rolling };
     p.numerics = { ...base.numerics };
@@ -98,10 +106,18 @@ export function applyQuery(base: SimParams, q: URLSearchParams): SimParams {
 export const MAX_POINTS = 500_000;
 const MAX_DEFECTS = 20;
 
-/** Material points of a sheet on the lattice (spacing h0 / (cells × ppc)). */
+/**
+ * Material points of a pass on the lattice (spacing h0 / (cells × ppc)), over all its stands: each stand's sheet
+ * is about 1 − r times as thick and 1 / (1 − r) times as long as the one before, so it has 1 / (1 − r)² times its
+ * points (a tandem of 5 stands at r 25 % has 21.5 times the points of one).
+ */
 export function points(p: SimParams): number {
   const n = p.numerics.cellsThrough * p.numerics.ppc;
-  return (p.rolling.sheetLength / p.rolling.h0) * n * n;
+  const one = (p.rolling.sheetLength / p.rolling.h0) * n * n;
+  const grow = 1 / (1 - p.rolling.reduction) ** 2;
+  let stands = 0;
+  for (let k = 0, f = 1; k < (p.rolling.stands ?? 1); k++, f *= grow) stands += f;
+  return one * stands;
 }
 
 type Obj = Record<string, unknown>;
@@ -120,6 +136,7 @@ const RULES: Record<string, Rule> = {
   'rolling.reduction': r(0.005, 0.7),
   'rolling.rollRadius': r(5e-3, 2),
   'rolling.sheetLength': r(1e-3, 0.5),
+  'rolling.stands': { range: [1, MAX_STANDS], int: true },
   'rolling.rollSpeed': r(0.05, 20),
   'rolling.millSpeed': r(0.1, 60),
   'rolling.mu': r(0, 1),
@@ -252,6 +269,7 @@ export function conditionsQuery(presetId: string, preset: SimParams, params: Sim
   put('r', r.reduction * 100, b.reduction * 100);
   put('R', r.rollRadius * 1e3, b.rollRadius * 1e3);
   put('L', r.sheetLength * 1e3, b.sheetLength * 1e3);
+  put('stands', r.stands ?? 1, b.stands ?? 1);
   put('mu', r.mu, b.mu);
   put('tb', r.backTension * 1e-6, b.backTension * 1e-6);
   put('tf', r.frontTension * 1e-6, b.frontTension * 1e-6);

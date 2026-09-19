@@ -22,7 +22,8 @@ export interface ChartSpec {
   /** horizontal guide lines at these y values, with their labels (at the right end) */
   hmarks?: { y: number; label: string }[];
   /** filled (or ringed) points on top of the lines */
-  dots?: { x: number; y: number; color: string; r?: number; ring?: boolean }[];
+  /** points; label: a short text written beside it (e.g. a tandem stand's number) */
+  dots?: { x: number; y: number; color: string; r?: number; ring?: boolean; label?: string }[];
   xRange?: [number, number];
   yRange?: [number, number];
 }
@@ -168,6 +169,13 @@ export function drawChart(canvas: HTMLCanvasElement, spec: ChartSpec): void {
     } else {
       ctx.fillStyle = d.color;
       ctx.fill();
+    }
+    if (d.label) {
+      ctx.fillStyle = d.color;
+      ctx.font = uiFont(11, 600);
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'bottom';
+      ctx.fillText(d.label, X(d.x) + 5, Y(d.y) - 3);
     }
   }
   ctx.restore();

@@ -13,8 +13,11 @@ import { applyQuery, stopAfterOf } from './app/query.ts';
 import { Overview } from './app/overview.ts';
 import { PlanMode } from './app/planMode.ts';
 import { BiteView } from './app/view.ts';
+import { StandViews } from './app/standViews.ts';
+import { StandTable, stopPhrase } from './app/standTable.ts';
+import type { StandResult } from './mpm/tandem.ts';
 import { attachViewControls } from './app/viewControls.ts';
-import { SteadyForce, drawForceChart, drawHillChart, slabRatio, slabReference, type ForceChartData } from './app/slabOverlay.ts';
+import { SteadyForce, drawForceChart, drawHillChart, slabRatio, slabReference, type ForceChartData, type StandStart } from './app/slabOverlay.ts';
 
 let forceChart: ForceChartData | null = null;
 const steadyForce = new SteadyForce();
@@ -28,6 +31,21 @@ let field: FieldName = (FIELDS.find((f) => f.id === query.get('field'))?.id ?? '
 const stopAfter = stopAfterOf(query);
 
 const view = new BiteView($<HTMLCanvasElement>('bite'));
+// a tandem's stands side by side (one stand: unused)
+const standViews = new StandViews(document.querySelector<HTMLElement>('.bite')!, view, $<HTMLCanvasElement>('bite'));
+/** stands of the run shown, and the finished stands' results */
+let runStands = 1;
+let standResults: StandResult[] = [];
+/** a tandem: when each stand began on the pass's clock [ms] and its condition (its entry thickness) */
+let standStarts: StandStart[] = [];
+const standTable = new StandTable($('stand-results-section'), $('stand-results'));
+/** a stand that begins on the pass's clock at t0 [ms] with entry thickness h0: the run's conditions with that h0,
+ * and the strain of the stands before for the slab method (plane strain from the thickness) */
+const standStart = (t0: number, h0: number): StandStart => {
+  const P = cloneParams(params);
+  P.rolling.h0 = h0;
+  return { t0, P, ep0: (2 / Math.sqrt(3)) * Math.log(params.rolling.h0 / h0) };
+};
 const explorer = new Explorer(
   $('explorer'),
   $('locus'),
@@ -35,7 +53,8 @@ const explorer = new Explorer(
   () => (dirty = true),
 );
 $('bite').addEventListener('click', (e) => explorer.select(view.pick(e.clientX, e.clientY)));
-const history: { t: number[]; F: number[]; T: number[] } = { t: [], F: [], T: [] };
+// t is the whole pass's time (the stands one after the other), stand the stand of each point (0 first)
+const history: { t: number[]; F: number[]; T: number[]; stand: number[] } = { t: [], F: [], T: [], stand: [] };
 let geometry: Geometry | null = null;
 let last: Frame | null = null;
 // mean of the kinetic-energy ratio measured in the steady phase (held after it ends)
@@ -48,11 +67,12 @@ let edited = false;
 let awaitingReady = false; // frames of the run a restart replaced may still be on their way
 buildExport($('export'), {
   history,
+  stands: () => runStands,
   frame: () => last,
   params: () => params,
   presetId: () => presetId,
   preset: () => presetById(presetId)!.build(),
-  bite: $<HTMLCanvasElement>('bite'),
+  bite: () => standViews.image(),
 });
 
 // ── view: zoom, pan, overview ───────────────────────────────────────────────
@@ -170,9 +190,26 @@ function startWorker() {
       if (!geometry || geometry.h0 !== m.geometry.h0 || geometry.contactLength !== m.geometry.contactLength) view.resetView();
       geometry = m.geometry;
       view.geometry = geometry;
+      standViews.setup(runStands, geometry);
       if (query.get('autorun') === '1' && frames === 0 && !plan.active) run();
     } else if (m.type === 'frame') {
       if (!awaitingReady) onFrame(m);
+    } else if (m.type === 'stand') {
+      if (awaitingReady) return;
+      // a stand is over: its slot keeps its last frame, the live view goes on with the next stand
+      standViews.hold(m.stand, m.frame, m.geometry);
+      standResults[m.stand] = m.result;
+      updateStandTable();
+      if (m.next && !m.refresh) {
+        geometry = m.next;
+        view.geometry = m.next;
+        standViews.setCurrent(m.stand + 1);
+        steadyForce.reset(); // the steady force, and the inertia ratio, of the stand on show
+        kineticSum = 0;
+        kineticN = 0;
+      } else if (!m.next && !m.refresh) standViews.finish();
+      view.frame = standViews.liveFrame(last); // the pass is over: the last stand's kept picture
+      dirty = true;
     }
     else if (m.type === 'error') showError(m.message);
   };
@@ -196,6 +233,10 @@ function restart() {
   kineticN = 0;
   history.F.length = 0;
   history.T.length = 0;
+  history.stand.length = 0;
+  runStands = params.rolling.stands ?? 1;
+  standResults = [];
+  standStarts = [];
   steadyForce.reset();
   last = null;
   view.frame = null;
@@ -206,7 +247,7 @@ function restart() {
   explorer.reset();
   view.marks = [];
   awaitingReady = true;
-  send({ type: 'init', params: cloneParams(params), field, stopAfter });
+  send({ type: 'init', params: cloneParams(params), stands: runStands, field, stopAfter });
   updateButtons();
 }
 
@@ -231,7 +272,7 @@ $('reset').addEventListener('click', () => {
 
 function updateButtons() {
   if (plan.active) return plan.updateButtons();
-  const done = last?.diag.phase === 'done' || last?.diag.phase === 'stalled';
+  const done = !!last?.passDone;
   ($('run') as HTMLButtonElement).disabled = running || done;
   ($('pause') as HTMLButtonElement).disabled = !running;
   $('run').textContent = frames > 1 && !done ? '続ける' : '圧延を始める';
@@ -240,12 +281,15 @@ function updateButtons() {
 // ── frames ──────────────────────────────────────────────────────────────────
 function onFrame(f: Frame) {
   last = f;
+  if (runStands > 1 && geometry && standStarts.length <= f.stand) standStarts.push(standStart(f.tOffset * 1e3, geometry.h0));
   frames++;
   running = f.running;
-  view.frame = f;
+  view.frame = standViews.liveFrame(f);
   const d = f.diag;
-  if (d.step > 0 && (history.t.length === 0 || d.t * 1e3 > history.t[history.t.length - 1])) {
-    history.t.push(d.t * 1e3);
+  const tPass = (f.tOffset + d.t) * 1e3;
+  if (d.step > 0 && (history.t.length === 0 || tPass > history.t[history.t.length - 1])) {
+    history.t.push(tPass);
+    history.stand.push(f.stand);
     history.F.push(d.rollForce * 1e-6);
     history.T.push(d.rollTorque * 1e-3);
     steadyForce.add(d);
@@ -257,6 +301,7 @@ function onFrame(f: Frame) {
   dirty = true;
   updateButtons();
   updateResults(d, f);
+  updateStandTable();
   updateCracks(f.cracks);
   explorer.update(f, params);
   view.marks = explorer.marks();
@@ -303,14 +348,23 @@ function updateResults(d: Diagnostics, f: Frame) {
     }),
   );
   showClock();
-  $('phase').textContent = phaseText[d.phase];
+  // a tandem that stopped before its last stand says why here too
+  $('phase').textContent = f.stopped ? stopPhrase(f.stopped, f.results.length) : phaseText[d.phase];
+}
+
+/** a tandem: the stands' table (one stand: hidden) */
+function updateStandTable() {
+  standTable.update(runStands, standResults, last?.stand ?? 0, !!last?.passDone, geometry?.h0 ?? null, last?.stopped ?? null);
 }
 
 /** the shared clock, from the section model's last frame, while the section view is shown */
 function showClock() {
   if (plan.active) return;
   const d = last?.diag;
-  $('clock').textContent = `t = ${((d?.t ?? 0) * 1e3).toFixed(2)} ms　${(d?.step ?? 0).toLocaleString()} step`;
+  const t = (last?.tOffset ?? 0) + (d?.t ?? 0);
+  const step = (last?.stepOffset ?? 0) + (d?.step ?? 0);
+  const stand = runStands > 1 ? `　スタンド ${(last?.stand ?? 0) + 1} / ${runStands}` : '';
+  $('clock').textContent = `t = ${(t * 1e3).toFixed(2)} ms　${step.toLocaleString()} step${stand}`;
 }
 
 let crackSeen = 0;
@@ -337,8 +391,11 @@ function updateCracks(cracks: CrackView[]) {
     const name = document.createElement('span');
     name.className = 'sr-only';
     name.textContent = `亀裂 ${c.id + 1}：`;
-    const where = Math.abs(c.sheetY) < 0.15 * params.rolling.h0 ? '板厚中心' : c.sheetY > 0 ? '上面側' : '下面側';
-    body.innerHTML = `<strong>${(c.t * 1e3).toFixed(2)} ms　${where}</strong>
+    // sheetY is measured in the entry sheet of the stand it started in
+    const h0 = standResults[c.stand]?.h0 ?? (runStands > 1 && geometry ? geometry.h0 : params.rolling.h0);
+    const where = Math.abs(c.sheetY) < 0.15 * h0 ? '板厚中心' : c.sheetY > 0 ? '上面側' : '下面側';
+    const stand = runStands > 1 ? `#${c.stand + 1}　` : '';
+    body.innerHTML = `<strong>${stand}${(c.tPass * 1e3).toFixed(2)} ms　${where}</strong>
       <span>先端から ${(c.sheetX * 1e3).toFixed(2)} mm、中心から ${(c.sheetY * 1e3).toFixed(3)} mm の点</span>
       <span>η ${c.eta.toFixed(2)}　σ1 ${(c.s1 * 1e-6).toFixed(0)} MPa　εp ${c.ep.toFixed(3)}</span>`;
     body.prepend(name);
@@ -376,8 +433,10 @@ function drawLegend() {
 function drawCharts() {
   const g = geometry;
   if (!g) return;
-  forceChart = drawForceChart($<HTMLCanvasElement>('chart-force'), $('legend-force'), history.t, history.F, params, steadyForce.mean);
-  drawHillChart($<HTMLCanvasElement>('chart-hill'), $('legend-hill'), last?.profile, g.contactLength, last?.diag, params);
+  // a tandem: each stand's slab level and mark; the friction hill of the stand on show
+  const shown = standStarts[last?.stand ?? 0];
+  forceChart = drawForceChart($<HTMLCanvasElement>('chart-force'), $('legend-force'), history.t, history.F, params, steadyForce.mean, runStands > 1 ? standStarts : undefined);
+  drawHillChart($<HTMLCanvasElement>('chart-hill'), $('legend-hill'), last?.profile, g.contactLength, last?.diag, shown?.P ?? params, shown?.ep0);
   explorer.draw();
 }
 
@@ -385,7 +444,9 @@ function frameLoop() {
   try {
     if (dirty) {
       dirty = false;
+      standViews.prepare();
       view.draw();
+      standViews.draw();
       overview.draw();
       drawLegend();
       drawCharts();
@@ -397,6 +458,7 @@ function frameLoop() {
 
 const ro = new ResizeObserver(() => {
   view.resize();
+  standViews.resize();
   dirty = true;
 });
 ro.observe($('bite'));
@@ -422,7 +484,7 @@ window.__mpm = {
     return geometry !== null;
   },
   get done() {
-    return last?.diag.phase === 'done' || last?.diag.phase === 'stalled' || (stopAfter !== null && (last?.diag.step ?? 0) >= stopAfter && !running);
+    return !!last?.passDone || (stopAfter !== null && (last?.stepOffset ?? 0) + (last?.diag.step ?? 0) >= stopAfter && !running);
   },
   get diag() {
     return last?.diag ?? null;
@@ -436,9 +498,10 @@ window.__mpm = {
   get params() {
     return cloneParams(params);
   },
-  /** the slab method for the running condition, as drawn over the charts; Δ, and MPM / slab over the steady phase (null before it) */
+  /** the slab method for the running condition (a tandem: the stand on show), as drawn over the charts; Δ, and MPM / slab over the steady phase (null before it) */
   get slab() {
-    const s = slabReference(params);
+    const shown = standStarts[last?.stand ?? 0];
+    const s = slabReference(shown?.P ?? params, shown?.ep0);
     return {
       force: s.force,
       torque: s.torque,
@@ -459,6 +522,24 @@ window.__mpm = {
   },
   get explorer() {
     return { role: explorer.shownRole, id: explorer.shown?.id ?? null };
+  },
+  /** the tandem: the stand on show (0 first), the stands of the run, the finished stands' results */
+  get stand() {
+    return last?.stand ?? 0;
+  },
+  get stands() {
+    return runStands;
+  },
+  get standResults() {
+    return standResults.map((r) => ({ ...r }));
+  },
+  /** why the tandem stopped before its last stand ('stalled' | 'separated' | 'lost'), null otherwise */
+  get stopped() {
+    return last?.stopped ?? null;
+  },
+  /** the pictures side by side: each slot's stand, the field and step of the frame it holds (null: none yet), live or held */
+  get standFrames() {
+    return standViews.hook();
   },
   /** the points the stress explorer follows, with their paths (flat η, εp, D) */
   get tracks() {

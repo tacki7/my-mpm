@@ -3,7 +3,7 @@
 // for conditions changed everywhere; and a `cond` that is not ours changes nothing it
 // should not (unknown keys, wrong types, prototype keys, broken base64, no bite).
 // @check
-import { ok, done } from './lib.mjs';
+import { ok, near, done } from './lib.mjs';
 import { MAX_POINTS, applyQuery, conditionsQuery, points } from '../../src/app/query.ts';
 import { PRESETS } from '../../src/mpm/presets.ts';
 import { cloneParams, STEEL_4340 } from '../../src/mpm/params.ts';
@@ -78,6 +78,21 @@ const tooMany = applyQuery(base, new URLSearchParams({ cells: '80', L: '500', h0
 ok(same(tooMany.rolling, base.rolling) && same(tooMany.numerics, base.numerics), `a run with more than ${MAX_POINTS} points from the URL falls back to the preset's size`);
 const fine = applyQuery(base, new URLSearchParams({ cells: '80' }));
 ok(fine.numerics.cellsThrough === 80, 'the largest the URL keys allow at the default length still runs', `${points(fine)} points`);
+// a tandem: each stand has 1/(1 − r)² times the points of the one before, and the cap counts them all
+{
+  const one = applyQuery(base, new URLSearchParams({ cells: '12' }));
+  const three = applyQuery(base, new URLSearchParams({ cells: '12', stands: '3' }));
+  const q = 1 / (1 - base.rolling.reduction) ** 2;
+  near(points(three), points(one) * (1 + q + q * q), 1e-12, 'the points of 3 stands: 1 + 1/(1 − r)² + 1/(1 − r)⁴ times one stand\'s');
+  const wide = applyQuery(base, new URLSearchParams({ stands: '5', cells: '40' }));
+  ok(wide.rolling.stands === 5 && wide.numerics.cellsThrough === base.numerics.cellsThrough && points(wide) <= MAX_POINTS,
+    `5 stands at 40 cells (${(points({ ...wide, numerics: { ...wide.numerics, cellsThrough: 40 } }) / 1e6).toFixed(1)} M points): the stands stay, the grid goes back to the preset's`,
+    `${wide.rolling.stands} stands, ${wide.numerics.cellsThrough} cells, ${points(wide).toFixed(0)} points`);
+  const steep = applyQuery(base, new URLSearchParams({ stands: '5', r: '60', cells: '40' }));
+  ok((steep.rolling.stands ?? 1) === 1 && steep.rolling.reduction === 0.6 && steep.numerics.cellsThrough === base.numerics.cellsThrough && points(steep) <= MAX_POINTS,
+    '5 stands at r 60 % are too many points even on the preset\'s grid: back to one stand, the reduction kept',
+    `${steep.rolling.stands} stand, r ${steep.rolling.reduction}, ${points(steep).toFixed(0)} points`);
+}
 const noBite = applyQuery(base, new URLSearchParams({ cond: enc({ rolling: { h0: 0.05, reduction: 0.7, rollRadius: 0.005 } }) }));
 ok(same(noBite.rolling, cloneParams(base).rolling), 'h0, r and R that cannot bite are ignored together, as with the readable keys');
 done();

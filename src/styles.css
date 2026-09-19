@@ -335,6 +335,11 @@ button.pending {
   display: block;
 }
 
+/* a tandem hides the running stand's own canvas under the live one: display above would keep it on top of #bite */
+.bite canvas[hidden] {
+  display: none;
+}
+
 .legend {
   position: absolute;
   left: 18px;
@@ -544,6 +549,55 @@ button.pending {
 
 .cracks {
   margin-top: 22px;
+}
+
+/* a tandem: one column per stand, in the stand's colour */
+.stand-results {
+  margin-top: 22px;
+}
+
+.stand-results thead th {
+  text-align: right;
+  font-weight: 600;
+  padding-left: 6px;
+}
+
+/* five stands in the record column: nothing wraps, the numbers are small; the table alone scrolls if it must */
+.stand-results .table-scroll {
+  overflow-x: auto;
+}
+
+.stand-results th,
+.stand-results td {
+  white-space: nowrap;
+}
+
+/* a quantity: its name on a line of its own (no rule under it), its values on the next */
+.stand-results tr.name th {
+  text-align: left;
+  padding: 6px 0 0;
+  border-bottom: 0;
+}
+
+.stand-results tr.name .unit {
+  margin-left: 2px;
+  font-size: var(--fs-xs);
+  color: var(--ink-soft);
+}
+
+.stand-results tr.values td {
+  font-size: var(--fs-xs);
+  padding: 1px 0 4px 6px;
+}
+
+.stand-results thead th.current {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.stand-results caption {
+  caption-side: bottom;
+  text-align: left;
 }
 
 .cracks ol {
@@ -894,6 +948,38 @@ details.group > summary {
   color: var(--ink-soft);
 }
 
+/* ── tandem: the stands side by side in the roll-bite area ────────────── */
+.stand-row {
+  position: absolute;
+  inset: 0;
+  display: flex;
+}
+
+.stand-slot {
+  position: relative;
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+.stand-slot + .stand-slot {
+  border-left: 1px solid var(--rule);
+}
+
+.stand-label {
+  position: absolute;
+  /* under the view tools, clear of the legend and the overview at the bottom */
+  left: 10px;
+  top: 46px;
+  font-size: var(--fs-s);
+  color: var(--ink-soft);
+  pointer-events: none;
+}
+
+.stand-slot.current .stand-label {
+  color: var(--ink);
+  font-weight: 700;
+}
+
 /* ── section / plan view ──────────────────────────────────────────────── */
 body:not([data-view='plan']) .plan-only,
 body[data-view='plan'] .section-only {
@@ -998,6 +1084,20 @@ body[data-view='plan'] .section-only {
   .stage,
   .plan-stage {
     order: 1;
+  }
+  /* the stands one above the other on a phone, each about as tall as a phone's picture is wide */
+  .stand-row {
+    flex-direction: column;
+  }
+  .stand-slot + .stand-slot {
+    border-left: 0;
+    border-top: 1px solid var(--rule);
+  }
+  .stand-slot + .stand-slot .stand-label {
+    top: 10px;
+  }
+  .bite.tandem {
+    min-height: calc(var(--stands) * 240px + 60px);
   }
   .record {
     order: 2;
