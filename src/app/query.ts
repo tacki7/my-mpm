@@ -16,7 +16,7 @@ import {
   type SimParams,
   type YieldModel,
 } from '../mpm/params.ts';
-import { MAX_STANDS } from './tandemStub.ts';
+import { MAX_STANDS } from '../mpm/tandem.ts';
 
 /** Accepted ranges in display units; the conditions panel uses the same ones. */
 export const LIMITS: Record<string, [number, number]> = {

@@ -913,8 +913,9 @@ details.group > summary {
 
 .stand-label {
   position: absolute;
-  right: 8px;
-  bottom: 8px;
+  /* under the view tools, clear of the legend and the overview at the bottom */
+  left: 10px;
+  top: 46px;
   font-size: var(--fs-s);
   color: var(--ink-soft);
   pointer-events: none;
