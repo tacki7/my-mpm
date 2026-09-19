@@ -7,7 +7,8 @@
 // pixels under its box, and text drawn on the plan view's canvas against the pixels around it — in the section
 // view, a tandem of five stands and the plan view, Enter on the roll bite chooses the point in the middle of the
 // view, the handles take the mouse 12 px wide while drawn 1 px, the view tools stay clear of the status line and
-// are 24 px tall at 700 and 400 px, and a crack's stamp does not move when the viewer asks for less motion.
+// are 24 px tall at 700 and 400 px, the preset's note opens by a real button, and a crack's stamp does not move
+// when the viewer asks for less motion.
 // Not a `@check` (it needs the dev server and Chrome). About 20 s.
 //
 //   CDP_PORT=<cdp> node tools/browser/a11y.mjs <url> [shot-prefix]
@@ -16,6 +17,7 @@
 import { connect } from './cdp.mjs';
 import { ok, done } from '../checks/lib.mjs';
 import { DAMAGE_4340 } from '../../src/mpm/params.ts';
+import { FILL_TEXT_HOOK, TEXT_CONTRAST } from './canvas-text.mjs';
 
 const [target, prefix] = process.argv.slice(2);
 if (!target || !process.env.CDP_PORT) {
@@ -83,23 +85,11 @@ const LIB = `window.__a11y = (() => {
       return { what: label(e), r: worst, need: need(s) };
     }).filter((x) => Number.isFinite(x.r));
   };
-  // text drawn on a canvas (recorded by the fillText hook below, for the last draw): in its box, the most frequent
-  // colour is the ground and the pixel furthest from it the ink; seen = the pixels near the colour it was drawn in
-  // over that ground (none: something was drawn over the words)
+  // text drawn on a canvas (recorded by the fillText hook, for the last draw): canvas-text.mjs
   const canvasText = (id) => (window.__texts || []).filter((t) => t.canvas === id).map((t) => {
     const cv = document.getElementById(id);
-    const x0 = Math.max(0, Math.floor(t.box[0])), y0 = Math.max(0, Math.floor(t.box[1]));
-    const x1 = Math.min(cv.width, Math.ceil(t.box[2])), y1 = Math.min(cv.height, Math.ceil(t.box[3]));
-    if (x1 - x0 < 1 || y1 - y0 < 1) return { text: t.text, r: 0, seen: 0 };
-    const d = cv.getContext('2d').getImageData(x0, y0, x1 - x0, y1 - y0).data;
-    const under = backdrop(cv.parentElement);
-    const px = []; const count = new Map();
-    for (let i = 0; i < d.length; i += 4) { const p = over([d[i], d[i + 1], d[i + 2], d[i + 3] / 255], under).map(Math.round); px.push(p); const k = p.join(); count.set(k, (count.get(k) || 0) + 1); }
-    const ground = [...count.entries()].sort((a, b) => b[1] - a[1])[0][0].split(',').map(Number);
-    let r = 1; for (const p of px) r = Math.max(r, ratio(p, ground));
-    const drawn = over(parse(t.fill), ground);
-    const seen = px.filter((p) => Math.hypot(p[0] - drawn[0], p[1] - drawn[1], p[2] - drawn[2]) < 24).length;
-    return { text: t.text, r, seen };
+    const d = cv.getContext('2d').getImageData(0, 0, cv.width, cv.height).data;
+    return { text: t.text, ...window.__textContrast(d, cv.width, cv.height, t.box, t.fill, backdrop(cv.parentElement)) };
   });
   return { parse, ratio, backdrop, lowText, overPicture, canvasText };
 })(); true`;
@@ -111,26 +101,13 @@ try {
   c = await connect(process.env.CDP_PORT);
   await c.setViewport(1600, 1000);
   await c.send('Accessibility.enable');
-  // every fillText on a 2D canvas, with its box in the canvas's pixels (so that text drawn on a canvas can be measured)
-  await c.send('Page.addScriptToEvaluateOnNewDocument', {
-    source: `(() => {
-      const fill = CanvasRenderingContext2D.prototype.fillText;
-      window.__texts = [];
-      CanvasRenderingContext2D.prototype.fillText = function (text, x, y, maxWidth) {
-        const m = this.measureText(text);
-        const t = this.getTransform();
-        const xs = [x - m.actualBoundingBoxLeft, x + m.actualBoundingBoxRight], ys = [y - m.actualBoundingBoxAscent, y + m.actualBoundingBoxDescent];
-        const pts = xs.flatMap((a) => ys.map((b) => t.transformPoint(new DOMPoint(a, b))));
-        const box = [Math.min(...pts.map((p) => p.x)), Math.min(...pts.map((p) => p.y)), Math.max(...pts.map((p) => p.x)), Math.max(...pts.map((p) => p.y))];
-        if (this.canvas.id) window.__texts.push({ canvas: this.canvas.id, text: String(text), box, fill: String(this.fillStyle) });
-        return maxWidth === undefined ? fill.call(this, text, x, y) : fill.call(this, text, x, y, maxWidth);
-      };
-    })()`,
-  });
+  // every fillText on a 2D canvas, with its box (so that text drawn on a canvas can be measured): canvas-text.mjs
+  await c.send('Page.addScriptToEvaluateOnNewDocument', { source: FILL_TEXT_HOOK });
   const painted = () => c.evaluate('new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => r(true))))');
   const open = async (q, wait) => {
     await c.navigate(page(q));
     await c.evaluate(LIB);
+    await c.evaluate(TEXT_CONTRAST);
     if (wait) await c.waitFor(wait, 180000);
     await painted();
   };
@@ -422,6 +399,33 @@ try {
     if (prefix) console.log(`shot  ${await c.screenshot(`${prefix}-${w}.png`)}`);
   }
   await c.setViewport(1600, 1000);
+
+  // ── the preset's note: a paragraph, and a real button (aria-expanded, aria-controls) that opens and folds it, by
+  //    the keyboard and by a click; a note short enough for its three lines has no button
+  const note = () =>
+    c.evaluate(`(() => {
+      const p = document.getElementById('preset-note'), b = document.querySelector('button[aria-controls="preset-note"]');
+      return { role: p.getAttribute('role'), tab: p.tabIndex, clamped: p.scrollHeight > p.clientHeight + 1,
+        button: b ? { name: b.textContent.trim(), expanded: b.getAttribute('aria-expanded'), shown: b.checkVisibility() } : null };
+    })()`);
+  await open('?preset=central-burst&cells=4&L=4', 'window.__mpm?.ready');
+  const n0 = await note();
+  const moves = [];
+  if (n0.button?.shown) {
+    await tabOnto('button[aria-controls="preset-note"]');
+    for (const [how, act] of [['Enter', () => key('Enter')], ['Space', () => key(' ')], ['click', () => c.evaluate(`document.querySelector('button[aria-controls="preset-note"]').click()`)]]) {
+      await act();
+      const n = await note();
+      moves.push(`${how}: ${n.button.expanded} ${n.clamped ? 'folded' : 'open'} 「${n.button.name}」`);
+    }
+  }
+  ok(n0.role === null && n0.tab < 0 && n0.clamped && n0.button?.shown && n0.button.expanded === 'false' && n0.button.name.length <= 6,
+    "the preset's note is a paragraph, with a button of a short name (aria-controls) to read on", JSON.stringify(n0));
+  ok(moves.length === 3 && moves[0].startsWith('Enter: true open') && moves[1].startsWith('Space: false folded') && moves[2].startsWith('click: true open') && !moves[0].endsWith('「' + n0.button?.name + '」'),
+    'Enter, Space and a click open and fold the note, aria-expanded and the words following', moves.join(', '));
+  await open('?cells=4&L=4', 'window.__mpm?.ready');
+  const n1 = await note();
+  ok(!n1.clamped && !n1.button?.shown, 'a note that fits its three lines has no button', JSON.stringify(n1));
 
   // ── less motion: a crack's stamp is pressed without moving (and with motion it does move, so the check can fail)
   // a weak spot at the mid-plane with 4340's damage cracks early (tools/browser/tandem.mjs)
