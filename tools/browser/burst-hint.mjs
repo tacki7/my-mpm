@@ -1,5 +1,6 @@
 // The central-burst hint on the page, in a headless Chrome (src/app/burstHint.ts): the condition's Δ against the
-// map of docs/validation.md「中心割れの地図」 says "compression", "near the turn" or "tension", for 4340 and SPCC,
+// map of docs/validation.md「中心割れの地図」 says "compression", "near the turn" or "tension", for 4340 and SPCC
+// (the band of the grids measured, 8 to 20 cells: 2.1–2.9 and 2.2–3.7),
 // and changes with h0 in the URL; the mid-plane η it shows once the pass is steady is the map's measure
 // (src/mpm/midplane.ts) run in node on the same condition; a tandem uses the stand on show's entry thickness.
 // Not a `@check` (it needs the dev server and Chrome). About 30 s.
@@ -33,10 +34,15 @@ try {
   // ── the three kinds, before any run (the hint is the condition's)
   const cases = [
     ['cells=6&L=8', 'compressive', '板厚中心は圧縮', 'the standard thin sheet (Δ 0.18): compression'],
-    ['preset=central-burst&h0=2', 'compressive', '板厚中心は圧縮', 'the central-burst preset at h0 2 mm (Δ 1.6, 4340 below 2.2): compression'],
-    ['preset=central-burst&h0=4.93', 'near', '境目の近く', 'at h0 4.93 mm (Δ 2.5, within 4340\'s 2.2–2.9): near the turn'],
+    ['preset=central-burst&h0=2', 'compressive', '板厚中心は圧縮', 'the central-burst preset at h0 2 mm (Δ 1.6, 4340 below 2.1): compression'],
+    // the band's low ends: 2.1 for 4340 and 3.7 (the high end) for SPCC, over the grids of 8 to 20 cells (T65).
+    // These two Δ sit between the old band (8 to 16 cells: 2.2–2.9 and 2.6–4.0) and this one, so a band from
+    // another set of grids reads them differently
+    ['preset=central-burst&h0=3.6', 'near', '境目の近く', "at h0 3.6 mm (Δ 2.14, inside 4340's 2.1 but not 2.2): near the turn"],
+    ['preset=central-burst&h0=4.93', 'near', '境目の近く', "at h0 4.93 mm (Δ 2.5, within 4340's 2.1–2.9): near the turn"],
     ['preset=central-burst', 'tensile', '中心割れが出やすい', 'the central-burst preset (Δ 3.58, 4340): tension'],
-    ['preset=central-burst&mat=spcc', 'near', '境目の近く', 'the same shape in SPCC (Δ 3.58, within SPCC\'s 2.6–4.0): near the turn'],
+    ['preset=central-burst&mat=spcc', 'near', '境目の近く', "the same shape in SPCC (Δ 3.58, within SPCC's 2.2–3.7): near the turn"],
+    ['preset=central-burst&mat=spcc&h0=12', 'tensile', '中心割れが出やすい', "SPCC at h0 12 mm (Δ 3.92, past SPCC's 3.7 but not 4.0): tension"],
     ['preset=central-burst&mat=spcc&h0=16', 'tensile', '中心割れが出やすい', 'SPCC at h0 16 mm (Δ 4.53): tension'],
   ];
   for (const [q, kind, words, what] of cases) {
