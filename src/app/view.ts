@@ -7,6 +7,7 @@ import { css, lattice, split, temper, type Rgb } from './colormap.ts';
 import { fieldInfo } from './fields.ts';
 import { uiFont } from './font.ts';
 import type { Frame, Geometry } from './protocol.ts';
+import { windowCentre, windowWidth } from './biteWindow.ts';
 
 const BINS = 48;
 const PAD = 1; // px added around each point's cell so that neighbours overlap
@@ -97,13 +98,12 @@ export class BiteView {
 
   /** width of the default window [m] */
   private baseWidth(): number {
-    const g = this.scaleFrom ?? this.geometry!;
-    return Math.max(3.4 * g.contactLength, 16 * g.h0);
+    return windowWidth(this.scaleFrom ?? this.geometry!);
   }
 
   /** world x at the centre of the default window: the bite sits a little left of it, the exit side shows more */
   private homeX(): number {
-    return -this.geometry!.contactLength / 2 + this.baseWidth() * 0.08;
+    return windowCentre(this.geometry!.contactLength, this.baseWidth());
   }
 
   /** world → screen transform for the current geometry, zoom, pan and exaggeration */
