@@ -335,6 +335,11 @@ button.pending {
   display: block;
 }
 
+/* a tandem hides the running stand's own canvas under the live one: display above would keep it on top of #bite */
+.bite canvas[hidden] {
+  display: none;
+}
+
 .legend {
   position: absolute;
   left: 18px;
@@ -554,7 +559,28 @@ button.pending {
 .stand-results thead th {
   text-align: right;
   font-weight: 600;
-  padding-left: 8px;
+  padding-left: 6px;
+}
+
+/* five stands in the record column: nothing wraps, the numbers are small; the table alone scrolls if it must */
+.stand-results .table-scroll {
+  overflow-x: auto;
+}
+
+.stand-results th,
+.stand-results td {
+  white-space: nowrap;
+}
+
+.stand-results tbody td {
+  font-size: var(--fs-xs);
+  padding-left: 6px;
+}
+
+.stand-results tbody th .unit {
+  margin-left: 2px;
+  font-size: var(--fs-xs);
+  color: var(--ink-soft);
 }
 
 .stand-results thead th.current {

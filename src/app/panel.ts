@@ -18,6 +18,8 @@ interface NumField {
   set(p: SimParams, v: number): void;
   /** short explanation shown under the label */
   hint?: string;
+  /** the section model's only (hidden in the plan view, which does not use it) */
+  sectionOnly?: boolean;
 }
 
 interface Group {
@@ -47,7 +49,8 @@ const RAW: Group[] = [
         max: 5,
         get: (p) => p.rolling.stands ?? 1,
         set: (p, v) => (p.rolling.stands = Math.round(v)),
-        hint: 'タンデム。どのスタンドも同じ条件で、圧下率はそのスタンドの入側板厚に対して。後のスタンドほど板が長く、計算は 1 台ごとに 2〜3 倍（5 スタンドで 1 スタンドの約 50 倍）',
+        hint: 'タンデム（圧下率は各スタンドの入側板厚に対して）。後のスタンドほど重く、r 25 % の 5 スタンドで 1 スタンドの約 60 倍（r が大きいほど増える）',
+        sectionOnly: true,
       },
     ],
   },
@@ -183,7 +186,7 @@ export function buildPanel(root: HTMLElement, onEdit: () => void): Panel {
     }
     if (g.title === '空孔（GTN）') fs.append(nucleation);
     for (const f of g.fields) {
-      const row = el('label', 'field');
+      const row = el('label', f.sectionOnly ? 'field section-only' : 'field');
       const head = el('span', 'field-label', f.label);
       row.append(head);
       const box = el('span', 'field-input');

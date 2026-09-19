@@ -203,7 +203,6 @@ const STEEL = '#8a949c';
 const BLUE = '#1f3f7a';
 const COPPER = '#9c4a1c';
 
-/** what the force chart last drew (the headless checks read it) */
 /** a tandem's stand on the force chart: when it began on the pass's clock [ms], its condition (its entry thickness), and the strain its strip brings in */
 export interface StandStart {
   t0: number;
@@ -211,6 +210,7 @@ export interface StandStart {
   ep0: number;
 }
 
+/** what the force chart last drew (the headless checks read it) */
 export interface ForceChartData {
   t: number[];
   raw: number[];
@@ -269,7 +269,8 @@ export function drawForceChart(
     xLabel: '時間 [ms]',
     yLabel: '荷重 [kN/mm]',
     series,
-    marks: tandem ? tandem.map((sp, k) => ({ x: sp.t0, label: `#${k + 1}` })) : [],
+    // where each stand after the first begins (the first begins at the chart's left edge)
+    marks: tandem ? tandem.slice(1).map((sp, k) => ({ x: sp.t0, label: `#${k + 2}` })) : [],
   });
   const note = forceNote(slab, steadyForce);
   setLegend(legend, [

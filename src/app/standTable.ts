@@ -1,6 +1,8 @@
 // A tandem's results, one column per stand (the column heads in the stand's colour, the running one
 // underlined): entry and exit thickness, reduction, roll force, forward slip, damage and failed points of
 // each finished stand. The stand running now shows its entry thickness only; the ones to come, dashes.
+// Five stands must fit the record column: the row heads carry their units and do not wrap, the numbers are
+// small (styles.css), and the table alone scrolls sideways if the column is made narrower still.
 // One stand: the section stays hidden and the page is as before.
 import type { StandResult, TandemStop } from '../mpm/tandem.ts';
 import { standColor } from './explorer.ts';
@@ -12,11 +14,16 @@ const ROWS: [string, (r: StandResult) => string, string][] = [
   ['圧延荷重', (r) => (r.steadyForce != null ? (r.steadyForce * 1e-6).toFixed(2) : '—'), 'kN/mm'],
   ['先進率', (r) => (r.forwardSlip != null ? (r.forwardSlip * 100).toFixed(2) : '—'), '%'],
   ['最大損傷', (r) => r.maxDamage.toFixed(3), ''],
-  ['亀裂になった点', (r) => String(r.nFailed), '個'],
+  ['亀裂の点', (r) => String(r.nFailed), '個'],
 ];
 
 /** the share of a stand's mass on points that left the grid */
 const LOST: [string, (r: StandResult) => string, string] = ['失われた質量', (r) => (r.massLost * 100).toFixed(2), '%'];
+
+/** the status line's words for a tandem that stopped at stand k (1 = the first) */
+export function stopPhrase(stopped: TandemStop, k: number): string {
+  return stopped === 'stalled' ? `#${k} で板が止まった（噛み込めない）` : `#${k} の後で止めた（${stopped === 'separated' ? '板が破断した' : '点が格子の外へ出た'}）`;
+}
 
 /** why the tandem stopped, after stand k (1 = the first) */
 const STOP_TEXT: Record<TandemStop, (k: number, r: StandResult | undefined) => string> = {
@@ -34,6 +41,19 @@ function cell(tag: 'th' | 'td', text: string, cls?: string): HTMLElement {
   e.textContent = text;
   if (cls) e.className = cls;
   return e;
+}
+
+/** a row head with its unit after it, small */
+function rowHead(name: string, unit: string): HTMLElement {
+  const th = cell('th', name);
+  th.setAttribute('scope', 'row');
+  if (unit) {
+    const u = document.createElement('span');
+    u.className = 'unit';
+    u.textContent = unit;
+    th.append(' ', u);
+  }
+  return th;
 }
 
 export class StandTable {
@@ -59,21 +79,20 @@ export class StandTable {
     for (let k = 0; k < stands; k++) {
       const th = cell('th', `#${k + 1}`, k === current && !passDone ? 'current' : undefined);
       th.style.color = standColor(k);
+      th.setAttribute('scope', 'col');
       head.append(th);
     }
-    head.append(cell('th', ''));
     // points that left the grid: only when a stand lost any
     const rows = results.some((r) => r.massLost > 0) ? [...ROWS, LOST] : ROWS;
     const body = rows.map(([name, value, unit], i) => {
       const tr = document.createElement('tr');
-      tr.append(cell('th', name));
+      tr.append(rowHead(name, unit));
       for (let k = 0; k < stands; k++) {
         const r = results[k];
         // the stand running now: only its entry thickness is known yet
         const now = k !== current ? '—' : i === 0 && h0Now != null ? mm(h0Now) : '…';
         tr.append(cell('td', r ? value(r) : now));
       }
-      tr.append(cell('td', unit, 'unit'));
       return tr;
     });
     const thead = document.createElement('thead');

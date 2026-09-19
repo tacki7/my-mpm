@@ -14,7 +14,7 @@ import { Overview } from './app/overview.ts';
 import { PlanMode } from './app/planMode.ts';
 import { BiteView } from './app/view.ts';
 import { StandViews } from './app/standViews.ts';
-import { StandTable } from './app/standTable.ts';
+import { StandTable, stopPhrase } from './app/standTable.ts';
 import type { StandResult } from './mpm/tandem.ts';
 import { attachViewControls } from './app/viewControls.ts';
 import { SteadyForce, drawForceChart, drawHillChart, slabRatio, slabReference, type ForceChartData, type StandStart } from './app/slabOverlay.ts';
@@ -204,7 +204,9 @@ function startWorker() {
         geometry = m.next;
         view.geometry = m.next;
         standViews.setCurrent(m.stand + 1);
-        steadyForce.reset(); // the steady force of the stand on show
+        steadyForce.reset(); // the steady force, and the inertia ratio, of the stand on show
+        kineticSum = 0;
+        kineticN = 0;
       } else if (!m.next && !m.refresh) standViews.finish();
       view.frame = standViews.liveFrame(last); // the pass is over: the last stand's kept picture
       dirty = true;
@@ -346,7 +348,8 @@ function updateResults(d: Diagnostics, f: Frame) {
     }),
   );
   showClock();
-  $('phase').textContent = phaseText[d.phase];
+  // a tandem that stopped before its last stand says why here too
+  $('phase').textContent = f.stopped ? stopPhrase(f.stopped, f.results.length) : phaseText[d.phase];
 }
 
 /** a tandem: the stands' table (one stand: hidden) */

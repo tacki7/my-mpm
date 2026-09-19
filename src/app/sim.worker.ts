@@ -189,6 +189,9 @@ const passStep = () => tandem!.stepOffset + sim!.step;
 
 /** one stand is past: send its picture (the last state if none was taken), and follow the points into the next stand */
 function onStandDone(e: StandDone): void {
+  // one stand: nothing to hold or hand on (the page is as before; whether its reading falls inside a run of the
+  // loop or not must not change what the page shows)
+  if (tandem!.stands === 1) return;
   tracker?.record();
   const pic = pictures[e.stand] ?? snapshot(e.sim, tracker);
   pictures[e.stand] = pic;

@@ -5,7 +5,7 @@
 // redraw the finished ones too; the stress explorer's loading path runs through the three stands (numbered, a
 // colour each, in the legend); the force chart has a slab level per stand; the table has a column per
 // stand; the CSV files are downloaded with a stand column on the whole pass's clock, and the PNG holds
-// the three pictures; moving a boundary between the panes resizes the slots with the roll bite; a narrow
+// the three pictures; real mouse events on the running stand's slot zoom, reset and pick a point; moving a boundary between the panes resizes the slots with the roll bite; a narrow
 // screen (700 px) stacks the pictures without a sideways scroll; a strip broken through the thickness
 // stops the tandem with the reason in the table; and back
 // to one stand, the page is as before (no slots, no table). Not a `@check` (it needs the dev server and
@@ -46,6 +46,27 @@ const page = (q) => {
 };
 const STANDS = 3;
 const COND = ['--cells', '6', '--L', '8'];
+
+/** real mouse events on the running stand's slot (also run on a short tandem by hand to calibrate) */
+async function mouseChecks(c) {
+  const centre = await c.evaluate(`(() => { const b = document.getElementById('bite').getBoundingClientRect(); return { x: b.x + b.width / 2, y: b.y + b.height / 2, w: b.width, h: b.height }; })()`);
+  const under = await c.evaluate(`document.elementFromPoint(${centre.x}, ${centre.y})?.id || document.elementFromPoint(${centre.x}, ${centre.y})?.className || ''`);
+  ok(under === 'bite', "what is under the running stand's slot is the live canvas #bite", under);
+  const z0 = await c.evaluate('__mpm.view.zoom');
+  await c.send('Input.dispatchMouseEvent', { type: 'mouseWheel', x: centre.x, y: centre.y, deltaX: 0, deltaY: -600 });
+  await c.waitFor(`__mpm.view.zoom > ${z0} * 1.3`, 5000).catch(() => {});
+  const z1 = await c.evaluate('__mpm.view.zoom');
+  ok(z1 > z0 * 1.3, 'a real wheel on the slot zooms', `${z0.toFixed(2)} → ${z1.toFixed(2)}`);
+  for (const type of ['mousePressed', 'mouseReleased']) await c.send('Input.dispatchMouseEvent', { type, x: centre.x, y: centre.y, button: 'left', clickCount: 2 });
+  await c.waitFor('__mpm.view.zoom === 1', 5000).catch(() => {});
+  ok(z1 > z0 * 1.3 && (await c.evaluate('__mpm.view.zoom')) === 1, 'a real double click resets the zoomed view');
+  // an intact point near the slot's centre, clicked where it is drawn
+  const pick = await c.evaluate(`(() => { const b = document.getElementById('bite').getBoundingClientRect(); for (let id = 0; id < 20000; id++) { const s = __mpm.screenOf(id); if (s && Math.abs(s.x - (b.x + b.width / 2)) < b.width / 5 && Math.abs(s.y - (b.y + b.height / 2)) < b.height / 5) return { id, x: s.x, y: s.y }; } return null; })()`);
+  if (pick) for (const type of ['mousePressed', 'mouseReleased']) await c.send('Input.dispatchMouseEvent', { type, x: pick.x, y: pick.y, button: 'left', clickCount: 1 });
+  let shown = !!pick;
+  if (pick) await c.waitFor(`__mpm.explorer.role === 'selected' && __mpm.explorer.id === ${pick.id}`, 5000).catch(() => (shown = false));
+  ok(shown, 'a real click on a point of the slot shows that point in the explorer', pick ? `point ${pick.id}, explorer ${JSON.stringify(await c.evaluate('__mpm.explorer'))}` : 'no point near the centre');
+}
 
 let c;
 try {
@@ -136,6 +157,10 @@ try {
   await c.screenshot(join(dir, 'tandem.png'));
   console.log(`shot  ${join(dir, 'tandem.png')}`);
 
+  // ── the running stand's slot takes the mouse, not the stand's own canvas hidden under the live one (it did,
+  //    while `.bite canvas { display: block }` overrode [hidden]): what is under the slot's centre is #bite, a real
+  //    wheel zooms, a real double click resets, and a real click on a point shows it in the explorer
+  await mouseChecks(c);
   // ── a boundary moved (src/app/splitters.ts): the slots follow the roll bite's new width and are drawn again
   const key = (k) => c.send('Input.dispatchKeyEvent', { type: 'keyDown', key: k, code: k, windowsVirtualKeyCode: { ArrowLeft: 37, ArrowRight: 39 }[k] });
   await c.evaluate("document.querySelector('.split-right').focus()");
