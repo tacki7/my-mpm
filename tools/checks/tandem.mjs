@@ -227,6 +227,20 @@ for (const [name, mod] of [
 // high friction: the rows shear in the bite
 remapCheck('high friction', short(presetById('high-friction').build()));
 
+// ── one stand with a crack: the records are the single pass's (no stand field added)
+{
+  const P = short(defaultParams());
+  P.damage = { ...DAMAGE_4340, etaCutoff: -10 };
+  P.defects = [{ kind: 'weak', x: 2e-3, y: 0, ax: 1.2e-3, ay: 0.13e-3, ductility: 1e-3 }];
+  const a = new Sim(P);
+  const t = new TandemSim(P, 1);
+  while (!t.done) {
+    a.advance();
+    t.advance();
+  }
+  ok(a.cracks.length > 0 && JSON.stringify(t.sim.cracks) === JSON.stringify(a.cracks), 'one stand with cracks: the crack records are the single pass\'s, as they are', `${a.cracks.length} records`);
+}
+
 // ── a crack of the first stand is in the second: a centreline band that fails in compression too
 {
   const P = short(defaultParams());
