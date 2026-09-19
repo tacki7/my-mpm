@@ -809,16 +809,18 @@ export class Sim {
   }
 
   /**
-   * 'surface': a point whose edge is inside a roll must not move further into it. Its velocity
-   * interpolates the constrained nodes on its roll side and free nodes deeper in the sheet, which move
-   * toward the mid-plane more slowly than the roll surface (the flow converges less at depth), so it
-   * would lag behind the surface and sink into the roll. The deficit of its normal velocity, over the
-   * weight it puts on its constrained nodes, is asked of those nodes (mass-weighted mean of the requests
-   * per node) — the constrained nodes then carry the velocity the field has there, not the surface's.
-   * The impulse goes to the roll force, torque and profile like the contact's.
+   * 'surface': the edge of a point that is inside a roll must not move further into it. The point's
+   * velocity interpolates the constrained nodes on its roll side and free nodes deeper in the sheet,
+   * which move toward the mid-plane more slowly than the roll surface (the flow converges less at
+   * depth), so it would lag behind the surface and sink into the roll. Its edge moves along the normal n
+   * (roll centre → point) at (v − u)·n − rp D_nn (the point also gets thinner at the rate D_nn); what it
+   * lacks, over the weight the point puts on its constrained nodes, is asked of those nodes
+   * (mass-weighted mean of the requests per node), which then carry the velocity the field has there
+   * rather than the surface's. The impulse goes to the roll force, torque and profile like the contact's.
    */
   private followRoll(fyAcc: number[], tqAcc: number[]): void {
     const { n, active, touch, px, py, gvx, gvy, gm, gcon, gfolN, gfolD, mass, h, invH, ox, oy, nyN, dt } = this;
+    const k4 = 4 * invH * invH;
     const w = [0, 0, 0, 0, 0, 0, 0, 0, 0];
     const touched: number[] = [];
     for (let p = 0; p < n; p++) {
@@ -844,16 +846,21 @@ export class Sim {
         const uy = roll.omega * roll.R * nx;
         let e = 0;
         let W = 0;
+        let dnn = 0; // n·L·n, L the APIC velocity gradient (4/h²) Σ w v ⊗ (x_i − x_p)
         for (let a = 0; a < 3; a++) {
           for (let c = 0; c < 3; c++) {
             const idx = (bx + a) * nyN + by + c;
             const wi = w[a * 3 + c];
-            e += wi * ((gvx[idx] - ux) * nx + (gvy[idx] - uy) * ny);
+            const vn = (gvx[idx] - ux) * nx + (gvy[idx] - uy) * ny;
+            e += wi * vn;
+            dnn += wi * (gvx[idx] * nx + gvy[idx] * ny) * ((a - fx) * nx + (c - fy) * ny) * h;
             if (gcon[idx] & (1 << k)) W += wi;
           }
         }
-        if (e >= 0 || W <= 0) continue;
-        const want = -e / W;
+        // the edge, half the point's deformed height toward the roll
+        const edge = e - 0.5 * this.dp * Math.hypot(this.f01[p], this.f11[p]) * k4 * dnn;
+        if (edge >= 0 || W <= 0) continue;
+        const want = -edge / W;
         for (let a = 0; a < 3; a++) {
           for (let c = 0; c < 3; c++) {
             const idx = (bx + a) * nyN + by + c;
