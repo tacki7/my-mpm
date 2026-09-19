@@ -42,6 +42,9 @@ npm run build                                 # tsc + vite build
 npm run sim -- --cells 6 --L 8 --every 2000   # 粗い圧延を 1 回（約 6 秒）
 ```
 
+CI（`.github/workflows/check.yml`）が push のたびに `npm ci` → `npm run check` → `npm run build` を回す（ubuntu・Node 24、
+1 回約 1 分: 関門 44 s のうち tension.mjs 25 s・rolling-smoke 12 s、2026-09-19。上限 10 分）。PR にはその枝の push の結果が付く。
+
 node は 22.18 以降（型の除去が既定で有効）。`src/` は**消去できる構文だけ**（enum・namespace・
 コンストラクタ引数のプロパティ禁止。`erasableSyntaxOnly`）で書き、import は `.ts` の拡張子付き。
 チェックを足すときはスクリプトの先頭付近に `// @check` を書くだけ（一覧や package.json は触らない）。
