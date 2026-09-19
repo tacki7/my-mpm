@@ -2,7 +2,7 @@
 //
 //   node tools/run.mjs [--h0 1] [--r 0.25] [--R 100] [--L 16] [--mu 0.08] [--cells 10]
 //                      [--mat spcc|s4340|al6061] [--damage johnson-cook|hancock-mackenzie|cockcroft-latham|gtn|localization|none]
-//                      [--yield von-mises|gtn] [--preset <id>] [--nonlocal <ℓ mm>]
+//                      [--yield von-mises|gtn] [--preset <id>] [--chi 0.9] [--nonlocal <ℓ mm>]
 //                      [--tb 0] [--tf 0] [--every 2000] [--max 400000] [--json]
 //
 // Lengths in mm, tensions in MPa. Prints a line every --every steps and a summary
@@ -35,6 +35,7 @@ const mat = opt('mat', null);
 if (mat) P.material = { ...MATERIALS[mat] };
 P.damage.model = opt('damage', P.damage.model);
 P.damage.yield = opt('yield', P.damage.yield);
+P.material.chi = +opt('chi', P.material.chi); // Taylor-Quinney coefficient: 0 = no heating
 P.damage.nonlocalLength = +opt('nonlocal', P.damage.nonlocalLength * 1e3) * 1e-3; // mm
 P.damage.gtn.nucleation = opt('nucleation', P.damage.gtn.nucleation);
 const every = +opt('every', 2000);
@@ -71,6 +72,7 @@ const summary = {
   maxDamage: d.maxDamage,
   failed: d.nFailed,
   ...porosity(),
+  ...heating(),
   cracks: sim.cracks,
 };
 if (json) console.log(JSON.stringify(summary));
@@ -85,4 +87,23 @@ function porosity() {
     maxPorosity: sim.por[k],
     maxPorosityAt_mm: { fromHead: (sim.xHead0 - sim.x0[k]) * 1e3, fromMidPlane: sim.y0[k] * 1e3 },
   };
+}
+
+// temperature rise of the rolled sheet: mean over its middle (the ends are not steady) and the largest (--chi)
+function heating() {
+  if (!(P.material.chi > 0)) return {};
+  const L = P.rolling.sheetLength;
+  let sum = 0;
+  let n = 0;
+  let max = 0;
+  for (let p = 0; p < sim.n; p++) {
+    if (!sim.active[p]) continue;
+    const dT = sim.temp[p] - P.material.tRoom;
+    if (dT > max) max = dT;
+    const s = sim.xHead0 - sim.x0[p];
+    if (s < 0.15 * L || s > 0.85 * L) continue;
+    sum += dT;
+    n++;
+  }
+  return { dTmean_K: sum / Math.max(1, n), dTmax_K: max };
 }

@@ -20,6 +20,7 @@
 import { biteGeometry, cloneParams, type DamageModel, type SimParams } from './params.ts';
 import { druckerWork, localization } from './bifurcation.ts';
 import {
+  adiabaticRise,
   elasticConstants,
   flowStress,
   gtnReturn,
@@ -110,6 +111,7 @@ export type FieldName =
   | 'dHM'
   | 'dCL'
   | 'porosity'
+  | 'dT'
   | 'loc'
   | 'drucker'
   | 'sxx'
@@ -792,7 +794,9 @@ export class Sim {
           this.ev[p] += r.dEv;
           const f = this.por[p] + r.df;
           this.por[p] = f < 0 ? 0 : f < 1 ? f : 1;
-          this.plasticWork += (r.q * r.dEq + r.sm * r.dEv) * this.vol0[p] * J;
+          const w = r.q * r.dEq + r.sm * r.dEv;
+          this.plasticWork += w * this.vol0[p] * J;
+          if (mat.chi > 0) this.temp[p] += adiabaticRise(mat.chi, w, J, mat.rho, mat.cp);
         }
       } else {
         dep = plasticIncrement(mat, G, q, this.ep[p], epsDot, this.temp[p]);
@@ -805,6 +809,7 @@ export class Sim {
           q -= 3 * G * dep;
           this.ep[p] += dep;
           this.plasticWork += q * dep * this.vol0[p] * J;
+          if (mat.chi > 0) this.temp[p] += adiabaticRise(mat.chi, q * dep, J, mat.rho, mat.cp);
           flowRate = epsDot;
           this.drW[p] = DRUCKER_DECAY * this.drW[p] + druckerWork(sx - rx, sy - ry, sh - rh, sz - sz0, sx, sy, sh, sz, q, dep);
           this.drE[p] = DRUCKER_DECAY * this.drE[p] + dep * dep;
@@ -1246,6 +1251,9 @@ export class Sim {
           break;
         case 'porosity':
           v = this.por[p];
+          break;
+        case 'dT':
+          v = this.temp[p] - this.params.material.tRoom;
           break;
         case 'loc':
           v = localization(this.el, this.hardening(p), this.sxx[p], this.syy[p], this.sxy[p], this.szz[p]).ratio;

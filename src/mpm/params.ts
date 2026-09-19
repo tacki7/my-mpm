@@ -40,6 +40,13 @@ export interface MaterialParams {
   swN: number;
   tRoom: number; // [K]
   tMelt: number; // [K]
+  /** specific heat [J/(kg·K)] */
+  cp: number;
+  /**
+   * Taylor-Quinney coefficient: the share of the plastic work that heats the point (adiabatic,
+   * no conduction; Banerjee 2012 uses 0.9). 0: the temperature stays at tRoom
+   */
+  chi: number;
 }
 
 /**
@@ -159,6 +166,8 @@ export const STEEL_4340: MaterialParams = {
   swN: 0.1,
   tRoom: 294,
   tMelt: 1793,
+  cp: 455, // the paper's Cp(T) of 4340 (Goto et al. 2000) at room temperature
+  chi: 0,
 };
 
 /** Cold-rolling grade low-carbon steel (representative Swift fit). */
@@ -179,6 +188,8 @@ export const STEEL_SPCC: MaterialParams = {
   swN: 0.22,
   tRoom: 294,
   tMelt: 1800,
+  cp: 460,
+  chi: 0,
 };
 
 /** Aluminium 6061-T6 (representative Johnson-Cook constants). */
@@ -199,6 +210,8 @@ export const AL_6061: MaterialParams = {
   swN: 0.08,
   tRoom: 294,
   tMelt: 925,
+  cp: 896,
+  chi: 0,
 };
 
 export const MATERIALS: Record<string, MaterialParams> = {

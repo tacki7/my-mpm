@@ -30,6 +30,8 @@ const CONSTANTS: Constant[] = [
   { key: 'swN', label: 'n（加工硬化の指数）', unit: '', scale: 1, step: 0.01, range: [0, 1], law: 'swift' },
   { key: 'jcC', label: 'C（ひずみ速度の感度）', unit: '', scale: 1, step: 0.001, range: [0, 0.2], hint: 'σy に (1 + C ln ε̇*) を掛ける（どちらの則にも）' },
   { key: 'jcM', label: 'm（温度の指数）', unit: '', scale: 1, step: 0.01, range: [0.1, 5] },
+  { key: 'chi', label: 'χ（塑性仕事が熱になる割合）', unit: '', scale: 1, step: 0.05, range: [0, 1], hint: '0 で発熱なし。論文は 0.9（Taylor-Quinney、断熱）' },
+  { key: 'cp', label: '比熱 cp', unit: 'J/(kg·K)', scale: 1, step: 1, range: [100, 5000] },
 ];
 
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls?: string, text?: string): HTMLElementTagNameMap[K] {

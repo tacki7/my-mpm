@@ -77,6 +77,14 @@ export function plasticIncrement(
   return x;
 }
 
+/**
+ * Adiabatic temperature rise of a point: the share χ of the plastic work per unit reference
+ * volume (w · J, w per current volume) over the heat capacity per reference volume ρ0 cp.
+ */
+export function adiabaticRise(chi: number, work: number, J: number, rho0: number, cp: number): number {
+  return (chi * work * J) / (rho0 * cp);
+}
+
 /** Effective porosity f* of the GTN yield condition: f up to fc, accelerated by k beyond (coalescence). */
 export function gtnFstar(g: GtnParams, f: number): number {
   return f <= g.fc ? f : g.fc + g.k * (f - g.fc);

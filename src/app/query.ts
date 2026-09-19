@@ -142,6 +142,8 @@ const RULES: Record<string, Rule> = {
   'material.swN': r(0, 1),
   'material.tRoom': r(0, 2000),
   'material.tMelt': r(300, 5000),
+  'material.cp': r(100, 5000),
+  'material.chi': r(0, 1),
   'damage.model': { oneOf: DAMAGE },
   'damage.yield': { oneOf: YIELD },
   'damage.failure': { oneOf: ['erode', 'tension-cut'] },
