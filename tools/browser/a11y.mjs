@@ -4,9 +4,11 @@
 // has a name and a focus ring that nothing covers and that stands out from what is around it, the results tables
 // say which cells are headers, the status line is rewritten only when its words change (a screen reader may read
 // every rewrite), text has 4.5:1 (3:1 when large) against what is under it — on the roll-bite picture, the canvas
-// pixels under its box — in the section view, a tandem of five stands and the plan view, the view tools stay clear
-// of the status line and are 24 px tall at 700 and 400 px, and a crack's stamp does not move when the viewer asks
-// for less motion. Not a `@check` (it needs the dev server and Chrome). About 1 minute.
+// pixels under its box, and text drawn on the plan view's canvas against the pixels around it — in the section
+// view, a tandem of five stands and the plan view, Enter on the roll bite chooses the point in the middle of the
+// view, the handles take the mouse 12 px wide while drawn 1 px, the view tools stay clear of the status line and
+// are 24 px tall at 700 and 400 px, and a crack's stamp does not move when the viewer asks for less motion.
+// Not a `@check` (it needs the dev server and Chrome). About 20 s.
 //
 //   CDP_PORT=<cdp> node tools/browser/a11y.mjs <url> [shot-prefix]
 //
@@ -28,7 +30,7 @@ const page = (q) => {
 
 // in the page: WCAG's contrast, the colour behind an element, and the text below AA
 const LIB = `window.__a11y = (() => {
-  const parse = (s) => { const m = /rgba?\\(([^)]+)\\)/.exec(s); if (!m) return null; const v = m[1].split(/[\\s,/]+/).filter(Boolean).map(Number); return [v[0], v[1], v[2], v.length > 3 ? v[3] : 1]; };
+  const parse = (s) => { const h = /^#([0-9a-f]{6})$/i.exec(s); if (h) return [0, 2, 4].map((i) => parseInt(h[1].slice(i, i + 2), 16)).concat(1); const m = /rgba?\\(([^)]+)\\)/.exec(s); if (!m) return null; const v = m[1].split(/[\\s,/]+/).filter(Boolean).map(Number); return [v[0], v[1], v[2], v.length > 3 ? v[3] : 1]; };
   const lin = (u) => { u /= 255; return u <= 0.04045 ? u / 12.92 : ((u + 0.055) / 1.055) ** 2.4; };
   const lum = (c) => 0.2126 * lin(c[0]) + 0.7152 * lin(c[1]) + 0.0722 * lin(c[2]);
   const ratio = (a, b) => (Math.max(lum(a), lum(b)) + 0.05) / (Math.min(lum(a), lum(b)) + 0.05);
@@ -47,7 +49,8 @@ const LIB = `window.__a11y = (() => {
   const textElements = (root) => {
     const out = new Set();
     const w = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
-    for (let t = w.nextNode(); t; t = w.nextNode()) if (t.textContent.trim() && t.parentElement.checkVisibility({ visibilityProperty: true })) out.add(t.parentElement);
+    // (text for screen readers only is not seen)
+    for (let t = w.nextNode(); t; t = w.nextNode()) if (t.textContent.trim() && t.parentElement.checkVisibility({ visibilityProperty: true }) && !t.parentElement.closest('.sr-only')) out.add(t.parentElement);
     return [...out];
   };
   // text on CSS backgrounds (not over the roll-bite pictures; disabled controls are exempt in WCAG)
@@ -80,7 +83,25 @@ const LIB = `window.__a11y = (() => {
       return { what: label(e), r: worst, need: need(s) };
     }).filter((x) => Number.isFinite(x.r));
   };
-  return { parse, ratio, backdrop, lowText, overPicture };
+  // text drawn on a canvas (recorded by the fillText hook below, for the last draw): in its box, the most frequent
+  // colour is the ground and the pixel furthest from it the ink; seen = the pixels near the colour it was drawn in
+  // over that ground (none: something was drawn over the words)
+  const canvasText = (id) => (window.__texts || []).filter((t) => t.canvas === id).map((t) => {
+    const cv = document.getElementById(id);
+    const x0 = Math.max(0, Math.floor(t.box[0])), y0 = Math.max(0, Math.floor(t.box[1]));
+    const x1 = Math.min(cv.width, Math.ceil(t.box[2])), y1 = Math.min(cv.height, Math.ceil(t.box[3]));
+    if (x1 - x0 < 1 || y1 - y0 < 1) return { text: t.text, r: 0, seen: 0 };
+    const d = cv.getContext('2d').getImageData(x0, y0, x1 - x0, y1 - y0).data;
+    const under = backdrop(cv.parentElement);
+    const px = []; const count = new Map();
+    for (let i = 0; i < d.length; i += 4) { const p = over([d[i], d[i + 1], d[i + 2], d[i + 3] / 255], under).map(Math.round); px.push(p); const k = p.join(); count.set(k, (count.get(k) || 0) + 1); }
+    const ground = [...count.entries()].sort((a, b) => b[1] - a[1])[0][0].split(',').map(Number);
+    let r = 1; for (const p of px) r = Math.max(r, ratio(p, ground));
+    const drawn = over(parse(t.fill), ground);
+    const seen = px.filter((p) => Math.hypot(p[0] - drawn[0], p[1] - drawn[1], p[2] - drawn[2]) < 24).length;
+    return { text: t.text, r, seen };
+  });
+  return { parse, ratio, backdrop, lowText, overPicture, canvasText };
 })(); true`;
 
 const FOCUS = [44, 74, 140]; // --focus #2c4a8c
@@ -90,6 +111,22 @@ try {
   c = await connect(process.env.CDP_PORT);
   await c.setViewport(1600, 1000);
   await c.send('Accessibility.enable');
+  // every fillText on a 2D canvas, with its box in the canvas's pixels (so that text drawn on a canvas can be measured)
+  await c.send('Page.addScriptToEvaluateOnNewDocument', {
+    source: `(() => {
+      const fill = CanvasRenderingContext2D.prototype.fillText;
+      window.__texts = [];
+      CanvasRenderingContext2D.prototype.fillText = function (text, x, y, maxWidth) {
+        const m = this.measureText(text);
+        const t = this.getTransform();
+        const xs = [x - m.actualBoundingBoxLeft, x + m.actualBoundingBoxRight], ys = [y - m.actualBoundingBoxAscent, y + m.actualBoundingBoxDescent];
+        const pts = xs.flatMap((a) => ys.map((b) => t.transformPoint(new DOMPoint(a, b))));
+        const box = [Math.min(...pts.map((p) => p.x)), Math.min(...pts.map((p) => p.y)), Math.max(...pts.map((p) => p.x)), Math.max(...pts.map((p) => p.y))];
+        if (this.canvas.id) window.__texts.push({ canvas: this.canvas.id, text: String(text), box, fill: String(this.fillStyle) });
+        return maxWidth === undefined ? fill.call(this, text, x, y) : fill.call(this, text, x, y, maxWidth);
+      };
+    })()`,
+  });
   const painted = () => c.evaluate('new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => r(true))))');
   const open = async (q, wait) => {
     await c.navigate(page(q));
@@ -98,10 +135,13 @@ try {
     await painted();
   };
   const key = async (k, shift = false) => {
-    const code = { Tab: 9, ArrowLeft: 37, ArrowUp: 38, ArrowRight: 39, ArrowDown: 40, Home: 36, End: 35 }[k];
+    const code = { Tab: 9, Enter: 13, ' ': 32, ArrowLeft: 37, ArrowUp: 38, ArrowRight: 39, ArrowDown: 40, Home: 36, End: 35 }[k];
+    const name = k === ' ' ? 'Space' : k;
     const m = shift ? 8 : 0;
-    await c.send('Input.dispatchKeyEvent', { type: 'rawKeyDown', key: k, code: k, windowsVirtualKeyCode: code, modifiers: m });
-    await c.send('Input.dispatchKeyEvent', { type: 'keyUp', key: k, code: k, windowsVirtualKeyCode: code, modifiers: m });
+    // Enter and Space also type a character, as a real key does
+    const text = k === 'Enter' ? '\r' : k === ' ' ? ' ' : undefined;
+    await c.send('Input.dispatchKeyEvent', { type: text ? 'keyDown' : 'rawKeyDown', key: k, code: name, windowsVirtualKeyCode: code, modifiers: m, text });
+    await c.send('Input.dispatchKeyEvent', { type: 'keyUp', key: k, code: name, windowsVirtualKeyCode: code, modifiers: m });
   };
   // the element with the focus, and the name Chrome computes for it
   const active = async () => {
@@ -188,6 +228,12 @@ try {
     window.__phase = { writes: 0, changes: 0, last: e.textContent };
     new MutationObserver((ms) => { window.__phase.writes++; if (e.textContent !== window.__phase.last) { window.__phase.changes++; window.__phase.last = e.textContent; } })
       .observe(e, { childList: true, characterData: true, subtree: true });
+    // the charts' words for a screen reader, how often they are written
+    window.__summary = [...document.querySelectorAll('.charts figure .chart-summary')].map((e) => {
+      const rec = { writes: 0 };
+      new MutationObserver(() => rec.writes++).observe(e, { childList: true, characterData: true, subtree: true });
+      return rec;
+    });
     return true;
   })()`);
   await c.evaluate("document.getElementById('run').click(); true");
@@ -195,6 +241,17 @@ try {
   await painted();
   const ph = await c.evaluate('window.__phase');
   ok(ph.changes >= 3 && ph.writes <= ph.changes, 'the status line (aria-live) is rewritten only when its words change', `${ph.writes} rewrites for ${ph.changes} changes over ${await c.evaluate('__mpm.frames')} frames`);
+  // each chart has a few words for a screen reader, from the page's own numbers, written when the steady reading
+  // came and at the end of the pass only
+  const sum = await c.evaluate(`(() => {
+    const t = [...document.querySelectorAll('.charts figure')].map((f) => f.querySelector('.chart-summary')?.textContent ?? null);
+    const s = __mpm.slab, h = __mpm.hill.steady, e = __mpm.explorer;
+    const pt = __mpm.tracks.find((k) => k.role === e.role);
+    return { t, writes: (window.__summary || []).map((r) => r.writes), load: (s.steadyForce * 1e-6).toFixed(2) + ' kN/mm', ratio: s.ratio?.toFixed(2), peak: h ? (Math.max(...h.p) * 1e-6).toFixed(0) + ' MPa' : null, eta: pt ? pt.state.eta.toFixed(3) : null };
+  })()`);
+  ok(sum.t.length === 3 && sum.t.every((x) => x?.startsWith('（パスの終わり）')) && sum.t[0].includes(sum.load) && sum.t[0].includes(`比 ${sum.ratio}`) && sum.t[1].includes(sum.peak) && sum.t[2].includes(`η ${sum.eta}`),
+    "each chart has words for a screen reader from the page's numbers (steady load and the slab ratio, the hill's peak, the point shown)", sum.t.map((x) => (x ?? '—').slice(0, 60)).join(' | '));
+  ok(sum.writes.length === 3 && sum.writes.every((n) => n >= 1 && n <= 2), "the charts' words are written when the steady reading comes and at the end only", `writes ${sum.writes.join(' / ')}`);
 
   // ── the keyboard alone
   const stops = await walk();
@@ -249,6 +306,49 @@ try {
   const rs = (await tabOnto('.split-left'))?.role === 'separator' ? await ring() : null;
   ok(rs && rs.left.cover >= 0.9 && rs.right.cover >= 0.9, "a handle's focus ring shows along its length", rs ? sidesText(rs) : '');
 
+  // choosing a point with the keyboard: Enter (or Space) on the focused roll bite takes the point nearest the middle
+  // of the view, as a click on it would; the arrows pan, and Enter takes the new middle's point
+  const nearest = () =>
+    c.evaluate(`(() => {
+      const r = document.getElementById('bite').getBoundingClientRect();
+      const cx = r.x + r.width / 2, cy = r.y + r.height / 2;
+      let id = -1, d = Infinity;
+      for (let p = 0; ; p++) { const s = __mpm.screenOf(p); if (!s) break; const e = Math.hypot(s.x - cx, s.y - cy); if (e < d) { d = e; id = p; } }
+      return { id, d };
+    })()`);
+  await tabOnto('#bite');
+  const aim = await c.evaluate(`(() => { const a = document.querySelector('.pick-aim'); if (!a) return null; const r = a.getBoundingClientRect(), b = document.getElementById('bite').getBoundingClientRect(); return { shown: a.checkVisibility(), text: a.textContent, dx: r.x - (b.x + b.width / 2), dy: r.y - (b.y + b.height / 2) }; })()`);
+  ok(aim?.shown && aim.text.includes('Enter') && Math.abs(aim.dx) < 1 && Math.abs(aim.dy) < 1, 'with the roll bite focused, a mark in its middle says that Enter chooses the point there', JSON.stringify(aim));
+  const picks = [];
+  // after the pass the sheet is on the exit side: the view goes right along it
+  for (const [press, pans] of [['Enter', []], ['Enter', ['ArrowRight', 'ArrowRight']], [' ', ['ArrowRight', 'ArrowRight', 'ArrowDown']]]) {
+    for (const k of pans) await key(k);
+    const want = await nearest();
+    await key(press);
+    await c.waitFor(`__mpm.explorer?.role === 'selected' && __mpm.explorer.id === ${want.id}`, 5000).catch(() => {});
+    picks.push({ key: press === ' ' ? 'Space' : press, want: want.id, got: (await c.evaluate('__mpm.explorer'))?.id });
+  }
+  const said = await c.evaluate(`[...document.querySelectorAll('.bite [aria-live]')].map((e) => e.textContent).join(' / ')`);
+  ok(picks.every((p) => p.want >= 0 && p.got === p.want) && new Set(picks.map((p) => p.got)).size === 3 && (await active())?.id === 'bite',
+    'Enter or Space chooses the point nearest the middle of the view as 選んだ点 (again after the arrows move the view); the focus stays', picks.map((p) => `${p.key} ${p.got} (nearest ${p.want})`).join(', '));
+  ok(said.includes('選んだ'), 'the choice is said (aria-live)', said.slice(0, 80));
+  const blurred = await c.evaluate(`(() => { document.getElementById('bite').blur(); const a = document.querySelector('.pick-aim'); return a ? a.checkVisibility() : false; })()`);
+  ok(!blurred, 'the mark goes when the roll bite loses the focus');
+
+  // the handles take the mouse 12 px wide, drawn 1 px; the left one keeps clear of the conditions pane (its scrollbar)
+  const hits = await c.evaluate(`[...document.querySelectorAll('.splitter')].filter((e) => e.checkVisibility()).map((e) => {
+    const r = e.getBoundingClientRect(); const across = r.height > r.width;
+    let n = 0;
+    for (let s = -12; s <= 18; s++) {
+      const x = across ? r.x + s + 0.5 : r.x + r.width / 2, y = across ? r.y + r.height / 2 : r.y + s + 0.5;
+      if (document.elementFromPoint(x, y) === e) n++;
+    }
+    const line = getComputedStyle(e, '::after'); const drawn = across ? line.width : line.height;
+    const left = e.classList.contains('split-left') ? document.elementFromPoint(r.x - 1, r.y + r.height / 2)?.closest('.conditions') != null : true;
+    return { size: e.dataset.size, n, drawn, left };
+  })`);
+  ok(hits.length === 5 && hits.every((h) => h.n >= 12 && h.n <= 14 && h.drawn === '1px' && h.left), 'each handle takes the mouse 12 px across while its line stays 1 px; the left one leaves the conditions pane its edge', hits.map((h) => `${h.size} ${h.n} px (${h.drawn})`).join(', '));
+
   // headers and contrast
   const scopes = await c.evaluate(`['results', 'explorer-state'].map((id) => [id, [...document.querySelectorAll('#' + id + ' th')].filter((h) => !h.getAttribute('scope')).length, document.querySelectorAll('#' + id + ' th').length])`);
   ok(scopes.every(([, bare, n]) => n > 0 && bare === 0), "the results tables' header cells say what they head (scope)", scopes.map(([id, bare, n]) => `${id} ${n - bare} / ${n}`).join(', '));
@@ -299,6 +399,10 @@ try {
   ok(ptabs.length === 1 && ptabs[0].checked === 'true', "the plan view's colour tabs are one Tab stop, the checked tab", `${ptabs.length} stops`);
   const plow = await c.evaluate('__a11y.lowText()');
   ok(plow.length === 0, 'text in the plan view has 4.5:1 against its background', plow.map((x) => `${x.what} ${f2(x.r)}`).join(', '));
+  // the words drawn on the plan view's canvas (one draw of the frame shown, recorded by the fillText hook)
+  await c.evaluate('window.__texts.length = 0; __mpm.plan.drawMs(1); true');
+  const ptext = await c.evaluate(`__a11y.canvasText('plan-canvas')`);
+  ok(ptext.length >= 4 && ptext.every((t) => t.r >= 4.5 && t.seen >= 3), "the words on the plan view's picture (ロールの接触, 板幅の中央, 入口, 出口) show, 4.5:1 against what is around them", ptext.map((t) => `${t.text} ${f2(t.r)}${t.seen < 3 ? ' (covered)' : ''}`).join(', '));
   await c.navigate('about:blank');
 
   // ── narrow screens: no sideways scroll, the view tools clear of the status line and 24 px tall

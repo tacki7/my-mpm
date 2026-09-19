@@ -19,6 +19,8 @@ import { passReadout, readoutKind, readoutNote } from './app/passReadout.ts';
 import { BurstHint } from './app/burstHint.ts';
 import type { StandResult } from './mpm/tandem.ts';
 import { attachViewControls } from './app/viewControls.ts';
+import { attachKeyPick } from './app/keyPick.ts';
+import { ChartSummary } from './app/chartSummary.ts';
 import { radioGroup } from './app/radioGroup.ts';
 import { say } from './app/liveText.ts';
 import { SteadyForce, SteadyProfile, drawForceChart, drawHillChart, slabRatio, slabReference, type ForceChartData, type StandStart } from './app/slabOverlay.ts';
@@ -62,6 +64,8 @@ const explorer = new Explorer(
   () => (dirty = true),
 );
 $('bite').addEventListener('click', (e) => explorer.select(view.pick(e.clientX, e.clientY)));
+attachKeyPick($<HTMLCanvasElement>('bite'), view, (id) => explorer.select(id));
+const chartSummary = new ChartSummary($('chart-force').parentElement!, $('chart-hill').parentElement!, $('locus'));
 // t is the whole pass's time (the stands one after the other), stand the stand of each point (0 first)
 const history: { t: number[]; F: number[]; T: number[]; stand: number[] } = { t: [], F: [], T: [], stand: [] };
 let geometry: Geometry | null = null;
@@ -256,6 +260,7 @@ function restart() {
   standStarts = [];
   steadyForce.reset();
   steadyProfile.reset();
+  chartSummary.clear();
   last = null;
   view.frame = null;
   running = false;
@@ -324,6 +329,11 @@ function onFrame(f: Frame) {
   updateCracks(f.cracks);
   explorer.update(f, params);
   view.marks = explorer.marks();
+  // the charts' words for a screen reader: when the steady reading comes and at the end of the pass
+  chartSummary.update(f.passDone ? 'done' : steadyForce.mean != null ? `steady ${f.stand}` : null, runStands, () => {
+    const s = standStarts[f.stand];
+    return { force: steadyForce.mean, slab: slabReference(s?.P ?? params, s?.ep0), profile: steadyProfile.mean, point: explorer.shown };
+  });
 }
 
 const phaseText: Record<Diagnostics['phase'], string> = {

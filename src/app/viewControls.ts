@@ -1,7 +1,8 @@
 // Zoom and pan of the roll-bite view: the wheel zooms about the pointer, a drag
 // pans, a double click (or 元に戻す, or 0) goes back to the default window; with
-// the canvas focused, + − and the arrows do the same. The toolbar also chooses
-// the thickness exaggeration and turns the principal-direction glyphs on.
+// the canvas focused, + − and the arrows do the same (Enter takes the point in the
+// middle: keyPick.ts). The toolbar also chooses the thickness exaggeration and
+// turns the principal-direction glyphs on.
 import type { BiteView, Exaggeration } from './view.ts';
 
 export interface ViewControlsOptions {
@@ -78,7 +79,10 @@ export function attachViewControls({ canvas, toolbar, view, redraw, onDirs }: Vi
 
   // ── pointer ───────────────────────────────────────────────────────────────
   canvas.tabIndex = 0;
-  canvas.setAttribute('aria-label', 'ロールバイト。ホイールで拡大、ドラッグで移動、ダブルクリックで元に戻す');
+  canvas.setAttribute(
+    'aria-label',
+    'ロールバイト。ホイールで拡大、ドラッグで移動、ダブルクリックで元に戻す。キーでは矢印で移動、+ と − で拡大・縮小、0 で元に戻す、Enter で表示の中央の点を選ぶ',
+  );
   canvas.addEventListener(
     'wheel',
     (e) => {
