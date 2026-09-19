@@ -159,7 +159,7 @@ between(force / forceSamples / sim.halfWidth0 / slab.force, 0.9, 1.05, 'roll for
 
 // ── friction does not depend on the time step: at μ 0.3 the friction a point can take in one step,
 //    2τΔt/(ρ_s h), is more than its slip at mass scaling 1e3 (a per-point friction capped at the
-//    impulse m|Δv| lost 12 % of the load here). A 5 mm strip, same grid spacing
+//    impulse m|Δv| lost 14 % of the load here). A 5 mm strip, same grid spacing
 {
   const load = (ms) => {
     const s = new PlanSim(planParams((() => {
@@ -182,10 +182,39 @@ between(force / forceSamples / sim.halfWidth0 / slab.force, 0.9, 1.05, 'roll for
   const f3 = load(1e3);
   near(f3 / f4, 1, 0.03, `μ 0.3: roll force per unit width at mass scaling 1e3 / 1e4 (${(f4 * 1e-6).toFixed(2)} kN/mm at 1e4)`);
 }
-ok(fr.nodes > 0 && fr.sliding > 0 && fr.sticking > 0 && fr.over === 0 && fr.reversed === 0 && fr.offRoll === 0,
+ok(fr.nodes > 0 && fr.sliding > 0 && fr.over === 0 && fr.reversed === 0 && fr.offRoll === 0,
   'friction on the grid (μ 0.08 and 0.3): at most the Coulomb capacity per node, never past the roll speed, sticking to it when less is enough',
   `${fr.nodes} node looks, ${fr.sliding} sliding, ${fr.sticking} sticking; over the capacity ${fr.over}, past the roll speed ${fr.reversed}, under it but slipping ${fr.offRoll}`);
 ok(fr.sumWorst < 1e-9, "the points' friction adds up to the nodes'", `worst ${fr.sumWorst.toExponential(2)}`);
+
+// ── the Coulomb solve on one node, set by hand (in a run a node sticks only where the neutral point
+//    happens to fall on the grid: 1 look in 3788 above, always the mid-width row): a slip under
+//    capacity × Δt / m stops at the roll speed with a share of the capacity under 1; a larger one slides
+//    by exactly capacity × Δt / m at the full capacity. On a node off the mid-width plane, both ways
+{
+  const s = new PlanSim(condition());
+  const kSym = Math.round(-s.oz / s.h);
+  const idx = Math.round(-s.ox / s.h) * s.nzN + kSym + 2; // x ≈ 0, two rows off the mid-width plane
+  const vR = s.params.rolling.rollSpeed;
+  const m = s.mass[0];
+  const c = (0.2 * vR * m) / s.dt; // capacity × Δt / m = 0.2 v_R
+  const solve = (vx, vz) => {
+    for (const a of [s.gm, s.gvx, s.gvz, s.gcap]) a.fill(0);
+    s.gpush.fill(0);
+    s.pusherActive = false;
+    s.gm[idx] = m;
+    s.gvx[idx] = m * vx;
+    s.gvz[idx] = m * vz;
+    s.gcap[idx] = c;
+    s.gridUpdate();
+    return { vx: s.gvx[idx], vz: s.gvz[idx], share: Math.hypot(s.gfx[idx], s.gfz[idx]) };
+  };
+  const stick = solve(vR - 0.1 * vR, 0.05 * vR); // slip 0.11 v_R < 0.2 v_R
+  ok(Math.abs(stick.vx - vR) < 1e-12 * vR && Math.abs(stick.vz) < 1e-12 * vR && stick.share < 1, 'Coulomb on a node: a slip under capacity × Δt / m sticks at the roll speed', `v ${stick.vx.toFixed(6)}, ${stick.vz.toExponential(1)} m/s, share ${stick.share.toFixed(3)}`);
+  const slide = solve(vR - 0.4 * vR, 0.3 * vR); // slip 0.5 v_R > 0.2 v_R
+  const moved = Math.hypot(slide.vx - 0.6 * vR, slide.vz - 0.3 * vR);
+  ok(Math.abs(moved - 0.2 * vR) < 1e-9 * vR && Math.abs(slide.share - 1) < 1e-9 && slide.vx < vR, 'Coulomb on a node: a larger slip slides, changed by capacity × Δt / m toward the roll speed', `Δv ${(moved / vR).toFixed(6)} v_R, share ${slide.share.toFixed(6)}`);
+}
 
 // ── front tension through the head grip: the total is σf × the head column's cross-section, the
 //    exit strip carries σf, and the grip is protected only while the tension is on

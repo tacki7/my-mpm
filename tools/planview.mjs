@@ -72,6 +72,7 @@ const out = {
   forceHalfWidth_kN: m.forceHalfWidth * 1e-3,
   forcePerWidthMid_kN_per_mm: m.samples ? m.forcePerWidthByZ[0] * 1e-6 : NaN,
   forcePerWidthByZ_kN_per_mm: m.forcePerWidthByZ.map((v) => v * 1e-6),
+  forcePerWidthByColumn_kN_per_mm: m.forcePerWidthByColumn.map((v) => v * 1e-6),
   spread: m.spread,
   spreadWusatowski: wus,
   centreExitThickness_mm: m.centreExitThickness * 1e3,
@@ -96,7 +97,8 @@ else {
   const f = (a, d = 0) => a.map((v) => v.toFixed(d).padStart(6)).join('');
   say(`${m.samples} of ${m.looks} steady samples (the tail ≥ ${(tailGap * 1e3).toFixed(0)} mm before the entry), ${sim.step} steps, ${secs.toFixed(1)} s`);
   if (!m.samples) say('no steady sample with the tail that far before the entry: lengthen the strip (--L)');
-  say(`force per unit width, mid → edge [kN/mm]: ${f(out.forcePerWidthByZ_kN_per_mm, 2)}   (whole half width ${out.forceHalfWidth_kN.toFixed(2)} kN per roll)`);
+  say(`force per unit width, mid → edge, bands of whole lattice columns [kN/mm]: ${f(out.forcePerWidthByZ_kN_per_mm, 2)}   (whole half width ${out.forceHalfWidth_kN.toFixed(2)} kN per roll)`);
+  if (out.forcePerWidthByColumn_kN_per_mm.length <= 40) say(`  per lattice column: ${f(out.forcePerWidthByColumn_kN_per_mm, 2)}`);
   // Wusatowski's fit is for narrow strips; past W/h0 ≈ 20 it gives no spread at all
   say(`spread W1/W0 − 1: ${(out.spread * 100).toFixed(2)} %${W / r.h0 < 20 ? `   (Wusatowski ${(wus * 100).toFixed(2)} %)` : ''}`);
   say(`centre exit thickness ${out.centreExitThickness_mm.toFixed(4)} mm`);
