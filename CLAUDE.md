@@ -77,9 +77,11 @@ tools/browser/browser.sh stop <cdp>; tools/browser/browser.sh stop <dev>
 条件パネル（材料の定数・欠陥・入力の検証）を触ったら `CDP_PORT=<cdp> node tools/browser/panel.mjs http://localhost:<dev>/ <作業用ディレクトリ>/p.png`。
 結果の書き出し（CSV・PNG・条件の URL）を触ったら `CDP_PORT=<cdp> node tools/browser/export.mjs http://localhost:<dev>/ <作業用ディレクトリ>/dl-<時刻>`
 （実際にダウンロードしたファイルを読んで `__mpm.history` と比べ、条件の URL を開き直して `__mpm.params` を比べる）。
+荷重・フリクションヒルのグラフ（スラブ法の重ね描き・移動平均・凡例）を触ったら `CDP_PORT=<cdp> node tools/browser/slab-overlay.mjs http://localhost:<dev>/ <作業用ディレクトリ>/ov`
+（約 40 秒。スラブ法の値を node の `karman()` と比べ、方法の外の条件の凡例、定常の移動平均の揺れ、狭い幅の凡例。`ov-*.png` を自分で見る）。
 
 ポートは必ず渡す（既定値は無い）。`window.__mpm` は `frames` `running` `ready` `done` `diag` `cracks`
-`geometry` `params` `history` `explorer`（表示中の点）`tracks`（追っている点と経路）`view`（拡大率・パン・倍率・主応力の向き）と
+`geometry` `params` `history` `slab`（スラブ法の荷重・中立点・方法の外の理由）`forceChart`（荷重のグラフに描いた生の値と移動平均）`explorer`（表示中の点）`tracks`（追っている点と経路）`view`（拡大率・パン・倍率・主応力の向き）と
 `run()` `restart()` `setField(id)` `screenOf(id)`（粒子の画面座標）`drawMs(n)`（今のフレームを n 回描いた 1 回の ms）、
 `pressing`（亀裂の印が押されている最中）`pressAgain()`（印をもう一度押す。瞬間を撮る用）を持つ。
 凡例の `data-field` が今の色の量（タブの名前は短いことがあるので、待つならこちら）。

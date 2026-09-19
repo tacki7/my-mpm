@@ -9,6 +9,8 @@ export interface Series {
   color: string;
   label: string;
   dash?: number[];
+  /** line width [px], 1.8 by default */
+  width?: number;
 }
 
 export interface ChartSpec {
@@ -121,7 +123,7 @@ export function drawChart(canvas: HTMLCanvasElement, spec: ChartSpec): void {
   for (const s of spec.series) {
     if (!s.x.length) continue;
     ctx.strokeStyle = s.color;
-    ctx.lineWidth = 1.8;
+    ctx.lineWidth = s.width ?? 1.8;
     ctx.setLineDash(s.dash ?? []);
     ctx.beginPath();
     let pen = false;

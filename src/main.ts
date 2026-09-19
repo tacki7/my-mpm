@@ -2,7 +2,6 @@
 import { cloneParams, type SimParams } from './mpm/params.ts';
 import { PRESETS, presetById } from './mpm/presets.ts';
 import type { Diagnostics, FieldName } from './mpm/solver.ts';
-import { drawChart } from './app/charts.ts';
 import { css, lattice, split, temper } from './app/colormap.ts';
 import { FIELDS, fieldInfo } from './app/fields.ts';
 import { Explorer } from './app/explorer.ts';
@@ -13,6 +12,9 @@ import { applyQuery, stopAfterOf } from './app/query.ts';
 import { Overview } from './app/overview.ts';
 import { BiteView } from './app/view.ts';
 import { attachViewControls } from './app/viewControls.ts';
+import { drawForceChart, drawHillChart, slabReference, type ForceChartData } from './app/slabOverlay.ts';
+
+let forceChart: ForceChartData | null = null;
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -304,28 +306,8 @@ function drawLegend() {
 function drawCharts() {
   const g = geometry;
   if (!g) return;
-  drawChart($<HTMLCanvasElement>('chart-force'), {
-    xLabel: '時間 [ms]',
-    yLabel: '荷重 [kN/mm]',
-    series: [{ x: history.t, y: history.F, color: '#1d2a3a', label: '圧延荷重' }],
-  });
-  const pr = last?.profile;
-  const xs = pr ? pr.x.map((x) => x * 1e3) : [];
-  drawChart($<HTMLCanvasElement>('chart-hill'), {
-    xLabel: '圧延方向の位置 [mm]（出口 = 0）',
-    yLabel: '[MPa]',
-    series: pr
-      ? [
-          { x: xs, y: pr.p.map((v) => v * 1e-6), color: '#1f3f7a', label: '圧力 p' },
-          { x: xs, y: pr.tau.map((v) => v * 1e-6), color: '#9c4a1c', label: '摩擦応力 τ', dash: [5, 3] },
-        ]
-      : [],
-    marks: [
-      { x: -g.contactLength * 1e3, label: '入口' },
-      { x: 0, label: '出口' },
-      ...(last?.diag.neutralX != null ? [{ x: last.diag.neutralX * 1e3, label: '中立点' }] : []),
-    ],
-  });
+  forceChart = drawForceChart($<HTMLCanvasElement>('chart-force'), $('legend-force'), history.t, history.F, params);
+  drawHillChart($<HTMLCanvasElement>('chart-hill'), $('legend-hill'), last?.profile, g.contactLength, last?.diag, params);
   explorer.draw();
 }
 
@@ -379,6 +361,15 @@ window.__mpm = {
   },
   get params() {
     return cloneParams(params);
+  },
+  /** the slab method for the running condition, as drawn over the charts */
+  get slab() {
+    const s = slabReference(params);
+    return { force: s.force, torque: s.torque, xNeutral: s.xNeutral, crossed: s.crossed, sticking: s.sticking, tensionAtYield: s.tensionAtYield, outside: s.outside, points: s.p.length };
+  },
+  /** what the force chart last drew: time [ms], one frame's means and the moving average [kN/mm], the window [ms] */
+  get forceChart() {
+    return forceChart;
   },
   get explorer() {
     return { role: explorer.shownRole, id: explorer.shown?.id ?? null };

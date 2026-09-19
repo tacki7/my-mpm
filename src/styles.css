@@ -614,7 +614,8 @@ button.pending {
   font-weight: 700;
 }
 
-.locus-legend {
+.locus-legend,
+.chart-legend {
   display: flex;
   flex-wrap: wrap;
   gap: 2px 12px;
@@ -622,7 +623,8 @@ button.pending {
   margin: 4px 0;
 }
 
-.locus-legend .swatch {
+.locus-legend .swatch,
+.chart-legend .swatch {
   display: inline-block;
   width: 14px;
   height: 3px;
@@ -631,8 +633,32 @@ button.pending {
   background: var(--c);
 }
 
-.locus-legend .swatch.dotted {
+.locus-legend .swatch.dotted,
+.chart-legend .swatch.dotted {
   background: repeating-linear-gradient(90deg, var(--c) 0 2px, transparent 2px 5px);
+}
+
+.chart-legend .swatch.dashed {
+  background: repeating-linear-gradient(90deg, var(--c) 0 6px, transparent 6px 10px);
+}
+
+.chart-legend .swatch.thin {
+  height: 1px;
+  margin-bottom: 4px;
+}
+
+.chart-legend .swatch.ring {
+  width: 7px;
+  height: 7px;
+  margin-bottom: 1px;
+  border-radius: 50%;
+  background: none;
+  border: 1.5px solid var(--c);
+}
+
+.chart-legend .note {
+  flex-basis: 100%;
+  color: var(--ink-soft);
 }
 
 /* ── material constants and defects (conditions panel) ──────────────────── */
