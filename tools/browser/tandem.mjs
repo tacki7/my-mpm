@@ -8,7 +8,8 @@
 // the three pictures; real mouse events on the running stand's slot zoom, reset and pick a point; moving a boundary between the panes resizes the slots with the roll bite; a narrow
 // screen (700 px) stacks the pictures without a sideways scroll; a strip broken through the thickness
 // stops the tandem with the reason in the table and the status; a crack grown over the stands is in the table
-// by stand; five stands' table fits the record column at
+// by stand; at a stand's end the old sheet is not drawn in the new rolls and a point picked just then is
+// followed to its child; five stands' table fits the record column at
 // 1600 and 700 px; the stands field is the section view's only; and back
 // to one stand, the page is as before (no slots, no table). Not a `@check` (it needs the dev server and
 // Chrome).
@@ -328,6 +329,47 @@ try {
   await c.evaluate(`document.querySelector('.view-switch button[data-mode="section"]').click()`);
   const sectionField = await c.evaluate(`document.querySelector('input[name="stands"]').closest('.field').getBoundingClientRect().height`);
   ok(planField === 0 && sectionField > 0, 'the stands field shows in the section view only', `plan ${planField} px, section ${sectionField} px`);
+
+  // ── the moment a stand ends (2 stands, 4 cells, a 4 mm strip; stand 1 ends at step 9142): the roll bite does not
+  //    draw the old sheet in the new stand's rolls, and a point clicked on the old stand's picture just as the worker
+  //    moves on is followed to its child, not read as the new stand's point of the same number. "続ける" from step
+  //    9130, then at once a click on a point half-way along the rolled sheet (zoomed out to see it all)
+  await c.send('Page.addScriptToEvaluateOnNewDocument', { source: `
+    window.__switchLog = [];
+    const W = window.Worker;
+    window.Worker = class extends W {
+      set onmessage(fn) { super.onmessage = (e) => { fn(e); const m = e.data; if (m.type === 'stand' && m.next && !m.refresh) window.__switchLog.push(window.__mpm.drawn); }; }
+      get onmessage() { return super.onmessage; }
+    };` });
+  await c.navigate(page('?stands=2&cells=4&L=4&autorun=1&stopafter=9130'));
+  await c.waitFor('__mpm.done', 120000);
+  await painted();
+  const mid = await c.evaluate(`(() => { const b = document.getElementById('bite').getBoundingClientRect(); return { x: b.x + b.width / 2, y: b.y + b.height / 2 }; })()`);
+  await c.send('Input.dispatchMouseEvent', { type: 'mouseWheel', x: mid.x, y: mid.y, deltaX: 0, deltaY: 600 });
+  await painted();
+  const along = await c.evaluate(`(() => {
+    const all = [];
+    for (let id = 0; ; id++) { const s = __mpm.screenOf(id); if (!s) break; all.push(s); }
+    const b = document.getElementById('bite').getBoundingClientRect();
+    const xs = all.map((o) => o.x), head = Math.max(...xs), tail = Math.min(...xs);
+    for (let id = 0; id < all.length; id++) {
+      const s = all[id], rel = (head - s.x) / (head - tail);
+      if (rel < 0.35 || rel > 0.65 || s.y < b.y + 60 || s.y > b.y + b.height - 60) continue;
+      const x = Math.round(s.x), y = Math.round(s.y), d = Math.hypot(s.x - x, s.y - y);
+      if (all.every((o, j) => j === id || Math.hypot(o.x - x, o.y - y) >= d + 1)) return { id, x, y, rel, stand: __mpm.stand, step: __mpm.diag.step };
+    }
+    return null;
+  })()`);
+  await c.evaluate("document.getElementById('run').click()");
+  if (along) for (const type of ['mousePressed', 'mouseReleased']) await c.send('Input.dispatchMouseEvent', { type, x: along.x, y: along.y, button: 'left', clickCount: 1 });
+  await c.waitFor('__mpm.done', 120000);
+  const switched = await c.evaluate(`({ log: __switchLog, sel: __mpm.tracks.find((t) => t.role === 'selected') ?? null, L: __mpm.standResults[1]?.sheetLength })`);
+  ok(switched.log.length === 1 && switched.log[0].frameStand === null && switched.log[0].geometryStand === 1,
+    "at the stand's end the roll bite draws no sheet in the new rolls until the new stand's first frame", JSON.stringify(switched.log));
+  const relNow = switched.sel ? switched.sel.state.sheetX / switched.L : NaN;
+  ok(!!along && along.stand === 0 && along.step === 9130 && Math.abs(relNow - along.rel) < 0.05,
+    "a point clicked on stand 1's picture as the worker moves on is followed to its child in stand 2",
+    along ? `clicked point ${along.id} at ${along.rel.toFixed(3)} of the sheet from the head; selected in stand 2: point ${switched.sel?.id} at ${relNow.toFixed(3)}` : 'no point to click');
 
   // ── one stand again: nothing of the tandem left on the page
   await c.navigate(page('?cells=6&L=8'));

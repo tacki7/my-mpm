@@ -38,6 +38,8 @@ let runStands = 1;
 let standResults: StandResult[] = [];
 /** a tandem: when each stand began on the pass's clock [ms] and its condition (its entry thickness) */
 let standStarts: StandStart[] = [];
+/** a tandem: each stand's geometry, as the worker sent it (the first on 'ready', the next with each stand's end) */
+let standGeometries: Geometry[] = [];
 const standTable = new StandTable($('stand-results-section'), $('stand-results'));
 /** a stand that begins on the pass's clock at t0 [ms] with entry thickness h0: the run's conditions with that h0,
  * and the strain of the stands before for the slab method (plane strain from the thickness) */
@@ -49,7 +51,7 @@ const standStart = (t0: number, h0: number): StandStart => {
 const explorer = new Explorer(
   $('explorer'),
   $('locus'),
-  (id) => send({ type: 'select', particle: id }),
+  (id) => send({ type: 'select', particle: id, stand: view.frame?.stand ?? 0 }),
   () => (dirty = true),
 );
 $('bite').addEventListener('click', (e) => explorer.select(view.pick(e.clientX, e.clientY)));
@@ -190,6 +192,7 @@ function startWorker() {
       if (!geometry || geometry.h0 !== m.geometry.h0 || geometry.contactLength !== m.geometry.contactLength) view.resetView();
       geometry = m.geometry;
       view.geometry = geometry;
+      standGeometries = [geometry];
       standViews.setup(runStands, geometry);
       if (query.get('autorun') === '1' && frames === 0 && !plan.active) run();
     } else if (m.type === 'frame') {
@@ -201,14 +204,19 @@ function startWorker() {
       standResults[m.stand] = m.result;
       updateStandTable();
       if (m.next && !m.refresh) {
+        standGeometries[m.stand + 1] = m.next;
         geometry = m.next;
         view.geometry = m.next;
         standViews.setCurrent(m.stand + 1);
         steadyForce.reset(); // the steady force, and the inertia ratio, of the stand on show
         kineticSum = 0;
         kineticN = 0;
-      } else if (!m.next && !m.refresh) standViews.finish();
-      view.frame = standViews.liveFrame(last); // the pass is over: the last stand's kept picture
+        // no sheet until the next stand's first frame (the last one would be drawn in the new stand's rolls)
+        view.frame = null;
+      } else {
+        if (!m.next && !m.refresh) standViews.finish();
+        view.frame = standViews.liveFrame(last); // the pass is over: the last stand's kept picture
+      }
       dirty = true;
     }
     else if (m.type === 'error') showError(m.message);
@@ -532,6 +540,11 @@ window.__mpm = {
   },
   get standResults() {
     return standResults.map((r) => ({ ...r }));
+  },
+  /** what the roll bite is drawing: the stand of its frame (null: no sheet) and the stand of its geometry (the rolls) */
+  get drawn() {
+    const g = view.geometry;
+    return { frameStand: view.frame ? view.frame.stand : null, geometryStand: g ? standGeometries.indexOf(g) : null };
   },
   /** why the tandem stopped before its last stand ('stalled' | 'separated' | 'lost'), null otherwise */
   get stopped() {
