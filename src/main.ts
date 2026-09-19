@@ -6,6 +6,7 @@ import { drawChart } from './app/charts.ts';
 import { css, lattice, split, temper } from './app/colormap.ts';
 import { FIELDS, fieldInfo } from './app/fields.ts';
 import { Explorer } from './app/explorer.ts';
+import { buildExport } from './app/export.ts';
 import { buildPanel } from './app/panel.ts';
 import type { CrackView, Frame, FromWorker, Geometry, ToWorker } from './app/protocol.ts';
 import { applyQuery, stopAfterOf } from './app/query.ts';
@@ -29,7 +30,7 @@ const explorer = new Explorer(
   () => (dirty = true),
 );
 $('bite').addEventListener('click', (e) => explorer.select(view.pick(e.clientX, e.clientY)));
-const history: { t: number[]; F: number[] } = { t: [], F: [] };
+const history: { t: number[]; F: number[]; T: number[] } = { t: [], F: [], T: [] };
 let geometry: Geometry | null = null;
 let last: Frame | null = null;
 let frames = 0;
@@ -37,6 +38,14 @@ let running = false;
 let dirty = false;
 let edited = false;
 let awaitingReady = false; // frames of the run a restart replaced may still be on their way
+buildExport($('export'), {
+  history,
+  frame: () => last,
+  params: () => params,
+  presetId: () => presetId,
+  preset: () => presetById(presetId)!.build(),
+  bite: $<HTMLCanvasElement>('bite'),
+});
 
 // ── view: zoom, pan, overview ───────────────────────────────────────────────
 const overview = new Overview($<HTMLCanvasElement>('overview'), view, () => (dirty = true));
@@ -124,6 +133,7 @@ function restart() {
   $('reset').classList.remove('pending');
   history.t.length = 0;
   history.F.length = 0;
+  history.T.length = 0;
   last = null;
   view.frame = null;
   running = false;
@@ -168,6 +178,7 @@ function onFrame(f: Frame) {
   if (d.step > 0 && (history.t.length === 0 || d.t * 1e3 > history.t[history.t.length - 1])) {
     history.t.push(d.t * 1e3);
     history.F.push(d.rollForce * 1e-6);
+    history.T.push(d.rollTorque * 1e-3);
   }
   dirty = true;
   updateButtons();
