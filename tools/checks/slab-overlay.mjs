@@ -18,9 +18,10 @@ for (const [id, mod, want] of [
   mod(P);
   const s = slabReference(P);
   const k = karman(P.rolling, P.material);
-  near(s.force, k.force, 1e-12, `${id}${P.rolling.mu !== 0.08 && id === 'standard' ? `, μ ${P.rolling.mu}` : ''}: slab force = karman()`);
-  if (want) near(s.force * 1e-6, want, 1e-3, `${id}: ${want} kN/mm`);
-  ok(s.outside === null, `${id}: inside the method, drawn`);
+  const name = `${id}${P.rolling.mu !== 0.08 && id === 'standard' ? `, μ ${P.rolling.mu}` : ''}`;
+  near(s.force, k.force, 1e-12, `${name}: slab force = karman()`);
+  if (want) near(s.force * 1e-6, want, 1e-3, `${name}: ${want} kN/mm`);
+  ok(s.outside === null, `${name}: inside the method, drawn`);
 }
 
 // ── outside the method: not drawn, and why
@@ -73,5 +74,28 @@ for (const [id, mod, want] of [
     inner++;
   }
   ok(inner > 1000 && lag < 1e-9, 'a ramp is not delayed (centred window)', `largest shift ${lag.toExponential(1)} kN/mm over ${inner} points`);
+  // up to the newest frame too: the window narrows symmetrically at the ends instead of going one-sided
+  let edge = 0;
+  for (let i = 0; i < t.length; i++) edge = Math.max(edge, Math.abs(avg[i] - ramp[i]));
+  ok(edge < 1e-9, 'a ramp is not delayed at the ends either (the newest frame is not lagged)', `largest shift ${edge.toExponential(1)} kN/mm`);
+  // a non-finite sample breaks the line there only (charts.ts), it does not poison the rest
+  const holed = y.slice();
+  holed[300] = NaN;
+  holed[301] = Infinity;
+  const ma = movingAverage(t, holed, wMs);
+  const bad = ma.filter((v) => !Number.isFinite(v)).length;
+  ok(bad === 0, 'NaN / Inf samples are left out of the moving average', `${bad} non-finite points`);
+}
+
+// ── not crossing: the reason names the end the neutral point went to
+{
+  const ex = presetById('standard').build();
+  ex.rolling.mu = 0.01; // too little friction: neutral point at the exit
+  const a = slabReference(ex);
+  ok(!a.crossed && a.outside?.includes('出口'), 'μ 0.01: neutral point at the exit, friction cannot draw the strip in', a.outside ?? 'drawn');
+  const pull = presetById('standard').build();
+  pull.rolling.frontTension = 450e6; // below 2k at the exit, but the strip is pulled through faster than the rolls
+  const b = slabReference(pull);
+  ok(!b.crossed && !b.tensionAtYield && b.outside?.includes('入口'), 'front tension 450 MPa: neutral point at the entry, the strip is pulled through', b.outside ?? 'drawn');
 }
 done();

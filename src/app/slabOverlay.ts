@@ -46,7 +46,12 @@ export function slabReference(P: SimParams): SlabReference {
     : s.sticking
       ? 'スラブ法: 摩擦 μp が せん断降伏 k を超える（固着）ので比べない'
       : !s.crossed
-        ? 'スラブ法: 中立点が無い（摩擦で板を引き込めない）ので比べない'
+        ? // the branches do not cross: the neutral point sits at an end of the bite. At the exit the
+          // rolls are faster than the strip everywhere (friction cannot draw it in); at the entry the
+          // strip is faster everywhere (a front tension pulls it through and the rolls brake it)
+          Math.abs(s.xNeutral - s.x[0]) < Math.abs(s.xNeutral)
+          ? 'スラブ法: 中立点が入口にある（板がロールより速く引き出され、全長で前進滑り）ので比べない'
+          : 'スラブ法: 中立点が出口にある（摩擦で板を引き込めない）ので比べない'
         : null;
   cache = {
     force: s.force,
@@ -76,22 +81,41 @@ export function smoothingWindow(P: SimParams): number {
 
 /**
  * Centred moving average over a time window: the mean of y over the samples with t in
- * [t_i − window/2, t_i + window/2], so the line does not lag the frames (a trailing window would
- * shift the rise and fall of the load by half its width). Near the ends the window holds only
- * the samples there. `t` must increase. A window of 0 returns y as it is.
+ * [t_i − h_i, t_i + h_i], so the line does not lag the frames (a trailing window would shift the
+ * rise and fall of the load by half its width). The half-width h_i is window/2, cut down near
+ * the ends so the window stays symmetric: h_i = min(window/2, t_i − t_0, t_last − t_i). A ramp
+ * comes back as it is right up to the newest frame, which is therefore the raw value (the line
+ * settles as later frames arrive). Non-finite samples are left out of the mean, as the charts
+ * break their lines there. `t` must increase. A window of 0 returns y as it is.
  */
 export function movingAverage(t: ArrayLike<number>, y: ArrayLike<number>, window: number): number[] {
   const n = t.length;
   if (!(window > 0)) return Array.from(y);
   const half = window / 2;
+  // running sums of the finite samples: S[k] and C[k] over the samples before k
+  const S = new Float64Array(n + 1);
+  const C = new Float64Array(n + 1);
+  for (let k = 0; k < n; k++) {
+    const v = y[k];
+    const fin = Number.isFinite(v);
+    S[k + 1] = S[k] + (fin ? v : 0);
+    C[k + 1] = C[k] + (fin ? 1 : 0);
+  }
   const out = new Array<number>(n);
-  let sum = 0;
+  const t0 = t[0];
+  const tLast = t[n - 1];
+  // both window edges move forward with i (the left edge is t_0, then t_i − half, then 2t_i − t_last)
+  // times that differ by rounding only count as equal, or a window cut to t_i − t_0 could keep t_0 and
+  // drop its mirror image on the other side
+  const eps = 1e-9 * Math.max(Math.abs(t0), Math.abs(tLast), window);
   let lo = 0; // first sample in the window
   let hi = 0; // one past the last
   for (let i = 0; i < n; i++) {
-    while (hi < n && t[hi] <= t[i] + half) sum += y[hi++];
-    while (t[lo] < t[i] - half) sum -= y[lo++];
-    out[i] = sum / (hi - lo);
+    const h = Math.min(half, t[i] - t0, tLast - t[i]);
+    while (hi < n && t[hi] <= t[i] + h + eps) hi++;
+    while (t[lo] < t[i] - h - eps) lo++;
+    const c = C[hi] - C[lo];
+    out[i] = c > 0 ? (S[hi] - S[lo]) / c : NaN;
   }
   return out;
 }
@@ -146,7 +170,8 @@ export function drawForceChart(canvas: HTMLCanvasElement, legend: HTMLElement, t
       : item(STEEL, `スラブ法（Kármán）${(slab.force * 1e-6).toFixed(2)} kN/mm`, 'dashed'),
     `<span class="note">格子が粗いと MPM の荷重は高く出る（標準条件で 6 セル 4.31・10 セル 3.56 対 スラブ法 3.03 kN/mm）</span>`,
   ]);
-  return { t, raw: F, smooth, windowMs: window * 1e3 };
+  // copies: t and F are the page's history, which grows between frames
+  return { t: t.slice(), raw: F.slice(), smooth, windowMs: window * 1e3 };
 }
 
 /**
