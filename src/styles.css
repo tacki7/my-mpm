@@ -143,7 +143,7 @@ button.pending {
 /* ── layout ───────────────────────────────────────────────────────────── */
 .layout {
   display: grid;
-  grid-template-columns: 290px minmax(0, 1fr) 300px;
+  grid-template-columns: 250px minmax(0, 1fr) 300px;
   gap: 0;
   min-height: calc(100vh - 90px);
 }
@@ -152,6 +152,11 @@ button.pending {
 .record {
   padding: 14px 18px 24px;
   background: var(--sheet);
+}
+
+/* the conditions panel is compact: numbers two to a line, labels above them */
+.conditions {
+  padding: 10px 12px 18px;
 }
 
 .conditions {
@@ -167,25 +172,35 @@ button.pending {
 }
 
 .preset-note {
-  margin: 0 0 12px;
-  font-size: var(--fs-s);
+  margin: 0 0 8px;
+  font-size: var(--fs-xs);
   color: var(--ink-soft);
   border-left: 3px solid var(--steel);
-  padding-left: 10px;
+  padding-left: 8px;
+  /* three lines until clicked (the whole note is in its title too) */
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
+  cursor: pointer;
+}
+
+.preset-note.open {
+  display: block;
 }
 
 .group {
   border: 0;
   border-top: 1px solid var(--rule);
   margin: 0;
-  padding: 10px 0 12px;
+  padding: 6px 0 8px;
 }
 
 .group legend,
 .group.fold summary {
   font-family: var(--font-head);
   font-weight: 800;
-  font-size: var(--fs-m);
+  font-size: var(--fs-s);
   padding: 0 6px 0 0;
 }
 
@@ -203,26 +218,44 @@ button.pending {
 }
 
 .field {
+  /* two numbers to a line: each field is half the width, its label above the box */
+  display: inline-grid;
+  vertical-align: top;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 1px;
+  width: calc(50% - 5px);
+  margin: 3px 0;
+}
+
+.field:nth-of-type(odd) {
+  margin-right: 8px;
+}
+
+/* a field with a choice list or a hint keeps the whole width */
+.field:has(select),
+.field:has(.hint) {
   display: grid;
-  grid-template-columns: 1fr auto;
-  gap: 2px 10px;
-  align-items: center;
-  margin: 6px 0;
+  width: 100%;
+  margin-right: 0;
 }
 
 .field-label {
-  font-size: var(--fs-s);
+  font-size: var(--fs-xs);
+  color: var(--ink-soft);
+  line-height: 1.3;
 }
 
 .field-input {
-  display: inline-flex;
+  display: flex;
   align-items: center;
-  gap: 5px;
+  gap: 4px;
 }
 
 .field-input input {
-  width: 6.2em;
+  width: 100%;
+  min-width: 0;
   text-align: right;
+  padding: 3px 5px;
 }
 
 .field select {
@@ -233,13 +266,20 @@ button.pending {
 .unit {
   font-size: var(--fs-xs);
   color: var(--ink-soft);
-  min-width: 2.4em;
+  min-width: 2em;
+}
+
+.conditions input[type='number'],
+.conditions select {
+  font-size: var(--fs-s);
+  padding: 3px 5px;
 }
 
 .hint {
   grid-column: 1 / -1;
   font-size: var(--fs-xs);
   color: var(--ink-soft);
+  line-height: 1.35;
 }
 
 /* ── stage ────────────────────────────────────────────────────────────── */
@@ -845,7 +885,7 @@ body[data-view='plan'] .section-only {
 /* ── narrow screens ───────────────────────────────────────────────────── */
 @media (max-width: 1100px) {
   .layout {
-    grid-template-columns: 260px minmax(0, 1fr);
+    grid-template-columns: 240px minmax(0, 1fr);
   }
   .record {
     grid-column: 1 / -1;
