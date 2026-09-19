@@ -19,12 +19,17 @@ function condition(mod = () => {}) {
   return planParams(base, W, 10);
 }
 
-// ── one run into the steady phase, then a look averaged over a few hundred steps
-const sim = new PlanSim(condition());
-while (sim.phase() !== 'steady' && sim.step < 20000) sim.advance();
+// ── one run into the steady phase (a 12 mm strip, so the bite is well into it), then a look
+//    averaged over a few hundred steps
+const sim = new PlanSim(condition((b) => (b.rolling.sheetLength = 12e-3)));
+while ((sim.phase() !== 'steady' || sim.headX() < sim.xExitProbe + 2e-3) && sim.step < 20000) sim.advance();
 sim.readForce();
 const nb = 5;
 const bite = Array.from({ length: nb }, () => [0, 0]);
+const edge = [0, 0];
+const cols = [0, 1].map(() => [0, 0]); // σxx of the two lattice columns next to the mid-width plane
+const prevContact = Uint8Array.from(sim.pc, (v) => (v > 0 ? 1 : 0));
+const switches = new Uint16Array(sim.n);
 let psWorst = 0;
 let psCount = 0;
 let gapWorst = 0;
@@ -36,6 +41,10 @@ let force = 0;
 let forceSamples = 0;
 for (let s = 0; s < 600; s++) {
   sim.advance();
+  for (let p = 0; p < sim.n; p++) {
+    const c = sim.pc[p] > 0 ? 1 : 0;
+    if (c !== prevContact[p]) (switches[p]++, (prevContact[p] = c));
+  }
   if (s % 50) continue;
   force += sim.readForce();
   forceSamples++;
@@ -50,16 +59,20 @@ for (let s = 0; s < 600; s++) {
       psCount++;
     }
     const x = sim.px[p];
-    if (x > -1e-3 && x < 0) {
+    // the middle of the bite (from 0.8 to 0.2 of the contact length before the exit)
+    if (x > -0.8 * sim.contactLength && x < -0.2 * sim.contactLength) {
       const b = Math.min(nb - 1, Math.floor((sim.pz[p] / (W / 2)) * nb));
       bite[b][0] += sim.sxx[p] - sim.pres[p];
       bite[b][1]++;
+      // the outermost millimetre of the width
+      if (sim.pz[p] > W / 2 - 1e-3) (edge[0] += sim.sxx[p] - sim.pres[p]), edge[1]++;
+      if (sim.lk[p] < 2) (cols[sim.lk[p]][0] += sim.sxx[p] - sim.pres[p]), cols[sim.lk[p]][1]++;
     }
   }
-  // grid nodes on or below the mid-width plane that carry material
-  const kSym = Math.floor(-sim.oz / sim.h + 1e-9);
-  for (let i = 0; i < sim.nxN; i++) for (let k = 0; k <= kSym; k++) {
-    const idx = i * sim.nzN + k;
+  // grid nodes on the mid-width plane z = 0 that carry material (the ghosts below it carry the mirror image)
+  const kSym = Math.round(-sim.oz / sim.h);
+  for (let i = 0; i < sim.nxN; i++) {
+    const idx = i * sim.nzN + kSym;
     if (sim.gm[idx] <= 0) continue;
     symNodes++;
     symVz = Math.max(symVz, Math.abs(sim.gvz[idx]));
@@ -68,12 +81,16 @@ for (let s = 0; s < 600; s++) {
 }
 ok(psCount > 0 && psWorst < 1e5, 'off the rolls: plane stress, |σ_yy| < 0.1 MPa', `max ${(psWorst * 1e-6).toExponential(2)} MPa over ${psCount} looks`);
 ok(gapCount > 0 && gapWorst < 1e-9, 'in contact: the thickness is the roll gap', `max |h − gap|/gap ${gapWorst.toExponential(2)} over ${gapCount} looks`);
-ok(symNodes > 0 && symVz === 0 && symVx > 0.5 * sim.params.rolling.rollSpeed, 'mid-width plane: v_z = 0 and v_x free on its nodes', `${symNodes} node looks, max |v_z| ${symVz}, max |v_x| ${symVx.toFixed(3)} m/s`);
+ok(symNodes > 0 && symVz === 0 && symVx > 0.5 * sim.params.rolling.rollSpeed, 'mid-width plane z = 0: v_z = 0 and v_x free on its nodes', `${symNodes} node looks, max |v_z| ${symVz}, max |v_x| ${symVx.toFixed(3)} m/s`);
 
+const chattering = [...switches].filter((v) => v >= 3).length;
+ok(chattering === 0, 'contact is decided by complementarity: no point flips in and out of contact (≥ 3 times in 600 steps)', `${chattering} points, most flips ${Math.max(...switches)}`);
+const [c0, c1] = cols.map(([a, c]) => (a / c) * 1e-6);
+ok(Math.abs(c0 - c1) < 50, 'the mid-width plane is a mirror: no zigzag between the two columns next to it', `σxx ${c0.toFixed(0)} / ${c1.toFixed(0)} MPa in the bite`);
 const sxx = bite.map(([s, c]) => (c ? (s / c) * 1e-6 : NaN));
 const mid = sxx[0];
-const outer = Math.max(sxx[nb - 2], sxx[nb - 3]);
-ok(mid < -50 && outer > 20, 'in the bite the middle is in longitudinal compression and the edge zone in tension', `σxx mid → edge ${sxx.map((v) => v.toFixed(0)).join(', ')} MPa`);
+const edgeSxx = (edge[0] / edge[1]) * 1e-6;
+ok(mid < -100 && edgeSxx > 30 && edgeSxx - mid > 200, 'in the bite the middle is in longitudinal compression and the outermost mm in tension', `σxx mid → edge ${sxx.map((v) => v.toFixed(0)).join(', ')}; outermost mm ${edgeSxx.toFixed(0)} MPa`);
 
 const prof = sim.exitProfile(sim.xExitProbe, sim.xExitProbe + 2 * sim.h, 5);
 between(prof.halfWidth / sim.halfWidth0 - 1, 0.02, 0.15, 'the width spreads (Wusatowski 6.4 % here)');
@@ -81,9 +98,49 @@ near(prof.bins[0].thick, sim.gap, 0.01, 'the middle leaves the rolls at the gap 
 // the neutral point sits where friction on both faces and the pressure on the sloping rolls balance
 between((prof.bins[0].vx / sim.params.rolling.rollSpeed - 1) * 100, 1, 3.3, 'forward slip in the middle [%] (1.9 on this grid; slab method 3.4, section model 2.6–2.9)');
 
+// friction: μ p_c per face at most the shear flow stress k, and never more impulse than m |Δv| in one step
+{
+  let p = 0;
+  while (!(sim.active[p] && sim.pc[p] > 0)) p++;
+  const area = sim.dp * sim.dp * (sim.f00[p] * sim.f11[p] - sim.f01[p] * sim.f10[p]);
+  const pc = sim.pc[p];
+  sim.pc[p] = 1e10; // pressed far beyond μ p_c = k
+  const k = sim.shearFlow(p);
+  const tau = (sim.frictionFactor(p, area, 1, 0) * 1) / (2 * area); // sliding at 1 m/s
+  const still = sim.frictionFactor(p, area, 0, 0); // no slip: the regularised Coulomb would be huge
+  sim.pc[p] = pc;
+  const want = k / Math.sqrt(1 + (0.01 * sim.params.rolling.rollSpeed) ** 2); // the regularisation's share at 1 m/s
+  ok(Math.abs(tau - want) <= 1e-9 * k, 'friction per face is capped at the shear flow stress k (sticking)', `τ ${(tau * 1e-6).toFixed(3)} MPa, k ${(k * 1e-6).toFixed(3)} MPa`);
+  ok(Math.abs(still * sim.dt - sim.mass[p]) <= 1e-12 * sim.mass[p], 'friction impulse per step is capped at m |Δv| (it cannot overshoot the roll speed)');
+}
+
 // roll force per unit width over the half width against the slab method (the middle is near plane strain)
 const slab = karman(sim.params.rolling, sim.params.material);
-between(force / forceSamples / sim.halfWidth0 / slab.force, 0.7, 1.3, 'roll force per unit width / slab method (3.03 kN/mm)');
+between(force / forceSamples / sim.halfWidth0 / slab.force, 0.9, 1.05, 'roll force per unit width over the half width / slab method (3.03 kN/mm; the edge carries less)');
+
+// ── front tension through the head grip: the total is σf × the head column's cross-section, the
+//    exit strip carries σf, and the grip is protected only while the tension is on
+{
+  const t = new PlanSim(condition((b) => (b.rolling.frontTension = 100e6)));
+  let protectedEarly = 0;
+  while (t.frontNow === 0 && t.step < 20000) {
+    for (let p = 0; p < t.n; p++) if (t.inGrip(p)) protectedEarly++;
+    t.advance();
+  }
+  while (t.headX() < t.xExitProbe + 3e-3 && t.step < 20000) t.advance();
+  const load = t.endLoad(2);
+  near(load, t.frontNow * t.endSection(2), 1e-3, 'front grip load = σf × the head column cross-section (scale from the start of the step)');
+  let f = 0;
+  let a = 0;
+  for (let p = 0; p < t.n; p++) {
+    if (!t.active[p] || t.px[p] < t.xExitProbe || t.px[p] > t.xExitProbe + 1e-3) continue;
+    const sec = t.section(p);
+    f += (t.sxx[p] - t.pres[p]) * sec;
+    a += sec;
+  }
+  near(f / a / 1e6, t.frontNow / 1e6, 0.1, 'the exit strip carries the front tension [MPa]');
+  ok(protectedEarly === 0 && t.frontNow > 0, 'the head grip is an ordinary point until the front tension is on', `${protectedEarly} protected looks before`);
+}
 
 // ── the edge: brittle → it fails from the edge (the tensile band); less brittle → nothing
 //    fails, unless a notch in the edge concentrates the tension: then it fails at its root.

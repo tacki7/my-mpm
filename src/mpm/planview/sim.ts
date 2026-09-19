@@ -20,7 +20,7 @@
 // - Pusher, tensions, mass scaling and the mill-speed scaling of the strain rate mean the
 //   same as in the section model and use the same parameters.
 import { biteGeometry, type DamageModel, type Defect, type SimParams } from '../params.ts';
-import { elasticConstants, hmFractureStrain, homologousTemperature, jcFractureStrain, plasticIncrement, type Elastic } from '../material.ts';
+import { elasticConstants, flowStress, hmFractureStrain, homologousTemperature, jcFractureStrain, plasticIncrement, type Elastic } from '../material.ts';
 
 export interface PlanViewParams {
   /** full strip width at the entry [m] */
@@ -128,6 +128,9 @@ export class PlanSim {
   pusherActive = true;
   backNow = 0;
   frontNow = 0;
+  /** end cross-section / Σ w h |F e_z| dp over the tail's and the head's grips (see gripScale) */
+  private backScale = 0;
+  private frontScale = 0;
   private frontOnAt = -1;
   private backOffAt = -1;
   // roll force accumulated since the last diagnostics read (per roll) [N]
@@ -178,7 +181,8 @@ export class PlanSim {
     const NK = Math.round(W2 / dp);
     this.NI = NI;
     this.NK = NK;
-    this.gripCols = Math.max(1, Math.ceil(r.h0 / dp));
+    // h0 of strip at each end, but never more than half the strip
+    this.gripCols = Math.max(1, Math.min(Math.round(r.h0 / dp), Math.floor(NI / 2)));
     const lattice = new Int32Array(NI * NK).fill(-1);
     const keep: number[] = [];
     const ductOf: number[] = [];
@@ -297,9 +301,7 @@ export class PlanSim {
     const { n, active, px, pz, dt, h, invH, ox, oz, nzN, gm, gvx, gvz, gpush } = this;
     const r = this.params.rolling;
     const R = r.rollRadius;
-    const mu = r.mu;
     const vRoll = r.rollSpeed;
-    const vEps = 0.01 * vRoll;
     gm.fill(0);
     gvx.fill(0);
     gvz.fill(0);
@@ -307,9 +309,10 @@ export class PlanSim {
     const k4 = 4 * invH * invH;
     const grip = this.gripCols;
     const NI = this.NI;
-    // end loads: the stress times the end's current cross-section, shared by the grip's columns
-    const backForce = this.backNow;
-    const frontForce = this.frontNow;
+    // end loads per gripped point per unit of its weight and cross-section share (see gripScale):
+    // the total is the stress times the end column's cross-section
+    const backForce = this.backNow * this.backScale;
+    const frontForce = this.frontNow * this.frontScale;
     const pushing = this.pusherActive;
     let force = 0;
     for (let p = 0; p < n; p++) {
@@ -346,7 +349,7 @@ export class PlanSim {
       if (pcp > 0) {
         const dvx = vRoll - this.vx[p];
         const dvz = -this.vz[p];
-        const s = (2 * mu * pcp * area) / Math.sqrt(dvx * dvx + dvz * dvz + vEps * vEps);
+        const s = this.frictionFactor(p, area, dvx, dvz);
         const a = Math.min(Math.abs(xp), 0.999 * R);
         const tanPhi = -xp / Math.sqrt(R * R - a * a);
         mvx += dt * (s * dvx - 2 * pcp * tanPhi * area);
@@ -354,8 +357,8 @@ export class PlanSim {
         force += pcp * area;
       }
       const i = this.li[p];
-      if (backForce !== 0 && i < grip) mvx -= (dt * backForce * this.thick[p] * this.dp * Math.hypot(this.f01[p], this.f11[p])) / grip;
-      else if (frontForce !== 0 && i >= NI - grip) mvx += (dt * frontForce * this.thick[p] * this.dp * Math.hypot(this.f01[p], this.f11[p])) / grip;
+      if (backForce !== 0 && i < grip) mvx -= dt * backForce * this.gripWeight(i, 1) * this.section(p);
+      else if (frontForce !== 0 && i >= NI - grip) mvx += dt * frontForce * this.gripWeight(i, 2) * this.section(p);
       const pushMark = pushing && i === 0;
 
       for (let ii = 0; ii < 3; ii++) {
@@ -382,11 +385,21 @@ export class PlanSim {
     const mMin = 1e-12 * this.mass[0];
     const vPush = this.vIn;
     const pushing = this.pusherActive;
-    // nodes on or below the mid-width plane: symmetry, v_z = 0 (v_x free)
-    const kSym = Math.floor((0 - oz) / h + 1e-9);
+    // the mid-width plane z = 0 (node row kSym) is a symmetry plane: the ghost nodes below it are
+    // folded onto their mirror images (z-momentum negated), the plane's own nodes get v_z = 0 (v_x
+    // free), and the ghosts take the mirrored velocity back for the transfer to the points
+    const kSym = Math.round((0 - oz) / h);
     for (let i = 0; i < nxN; i++) {
-      for (let k = 0; k < nzN; k++) {
-        const idx = i * nzN + k;
+      const col = i * nzN;
+      for (let k = 0; k < kSym; k++) {
+        const g = col + k;
+        const q = col + 2 * kSym - k;
+        gm[q] += gm[g];
+        gvx[q] += gvx[g];
+        gvz[q] -= gvz[g];
+      }
+      for (let k = kSym; k < nzN; k++) {
+        const idx = col + k;
         const m = gm[idx];
         if (m <= mMin) {
           gvx[idx] = 0;
@@ -395,10 +408,16 @@ export class PlanSim {
         }
         let vx = gvx[idx] / m;
         let vz = gvz[idx] / m;
-        if (k <= kSym) vz = 0;
+        if (k === kSym) vz = 0;
         if (pushing && gpush[idx] && vx < vPush) vx = vPush;
         gvx[idx] = vx;
         gvz[idx] = vz;
+      }
+      for (let k = 0; k < kSym; k++) {
+        const g = col + k;
+        const q = col + 2 * kSym - k;
+        gvx[g] = gvx[q];
+        gvz[g] = -gvz[q];
       }
     }
   }
@@ -556,8 +575,11 @@ export class PlanSim {
       return ty - pr; // σ_yy
     };
 
+    // Contact by complementarity: a point near or above the gap is tried at the gap, and stays in
+    // contact if holding it there needs compression (σ_yy < 0) — this also catches the elastic
+    // recovery past the exit, where a point a little thinner than the gap still presses on the rolls
     const g = this.gapAt(x);
-    let contact = h0 > g && Math.abs(x) < 0.5 * P.rolling.rollRadius;
+    let contact = h0 > 0.99 * g && Math.abs(x) < 0.5 * P.rolling.rollRadius;
     let Dyy = 0;
     if (contact) {
       Dyy = Math.log(g / h0) / dt;
@@ -565,22 +587,9 @@ export class PlanSim {
       if (syy > 0) contact = false;
     }
     if (!contact) {
-      // plane stress: σ_yy(D_yy) = 0 by secant steps from the elastic slope
-      const slope = (this.el.K + (4 / 3) * G) * dt;
-      let d0 = this.dyy[p];
-      let f0 = evaluate(d0);
-      let d1 = d0 - f0 / slope;
-      let f1 = evaluate(d1);
-      const tol = 1e-6 * Math.max(1e6, out.q);
-      for (let it = 0; it < 8 && Math.abs(f1) > tol; it++) {
-        const s = f1 !== f0 ? (f1 - f0) / (d1 - d0) : slope;
-        const d2 = d1 - f1 / (s > 0 ? s : slope);
-        d0 = d1;
-        f0 = f1;
-        d1 = d2;
-        f1 = evaluate(d1);
-      }
-      Dyy = d1;
+      // plane stress: σ_yy(D_yy) = 0. σ_yy grows with D_yy, so a root is bracketed from the elastic
+      // estimate outwards and closed by secant steps kept inside the bracket (bisection if they leave it)
+      Dyy = this.planeStress(this.dyy[p], evaluate, (this.el.K + (4 / 3) * G) * dt);
     }
     this.sxx[p] = out.sx;
     this.szz[p] = out.sz;
@@ -621,11 +630,134 @@ export class PlanSim {
     }
   }
 
-  /** In the gripped length (h0) of an end that carries a tension: damage is shown but the point does not fail. */
-  inGrip(p: number): boolean {
+  /**
+   * Friction on point p in contact as s · Δv (Δv = roll surface speed − point speed) [N per m/s]:
+   * Coulomb on both faces, μ p_c each but at most the shear flow stress k (sticking), directed along
+   * Δv regularised over 1 % of the roll speed, and never more than the impulse that would bring the
+   * point to the roll speed in one step (explicit friction would ring).
+   */
+  frictionFactor(p: number, area: number, dvx: number, dvz: number): number {
     const r = this.params.rolling;
+    const vEps = 0.01 * r.rollSpeed;
+    const tau = Math.min(r.mu * this.pc[p], this.shearFlow(p));
+    const s = (2 * tau * area) / Math.sqrt(dvx * dvx + dvz * dvz + vEps * vEps);
+    const cap = this.mass[p] / this.dt;
+    return s < cap ? s : cap;
+  }
+
+  /** Shear flow stress k = σy/√3 of point p (static, at its plastic strain) [Pa]: the most friction can pass. */
+  shearFlow(p: number): number {
+    const m = this.params.material;
+    return flowStress(m, this.ep[p], 0, m.tRoom).sy / Math.sqrt(3);
+  }
+
+  /**
+   * Root of σ_yy(D_yy) = 0 for the plane-stress points: f is monotone increasing (the elastic slope
+   * `slope` is its upper bound, plasticity only lowers it). Bracket from the start value, then secant
+   * steps inside the bracket with bisection as the fallback, to |σ_yy| ≤ 1 kPa. The last call of f
+   * is at the returned value (it leaves the update in its output).
+   */
+  private planeStress(start: number, f: (d: number) => number, slope: number): number {
+    const tol = 1e3;
+    let a = start;
+    let fa = f(a);
+    if (Math.abs(fa) <= tol) return a;
+    // step towards the root with the elastic slope until the sign changes
+    let step = -fa / slope;
+    let b = a + step;
+    let fb = f(b);
+    for (let it = 0; it < 30 && fa * fb > 0; it++) {
+      a = b;
+      fa = fb;
+      step *= 2;
+      b = a + step;
+      fb = f(b);
+    }
+    if (Math.abs(fb) <= tol) return b;
+    let lo = fa < 0 ? a : b;
+    let hi = fa < 0 ? b : a;
+    let flo = fa < 0 ? fa : fb;
+    let fhi = fa < 0 ? fb : fa;
+    let x = b;
+    for (let it = 0; it < 60; it++) {
+      let nx = lo - (flo * (hi - lo)) / (fhi - flo);
+      if (!(nx > lo && nx < hi) || it % 4 === 3) nx = 0.5 * (lo + hi);
+      const fx = f(nx);
+      x = nx;
+      if (Math.abs(fx) <= tol) return x;
+      if (fx < 0) {
+        lo = nx;
+        flo = fx;
+      } else {
+        hi = nx;
+        fhi = fx;
+      }
+    }
+    return x;
+  }
+
+  /** In the gripped length of an end while a tension is applied there: damage is shown but the point does not fail. */
+  inGrip(p: number): boolean {
     const i = this.li[p];
-    return (r.frontTension !== 0 && i >= this.NI - this.gripCols) || (r.backTension !== 0 && i < this.gripCols);
+    return (this.frontNow > 0 && i >= this.NI - this.gripCols) || (this.backNow > 0 && i < this.gripCols);
+  }
+
+  /** A point's share of its column's cross-section: its thickness times its current spacing across the width [m²]. */
+  section(p: number): number {
+    return this.thick[p] * this.dp * Math.hypot(this.f01[p], this.f11[p]);
+  }
+
+  /**
+   * Share of the end load for a point of lattice column i in the grip of the tail (1) or the head (2):
+   * largest at the end column, falling linearly towards the inner end of the grip (as in the section model).
+   */
+  gripWeight(i: number, end: number): number {
+    const g = this.gripCols;
+    const j = end === 1 ? g - 1 - i : i - (this.NI - g);
+    return (j + 0.5) / g;
+  }
+
+  /**
+   * Cross-section of the end column (tail 1, head 2; Σ of its points' sections over the half width) over
+   * Σ w · section of the points in that end's grip. Each gripped point's load is σ w section times this,
+   * so the total is σ × the end column's cross-section. 0 when the end column has no active point left.
+   */
+  private gripScale(end: number): number {
+    const { n, active, li, NI } = this;
+    const g = this.gripCols;
+    const endCol = end === 1 ? 0 : NI - 1;
+    let area = 0;
+    let sum = 0;
+    for (let p = 0; p < n; p++) {
+      if (!active[p]) continue;
+      const i = li[p];
+      if (end === 1 ? i >= g : i < NI - g) continue;
+      const a = this.section(p);
+      if (i === endCol) area += a;
+      sum += this.gripWeight(i, end) * a;
+    }
+    return area > 0 && sum > 0 ? area / sum : 0;
+  }
+
+  /** Total load the tail (1) or head (2) grip puts on the half strip this step [N], signed along x. */
+  endLoad(end: number): number {
+    const { n, active, li, NI } = this;
+    const g = this.gripCols;
+    const t = end === 1 ? -this.backNow * this.backScale : this.frontNow * this.frontScale;
+    let f = 0;
+    for (let p = 0; p < n; p++) {
+      if (!active[p] || (end === 1 ? li[p] >= g : li[p] < NI - g)) continue;
+      f += t * this.gripWeight(li[p], end) * this.section(p);
+    }
+    return f;
+  }
+
+  /** Cross-section of the end column (tail 1, head 2) over the half width [m²]. */
+  endSection(end: number): number {
+    const endCol = end === 1 ? 0 : this.NI - 1;
+    let a = 0;
+    for (let p = 0; p < this.n; p++) if (this.active[p] && this.li[p] === endCol) a += this.section(p);
+    return a;
   }
 
   governingDamage(p: number): number {
@@ -704,7 +836,7 @@ export class PlanSim {
     return 'steady';
   }
 
-  /** Tensions as in the section model: back tension ramps up and is released once the tail reaches the entry; front tension from when the head passes the exit probe. */
+  /** Tensions as in the section model: back tension ramps up and is released once the tail reaches the entry; front tension from when the head passes the exit probe. The load goes in through the grips (gripScale). */
   private updateTension(): void {
     const r = this.params.rolling;
     const t = this.t;
@@ -714,11 +846,14 @@ export class PlanSim {
       let back = r.backTension * Math.min(1, t / ramp);
       const release = Math.min(ramp, this.contactLength / this.vIn);
       if (this.backOffAt >= 0) back *= Math.max(0, 1 - (t - this.backOffAt) / release);
-      this.backNow = back;
+      this.backScale = this.gripScale(1);
+      this.backNow = this.backScale > 0 ? back : 0;
     }
     if (r.frontTension !== 0) {
       if (this.frontOnAt < 0 && this.headX() > this.xExitProbe) this.frontOnAt = t;
-      this.frontNow = this.frontOnAt >= 0 ? r.frontTension * Math.min(1, (t - this.frontOnAt) / ramp) : 0;
+      const front = this.frontOnAt >= 0 ? r.frontTension * Math.min(1, (t - this.frontOnAt) / ramp) : 0;
+      this.frontScale = this.gripScale(2);
+      this.frontNow = this.frontScale > 0 ? front : 0;
     }
   }
 
