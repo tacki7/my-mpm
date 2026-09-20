@@ -15,9 +15,10 @@ import { PlanMode } from './app/planMode.ts';
 import { BiteView } from './app/view.ts';
 import { StandViews } from './app/standViews.ts';
 import { StandTable, stopPhrase } from './app/standTable.ts';
-import { passReadout, readoutKind, readoutNote } from './app/passReadout.ts';
+import { passReadout, readoutKind, readoutNote, torqueNote } from './app/passReadout.ts';
+import { PresetBadge, samePassAsPreset } from './app/presetBadge.ts';
 import { BurstHint } from './app/burstHint.ts';
-import type { StandResult } from './mpm/tandem.ts';
+import type { StandResult, SteadyMeans } from './mpm/tandem.ts';
 import { attachViewControls } from './app/viewControls.ts';
 import { attachKeyPick } from './app/keyPick.ts';
 import { ChartSummary } from './app/chartSummary.ts';
@@ -39,15 +40,27 @@ const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as 
 const query = new URLSearchParams(location.search);
 let presetId = presetById(query.get('preset') ?? '')?.id ?? 'standard';
 let params: SimParams = applyQuery(presetById(presetId)!.build(), query);
+/** the conditions are the standard preset's pass (the force chart says its standard-condition range only then) */
+let standardPass = false;
 let field: FieldName = (FIELDS.find((f) => f.id === query.get('field'))?.id ?? 'seq') as FieldName;
 const stopAfter = stopAfterOf(query);
 
 const view = new BiteView($<HTMLCanvasElement>('bite'));
 // a tandem's stands side by side (one stand: unused)
 const standViews = new StandViews(document.querySelector<HTMLElement>('.bite')!, view, $<HTMLCanvasElement>('bite'));
+// a stand's number picks whose readings the right column shows; the running stand's number follows it again
+standViews.onPick = (k) => {
+  shownStand = k === standViews.current || k === shownStand ? null : k;
+  standViews.setPicked(shownStand);
+  refreshReadouts(true);
+};
 /** stands of the run shown, and the finished stands' results */
 let runStands = 1;
 let standResults: StandResult[] = [];
+/** the stand whose readings the right column and the hill show (null: the running one, or the last after the pass) */
+let shownStand: number | null = null;
+/** each stand's last mid-plane η (the kept picture frames carry none) */
+const standMidEta: (number | null)[] = [];
 /** a tandem: when each stand began on the pass's clock [ms] and its condition (its entry thickness) */
 let standStarts: StandStart[] = [];
 /** a tandem: each stand's geometry, as the worker sent it (the first on 'ready', the next with each stand's end) */
@@ -118,7 +131,11 @@ const panel = buildPanel($('panel'), () => {
 panel.show(params);
 // the preset's note shows three lines; its button 続きを読む shows the rest
 const presetNote = new PresetNote($('preset-note'));
-const showNote = () => presetNote.show(presetById(presetId)?.note ?? '');
+const presetBadge = new PresetBadge($('preset-custom'));
+const showNote = () => {
+  presetNote.show(presetById(presetId)?.note ?? '');
+  noteConditions();
+};
 showNote();
 
 // the plan view (板幅方向): its own worker and picture; the shared buttons go to it while it is shown.
@@ -237,8 +254,18 @@ function readConditions() {
   $('reset').classList.remove('pending');
 }
 
+/** the conditions changed (a run starts, the preset is picked): the badge, and whether this is the standard pass */
+function noteConditions() {
+  const preset = presetById(presetId)!.build();
+  presetBadge.update(presetId, preset, params);
+  standardPass = presetId === 'standard' && samePassAsPreset(presetId, preset, params);
+}
+
 function restart() {
   readConditions();
+  shownStand = null;
+  standViews.setPicked(null);
+  noteConditions();
   history.t.length = 0;
   kineticSum = 0;
   kineticN = 0;
@@ -248,6 +275,7 @@ function restart() {
   runStands = params.rolling.stands ?? 1;
   standResults = [];
   standStarts = [];
+  standMidEta.length = 0;
   steadyForce.reset();
   steadyProfile.reset();
   hillStands.length = 0;
@@ -313,18 +341,43 @@ function onFrame(f: Frame) {
       kineticN++;
     }
   }
+  if (f.midEta != null) standMidEta[f.stand] = f.midEta;
   dirty = true;
   updateButtons();
-  updateResults(d, f);
-  updateStandTable();
-  updateCracks(f.cracks);
-  explorer.update(f, params);
-  view.marks = explorer.marks();
+  refreshReadouts();
   // the charts' words for a screen reader: when the steady reading comes and at the end of the pass
   chartSummary.update(f.passDone ? 'done' : steadyForce.mean != null ? `steady ${f.stand}` : null, runStands, () => {
     const s = standStarts[f.stand];
     return { force: steadyForce.mean, slab: slabReference(s?.P ?? params, s?.ep0), profile: steadyProfile.mean, point: explorer.shown, stands: hillsOf(f.stand) };
   });
+}
+
+/** the steady means a finished stand kept in its result (a picked stand's readouts; null: not finished) */
+function steadyOf(k: number): SteadyMeans | null {
+  const r = standResults[k];
+  return r ? { readings: r.steadyForce != null ? 1 : 0, force: r.steadyForce, torque: r.steadyTorque, exitThickness: r.exitThickness, forwardSlip: r.forwardSlip } : null;
+}
+
+/** the frame whose numbers are on show: the stand the reader picked, else the newest */
+function shownFrame(): Frame | null {
+  return (shownStand != null ? standViews.frameOf(shownStand) : null) ?? last;
+}
+
+/** the right column and the charts, from the frame on show (a stand was picked, or a new frame came) */
+function refreshReadouts(rebuildCracks = false): void {
+  const f = shownFrame();
+  if (!f) return;
+  // a picked stand reads from what it kept: its result's steady means and the mid-plane η it last had
+  const picked = shownStand != null && shownStand !== last?.stand;
+  updateResults(f.diag, f, picked ? (steadyOf(shownStand!) ?? f.steady) : f.steady, picked ? (standMidEta[shownStand!] ?? null) : f.midEta);
+  updateStandTable();
+  updateCracks(f.cracks, rebuildCracks);
+  // the explorer and its rings stay with the running stand's frame: a point's id means something only in the frame it
+  // came from, and the live canvas draws that one (a picked stand's points would ring unrelated points there)
+  explorer.update(last ?? f, params);
+  view.marks = explorer.marks();
+  showClock();
+  dirty = true;
 }
 
 const phaseText: Record<Diagnostics['phase'], string> = {
@@ -336,12 +389,12 @@ const phaseText: Record<Diagnostics['phase'], string> = {
   stalled: '板が止まった（噛み込めない）',
 };
 
-function updateResults(d: Diagnostics, f: Frame) {
+function updateResults(d: Diagnostics, f: Frame, steady: SteadyMeans | null = f.steady, midEta: number | null = f.midEta) {
   // the load, torque, exit thickness and slip: the steady means once there are any (they stay after the pass)
-  const pass = passReadout(d, f.steady);
-  $('results-note').textContent = readoutNote(readoutKind(d, f.steady));
+  const pass = passReadout(d, steady);
+  $('results-note').textContent = readoutNote(readoutKind(d, steady)) + torqueNote(pass.find((r) => r.key === 'torque')?.value);
   // the shape against the central-burst map (the stand on show's entry thickness), and the mid-plane η measured
-  burstHint.update(standStarts[f.stand]?.P ?? params, f.midEta);
+  burstHint.update(standStarts[f.stand]?.P ?? params, midEta);
   const rows: [string, string, string][] = [
     ...pass.map((r): [string, string, string] => [r.label, r.text, r.unit]),
     [params.damage.model === 'none' ? '最大損傷（3 指標の最大）' : '最大損傷', d.maxDamage.toFixed(3), ''],
@@ -384,7 +437,7 @@ function updateResults(d: Diagnostics, f: Frame) {
 
 /** a tandem: the stands' table (one stand: hidden) */
 function updateStandTable() {
-  standTable.update(runStands, standResults, last?.stand ?? 0, !!last?.passDone, geometry?.h0 ?? null, last?.stopped ?? null);
+  standTable.update(runStands, standResults, last?.stand ?? 0, !!last?.passDone, geometry?.h0 ?? null, last?.stopped ?? null, shownStand);
 }
 
 /** the shared clock, from the section model's last frame, while the section view is shown */
@@ -393,13 +446,18 @@ function showClock() {
   const d = last?.diag;
   const t = (last?.tOffset ?? 0) + (d?.t ?? 0);
   const step = (last?.stepOffset ?? 0) + (d?.step ?? 0);
-  const stand = runStands > 1 ? `　スタンド ${(last?.stand ?? 0) + 1} / ${runStands}` : '';
+  const stand =
+    runStands > 1 ? `　スタンド ${(shownStand ?? last?.stand ?? 0) + 1} / ${runStands}${shownStand != null ? '（選んで表示中）' : ''}` : '';
   $('clock').textContent = `t = ${(t * 1e3).toFixed(2)} ms　${step.toLocaleString()} step${stand}`;
 }
 
 let crackSeen = 0;
-function updateCracks(cracks: CrackView[]) {
+function updateCracks(cracks: CrackView[], rebuild = false) {
   const ol = $('crack-log');
+  if (rebuild) {
+    crackSeen = 0;
+    ol.replaceChildren();
+  }
   if (cracks.length === 0) {
     if (!ol.firstChild) {
       const li = document.createElement('li');
@@ -471,11 +529,19 @@ function drawCharts() {
   const g = geometry;
   if (!g) return;
   // a tandem: each stand's slab level and mark; the friction hill of the stand on show
-  const shown = standStarts[last?.stand ?? 0];
-  forceChart = drawForceChart($<HTMLCanvasElement>('chart-force'), $('legend-force'), history.t, history.F, params, steadyForce.mean, runStands > 1 ? standStarts : undefined);
-  const k = last?.stand ?? 0;
-  hillChart = drawHillChart($<HTMLCanvasElement>('chart-hill'), $('legend-hill'), last?.profile, g.contactLength, last?.diag, shown?.P ?? params, shown?.ep0, steadyProfile.mean,
-    runStands > 1 ? { finished: hillStands, shown: { label: `#${k + 1}`, color: standColor(k) } } : undefined);
+  const k = shownStand ?? last?.stand ?? 0;
+  const start = standStarts[k];
+  const f = shownFrame();
+  forceChart = drawForceChart($<HTMLCanvasElement>('chart-force'), $('legend-force'), history.t, history.F, params, steadyForce.mean, runStands > 1 ? standStarts : undefined,
+    standardPass);
+  // every stand's steady hill, by stand: the finished ones were kept, the running one is still being averaged
+  const hills: (HillStand | undefined)[] = [...hillStands];
+  const live = last?.stand ?? 0;
+  if (steadyProfile.mean) hills[live] = { label: `#${live + 1}`, color: standColor(live), profile: steadyProfile.mean, contactLength: g.contactLength };
+  const shown = hills[k];
+  hillChart = drawHillChart($<HTMLCanvasElement>('chart-hill'), $('legend-hill'), f?.profile, shown?.contactLength ?? g.contactLength, f?.diag, start?.P ?? params, start?.ep0,
+    shown?.profile ?? null,
+    runStands > 1 ? { finished: hills.filter((h, i): h is HillStand => !!h && i !== k), shown: { label: `#${k + 1}`, color: standColor(k) } } : undefined);
   explorer.draw();
 }
 
@@ -591,10 +657,10 @@ window.__mpm = {
   get standResults() {
     return standResults.map((r) => ({ ...r }));
   },
-  /** what the roll bite is drawing: the stand of its frame (null: no sheet) and the stand of its geometry (the rolls) */
+  /** what the roll bite is drawing: the stand of its frame (null: no sheet), the stand of its geometry (the rolls) and the points it rings */
   get drawn() {
     const g = view.geometry;
-    return { frameStand: view.frame ? view.frame.stand : null, geometryStand: g ? standGeometries.indexOf(g) : null };
+    return { frameStand: view.frame ? view.frame.stand : null, geometryStand: g ? standGeometries.indexOf(g) : null, marks: view.marks.map((m) => m.id) };
   },
   /** why the tandem stopped before its last stand ('stalled' | 'separated' | 'lost'), null otherwise */
   get stopped() {

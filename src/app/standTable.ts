@@ -77,17 +77,18 @@ export class StandTable {
   }
 
   /** the run's stands, the finished ones' results, the stand running (0 first), whether the pass is over, the running stand's entry thickness [m], and why the tandem stopped early */
-  update(stands: number, results: StandResult[], current: number, passDone: boolean, h0Now: number | null, stopped: TandemStop | null): void {
-    const key = `${stands}|${current}|${results.length}|${passDone}|${h0Now}|${stopped}`;
+  update(stands: number, results: StandResult[], current: number, passDone: boolean, h0Now: number | null, stopped: TandemStop | null, shown: number | null = null): void {
+    const key = `${stands}|${current}|${results.length}|${passDone}|${h0Now}|${stopped}|${shown}`;
     if (key === this.key) return;
     this.key = key;
     this.section.hidden = stands <= 1;
     if (stands <= 1) return;
     const head = document.createElement('tr');
     for (let k = 0; k < stands; k++) {
-      const th = cell('th', `#${k + 1}`, k === current && !passDone ? 'current' : undefined);
+      const th = cell('th', `#${k + 1}`, [k === current && !passDone ? 'current' : '', k === shown ? 'shown' : ''].filter(Boolean).join(' ') || undefined);
       th.style.color = standColor(k);
       th.setAttribute('scope', 'col');
+      if (k === shown) th.title = '右の欄と下のグラフはこのスタンドの読み';
       head.append(th);
     }
     // points that left the grid: only when a stand lost any

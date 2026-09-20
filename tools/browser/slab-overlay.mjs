@@ -80,8 +80,12 @@ try {
     const f = await legend('legend-force');
     const thick = slab.delta > 1;
     ok(
-      slab.ratio === null && !f.includes('定常の MPM') && (thick ? f.includes(`Δ = 平均板厚 / 接触長 = ${slab.delta.toFixed(2)}`) && f.includes('スラブ法の線は参考') : f.includes('定常になると') && f.includes('標準条件では')),
-      `${name}: before running, Δ ${slab.delta.toFixed(2)} → the ${thick ? 'thick-plate' : 'standard'} note, no ratio`,
+      slab.ratio === null &&
+        !f.includes('定常の MPM') &&
+        (thick
+          ? f.includes(`Δ = 平均板厚 / 接触長 = ${slab.delta.toFixed(2)}`) && f.includes('スラブ法の線は参考')
+          : f.includes('定常になると') && (name === 'standard' ? f.includes('標準条件では 1.03〜1.07') : f.includes('この条件で測った範囲は無い'))),
+      `${name}: before running, Δ ${slab.delta.toFixed(2)} → the ${thick ? 'thick-plate' : name === 'standard' ? 'standard' : 'other condition'} note, no ratio`,
       f.slice(f.indexOf('kN/mm') + 5),
     );
   }
@@ -185,6 +189,17 @@ try {
     console.log(`shot  ${shots}-thick.png`);
   }
   await narrow('central-burst', 'thick-narrow');
+
+  // ── the measured range under the chart belongs to the standard condition: another material must not borrow it
+  await c.navigate(page('?cells=6&L=8&autorun=1'));
+  await c.waitFor('__mpm.done', timeout);
+  const std = await legend('legend-force');
+  ok(std.includes('標準条件では 1.03〜1.07'), 'the standard pass quotes the measured range', std.slice(std.indexOf('スラブ法')));
+  await c.navigate(page('?cells=6&L=8&mat=s4340&r=35&autorun=1'));
+  await c.waitFor('__mpm.done', timeout);
+  const other = await legend('legend-force');
+  ok(!other.includes('標準条件では 1.03〜1.07') && other.includes('この条件で測った範囲は無い') && other.includes('目安'), 'another condition (4340, 35 %) says the range is not its own', other.slice(other.indexOf('スラブ法')));
+
   ok(c.errors.length === 0, 'no exceptions or console errors', c.errors.join(' | '));
 } finally {
   if (c) {

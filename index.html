@@ -24,6 +24,8 @@
           <span>条件</span>
           <select id="preset"></select>
         </label>
+        <!-- the conditions no longer match the named one (presetBadge.ts) -->
+        <span class="preset-custom" id="preset-custom" hidden></span>
         <button id="run" class="primary" type="button">圧延を始める</button>
         <button id="pause" type="button">一時停止</button>
         <button id="reset" type="button">条件を反映してやり直す</button>
@@ -73,6 +75,7 @@
         <div class="field-tabs" id="plan-tabs" role="radiogroup" aria-label="色で表す量（平面図）"></div>
         <div class="bite plan-bite">
           <canvas id="plan-canvas"></canvas>
+          <div class="view-tools plan-tools" id="plan-tools" aria-label="表示の操作（平面図）"></div>
           <div class="legend" id="plan-legend"></div>
           <div class="phase" id="plan-phase" aria-live="polite"></div>
         </div>

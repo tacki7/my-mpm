@@ -170,7 +170,7 @@ export function slabRatio(slab: SlabReference, steadyForce: number | null): numb
  * the ratio as a reference; otherwise the ratio against the standard condition's measured range
  * (docs/validation.md「スラブ法との比較」). The ratio appears once the steady phase has started.
  */
-export function forceNote(slab: SlabReference, steadyForce: number | null, stand?: number): string {
+export function forceNote(slab: SlabReference, steadyForce: number | null, stand?: number, standard = false): string {
   if (slab.outside) return '';
   const ratio = slabRatio(slab, steadyForce);
   const r = ratio != null ? ratio.toFixed(2) : null;
@@ -185,7 +185,10 @@ export function forceNote(slab: SlabReference, steadyForce: number | null, stand
   if (stand != null) return r != null ? `${of}定常の MPM / スラブ法 = ${r}` : '定常になると、表示中のスタンドの MPM / スラブ法 の比を出す';
   return (
     (r != null ? `定常の MPM / スラブ法 = ${r}。` : '定常になると MPM / スラブ法 の比を出す。') +
-    '標準条件では 1.03〜1.07（格子で動く。6 セル 3.24・10 セル 3.11 対 スラブ法 3.03 kN/mm）'
+    // the measured range is the standard condition's; on another pass it is only a landmark
+    (standard
+      ? '標準条件では 1.03〜1.07（格子で動く。6 セル 3.24・10 セル 3.11 対 スラブ法 3.03 kN/mm）'
+      : 'この条件で測った範囲は無い（目安: 標準条件 1 mm を 25 %・R 100 mm・μ 0.08・SPCC では 1.03〜1.07）')
   );
 }
 
@@ -288,6 +291,8 @@ export function drawForceChart(
   steadyForce: number | null,
   /** a tandem: when each stand began [ms], its condition (its entry thickness) and the strain it brings in; one stand: omitted */
   stands?: StandStart[],
+  /** the pass is the standard preset's (its measured range is the one the note may quote) */
+  standard = false,
 ): ForceChartData {
   const window = smoothingWindow(P);
   const smooth = movingAverage(t, F, window * 1e3);
@@ -320,7 +325,7 @@ export function drawForceChart(
     // where each stand after the first begins (the first begins at the chart's left edge)
     marks: tandem ? tandem.slice(1).map((sp, k) => ({ x: sp.t0, label: `#${k + 2}` })) : [],
   });
-  const note = forceNote(slab, steadyForce, tandem ? tandem.length : undefined);
+  const note = forceNote(slab, steadyForce, tandem ? tandem.length : undefined, standard);
   setLegend(legend, [
     item(INK, `移動平均（${fmtUs(window)}、揺れの周期の 2 倍）`),
     item(INK_FAINT, '1 フレームの平均', 'thin'),

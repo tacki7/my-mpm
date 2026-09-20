@@ -9,7 +9,7 @@ import { BiteView, fieldRange } from './view.ts';
 
 interface Slot {
   el: HTMLElement;
-  label: HTMLElement;
+  label: HTMLButtonElement;
   canvas: HTMLCanvasElement;
   view: BiteView;
 }
@@ -22,6 +22,10 @@ export class StandViews {
   private slots: Slot[] = [];
   stands = 1;
   current = 0;
+  /** a stand's number was pressed: the page shows that stand's readings (the running one: follow it again) */
+  onPick: ((stand: number) => void) | null = null;
+  /** the stand whose readings are on show (null: the running one, or the last after the pass) */
+  private picked: number | null = null;
   /** the pass is over (no stand is running) */
   private over = false;
 
@@ -62,9 +66,13 @@ export class StandViews {
       const canvas = document.createElement('canvas');
       canvas.className = 'stand-canvas';
       canvas.setAttribute('aria-hidden', 'true');
-      const label = document.createElement('span');
+      // the number is the control that picks the stand to read (the slot itself stays out of the way, so that the
+      // mouse reaches the live canvas under it)
+      const label = document.createElement('button');
+      label.type = 'button';
       label.className = 'stand-label';
       label.textContent = `#${k + 1}`;
+      label.addEventListener('click', () => this.onPick?.(k));
       el.append(canvas, label);
       row.append(el);
       const view = new BiteView(canvas);
@@ -96,6 +104,17 @@ export class StandViews {
     this.place();
   }
 
+  /** the frame a finished stand kept (null: it has none yet) */
+  frameOf(k: number): Frame | null {
+    return this.slots[k]?.view.frame ?? null;
+  }
+
+  /** which stand's readings are on show (null: the running one) */
+  setPicked(k: number | null): void {
+    this.picked = k;
+    this.place();
+  }
+
   /** the pass is over: no stand is running any more (a tandem that stopped early leaves the stands after it uncomputed) */
   finish(): void {
     this.over = true;
@@ -109,6 +128,15 @@ export class StandViews {
       s.canvas.hidden = k === this.current;
       s.label.textContent =
         k < this.current || (this.over && k === this.current) ? `#${k + 1}` : k === this.current ? `#${k + 1}（計算中）` : this.over ? `#${k + 1}（計算しない）` : `#${k + 1}（まだ）`;
+      // a stand can be read once it has a picture of its own, and the running one is always there to go back to
+      const ready = k <= this.current;
+      s.label.disabled = !ready;
+      s.label.setAttribute('aria-pressed', String(k === (this.picked ?? this.current)));
+      s.label.setAttribute(
+        'aria-label',
+        ready ? `スタンド ${k + 1} の結果を見る${k === this.current && !this.over ? '（計算中のスタンド）' : ''}` : `スタンド ${k + 1}（まだ計算していない）`,
+      );
+      s.el.classList.toggle('picked', k === this.picked);
     });
     const slot = this.slots[this.current];
     if (slot) slot.el.prepend(this.liveCanvas);

@@ -185,7 +185,52 @@ try {
     await c.screenshot(`${shots}-narrow.png`);
     console.log(`shot  ${shots}-narrow.png`);
   }
-  ok(c.errors.length === 0, 'no exceptions or console errors', c.errors.join(' | '));
+  // ── the whole strip: the picture frames the bite, and 全体を見る puts the strip's whole length inside it
+{
+  await c.navigate(page('?view=plan&W=20&wcells=10&L=28&damage=none&autorun=1'));
+  await c.waitFor('__mpm.plan.done', 300000);
+  await painted();
+  // the ink of the drawn points, by canvas column: does it reach the right edge?
+  const edge = () =>
+    c.evaluate(`(() => {
+      const cv = document.getElementById('plan-canvas');
+      const g = cv.getContext('2d');
+      const d = g.getImageData(0, 0, cv.width, cv.height).data;
+      // the points are drawn in the field's colours; the bite's band, the dashed lines and the notes are ink or
+      // steel over the paper, which is grey once composited (the raw pixels of a translucent ink line are not).
+      // Only the rows above the mid-width are read: the note 「板幅の中央」 sits at the right edge on that line
+      const col = (x) => {
+        for (let y = Math.floor(cv.height * 0.15); y < cv.height * 0.45; y += 3) {
+          const i = 4 * (y * cv.width + x);
+          const a = d[i + 3] / 255;
+          if (a < 0.03) continue;
+          const p = [0, 1, 2].map((k) => d[i + k] * a + [230, 233, 231][k] * (1 - a));
+          if (Math.abs(p[0] - p[1]) > 12 || Math.abs(p[1] - p[2]) > 12) return true;
+        }
+        return false;
+      };
+      let right = 0;
+      for (let x = cv.width - 1; x >= 0; x--) if (col(x)) { right = x; break; }
+      return { right, width: cv.width, margin: cv.width - 1 - right };
+    })()`);
+  const bite = await edge();
+  // (a version without the button answers with empty words, so this reads as a plain failure)
+  const button = () => c.evaluate(`(() => { const b = document.querySelector('#plan-tools button'); return b ? { text: b.textContent, pressed: b.getAttribute('aria-pressed') } : { text: '(no button)', pressed: null }; })()`);
+  const before = await button();
+  await c.evaluate(`document.querySelector('#plan-tools button')?.click(); true`);
+  await painted();
+  const whole = await edge();
+  const after = await button();
+  ok(bite.margin < 4 && whole.margin > 8 && before.pressed === 'false' && after.pressed === 'true' && after.text.includes('バイト'),
+    'after the pass the strip runs off the right edge; 全体を見る brings its whole length inside',
+    `right edge ${bite.right}/${bite.width} → ${whole.right}/${whole.width} (margin ${bite.margin} → ${whole.margin} px), 「${before.text}」 → 「${after.text}」`);
+  await c.evaluate(`document.querySelector('#plan-tools button')?.click(); true`);
+  await painted();
+  const back = await edge();
+  ok(back.margin < 4 && (await button()).pressed === 'false', 'pressing it again frames the bite as before', `margin ${back.margin} px`);
+}
+
+ok(c.errors.length === 0, 'no exceptions or console errors', c.errors.join(' | '));
 } finally {
   if (c) {
     await c.navigate('about:blank').catch(() => {});
