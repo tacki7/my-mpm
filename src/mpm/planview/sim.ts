@@ -95,6 +95,13 @@ export class PlanSim {
   readonly gMv: Float64Array;
   /** the in-plane volumetric rate is smoothed over the grid ('rate'); false: point by point, as before T63 */
   readonly averaged: boolean;
+  // what the averaging did this step, for the checks: the rate each point used, the in-plane trace its constitutive
+  // update saw, which points were in the averages, and how many failed points went in (compression) or stayed out
+  readonly thUsed: Float64Array;
+  readonly trIn: Float64Array;
+  readonly inAvg: Uint8Array;
+  avgFailedIn = 0;
+  avgFailedOut = 0;
   private readonly gpush: Uint8Array;
   /** length of the node arrays: the nodes, and with crackFields 'dfg' the second field's nodes after them */
   readonly NN: number;
@@ -306,9 +313,13 @@ export class PlanSim {
     this.dyy = F();
     this.rate = F();
     this.vr = F();
-    // the same switch as the section model: 'rate' unless J-bar is off (or 'total', the old whole-J J-bar, which the
-    // plan view does not have — it then runs point by point, as it did before the averaging)
-    this.averaged = (num.jbar ?? true) && (num.volumetric ?? 'rate') !== 'total';
+    this.thUsed = F();
+    this.trIn = F();
+    this.inAvg = new Uint8Array(n);
+    // the same switch as the section model, except that the plan view has only this scheme: 'total' (the section's old
+    // whole-J J-bar, kept there for comparison) smooths the rate here too. J-bar off runs point by point, as the plan
+    // view did before the averaging
+    this.averaged = num.jbar ?? true;
     this.ep = F();
     this.seq = F();
     this.eta = F();
@@ -897,8 +908,13 @@ export class PlanSim {
     gMv.fill(0, 0, end);
     const inAvg = (p: number): boolean => {
       const J = this.f00[p] * this.f11[p] - this.f01[p] * this.f10[p];
-      return J > 0 && !(this.failed[p] && !(this.pres[p] > 0));
+      const yes = J > 0 && !(this.failed[p] && !(this.pres[p] > 0));
+      if (this.failed[p]) yes ? this.avgFailedIn++ : this.avgFailedOut++;
+      return yes;
     };
+    this.avgFailedIn = 0;
+    this.avgFailedOut = 0;
+    this.inAvg.fill(0);
     // pass 1
     for (let p = 0; p < n; p++) {
       if (!active[p]) continue;
@@ -957,6 +973,7 @@ export class PlanSim {
       this.vx[p] = vx;
       this.vz[p] = vz;
       if (!inAvg(p)) continue;
+      this.inAvg[p] = 1;
       const m = mass[p];
       const mth = m * (l00 + l11);
       const mfe = -m * this.pres[p] * invK;
@@ -979,7 +996,10 @@ export class PlanSim {
     const kSym = Math.round((0 - oz) / h);
     const halves = pf !== null ? 2 : 1;
     for (let half = 0; half < halves; half++) {
-      for (let i = 0; i < nxN; i++) {
+      // the second field has mass only on the failed points' columns (gridUpdate does the same)
+      const from = half === 0 ? 0 : this.fcLo;
+      const to = half === 0 ? nxN : this.fcHi;
+      for (let i = from; i < to; i++) {
         const col = i * nzN + half * nNodes;
         for (let k = 0; k < kSym; k++) {
           const g = col + k;
@@ -1019,23 +1039,28 @@ export class PlanSim {
       const l11 = this.c11[p];
       let th = l00 + l11;
       let cor = 1;
-      if (inAvg(p)) {
+      if (this.inAvg[p]) {
         const gx = (xp - ox) * invH;
         const gz = (zp - oz) * invH;
         const bx = Math.floor(gx - 0.5);
         const bz = Math.floor(gz - 0.5);
         const fx = gx - bx;
         const fz = gz - bz;
-        const wxs = [0.5 * (1.5 - fx) * (1.5 - fx), 0.75 - (fx - 1) * (fx - 1), 0.5 * (fx - 0.5) * (fx - 0.5)];
-        const wzs = [0.5 * (1.5 - fz) * (1.5 - fz), 0.75 - (fz - 1) * (fz - 1), 0.5 * (fz - 0.5) * (fz - 0.5)];
+        const wx0 = 0.5 * (1.5 - fx) * (1.5 - fx);
+        const wx1 = 0.75 - (fx - 1) * (fx - 1);
+        const wx2 = 0.5 * (fx - 0.5) * (fx - 0.5);
+        const wz0 = 0.5 * (1.5 - fz) * (1.5 - fz);
+        const wz1 = 0.75 - (fz - 1) * (fz - 1);
+        const wz2 = 0.5 * (fz - 0.5) * (fz - 0.5);
         const fb = pf !== null && this.pfAny[p] ? 9 * p : -1;
         let tbar = 0;
         let rA = 0;
         let rB = 0;
         for (let ii = 0; ii < 3; ii++) {
+          const wx = ii === 0 ? wx0 : ii === 1 ? wx1 : wx2;
           const col = (bx + ii) * nzN + bz;
           for (let jj = 0; jj < 3; jj++) {
-            const w = wxs[ii] * wzs[jj];
+            const w = wx * (jj === 0 ? wz0 : jj === 1 ? wz1 : wz2);
             const idx = fb >= 0 && pf![fb + 3 * ii + jj] ? col + jj + nNodes : col + jj;
             tbar += w * gTh[idx];
             rA += w * gFe[idx];
@@ -1048,6 +1073,7 @@ export class PlanSim {
         const r = (Jold * Math.exp(dt * th)) / Jtr;
         cor = r > 0 ? Math.sqrt(r) : 1;
       }
+      this.thUsed[p] = th;
       const nx = xp + dt * this.vx[p];
       let nz = zp + dt * this.vz[p];
       if (nz < 0) nz = 0;
@@ -1080,6 +1106,7 @@ export class PlanSim {
    * the 3D deviatoric stress with the J2 return, the pressure, the damage indicators.
    */
   private constitutive(p: number, l00: number, l01: number, l10: number, l11: number, x: number): void {
+    this.trIn[p] = l00 + l11; // the in-plane trace the deviatoric update sees ('rate': the smoothed θ)
     const P = this.params;
     const dt = this.dt;
     const { G } = this.el;

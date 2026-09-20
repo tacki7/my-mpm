@@ -13,7 +13,7 @@
 // half width. --notch cuts a semicircular notch of that radius into the edge half-way along
 // the strip. --crack dfg splits the points near a crack into two velocity fields (docs/model.md
 // 「亀裂の面」). --nojbar turns the volume averaging off and runs the volumes point by point, as the plan view did
-// before T63 (docs/model.md「体積の平均化」). Steady values are means over the samples (every 250 steps) in the steady phase while
+// before T63 (docs/model.md「体積の平均化」); 'total' has no meaning here and smooths the rate like 'rate'. Steady values are means over the samples (every 250 steps) in the steady phase while
 // the head is at least a gap past the exit and the tail at least a gap before the entry: the gap is
 // 8 mm or the half width, whichever is more (--gap sets it): the middle's load settles only a half
 // width past the exit and falls again within about a half width of the entry. A strip too short for
@@ -55,7 +55,7 @@ const W = +opt('W', 20) * 1e-3;
 const notch = +opt('notch', 0) * 1e-3;
 const P = planCondition(base, { width: W, cells: +opt('cells', 20), notch });
 const sim = new PlanSim(P);
-say(`volumes ${sim.averaged ? "smoothed over the grid ('rate')" : 'point by point (J-bar off)'}`);
+say(`volumes ${sim.averaged ? "smoothed over the grid (the plan view's only scheme; 'total' smooths too)" : 'point by point (J-bar off)'}`);
 say(`plan view: W ${(W * 1e3).toFixed(1)} mm (W/h0 ${(W / r.h0).toFixed(0)}), ${sim.n} points, h ${(sim.h * 1e3).toFixed(3)} mm, dt ${sim.dt.toExponential(3)} s`);
 
 // Wusatowski (1955): W1/W0 = (h1/h0)^(−w), w = 10^(−1.269 (W0/h0) (h0/D)^0.556), D the roll diameter

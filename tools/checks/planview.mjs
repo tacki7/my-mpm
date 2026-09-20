@@ -303,5 +303,66 @@ ok(!!c && Math.abs(c.sheetX - L / 2) < notch + 0.5e-3 && c.sheetZ > W / 2 - notc
   between(rate.p95 / rate.mean, 0, 0.25, "'rate': the same jump, smoothed");
 }
 
+// ── what the averaging must obey, step by step (T63 review): it only moves the in-plane volumetric rate between the
+//    points, so Σ m θ̄ = Σ m θ over the points it takes (the relaxation is mass-symmetric and cancels in the sum), and
+//    the deviatoric update must see exactly the rate it gave each point. With the faces split ('dfg') the sums have to
+//    close on each field's nodes as well. A failed point under compression takes part, one in tension does not (T46).
+//    Calibrated on copies, each failing one item: the fold of the averages across the plane removed (Σ m θ off by
+//    3.8e-4; here 1.5e-15), the means handed back to the ghosts with a flipped sign (2.5e-3), the second field reading
+//    the first field's means (7.8e-3 on the 'dfg' run), the deviatoric update not taking the smoothed trace (1.0), and
+//    the two halves of T46 (failed points in tension let in, failed points in compression kept out).
+{
+  // a cut through two lattice columns from the edge, failed at the start: the second field is there from the first
+  // step, and the cut's points are under compression through the bite and in tension outside it
+  const watch = (crackFields, steps) => {
+    const s = new PlanSim(condition((b) => {
+      b.rolling.sheetLength = 12e-3;
+      b.numerics.crackFields = crackFields;
+    }));
+    const i0 = Math.floor(s.NI / 3);
+    for (const i of [i0, i0 + 1]) {
+      for (let k = Math.round(s.NK / 2); k < s.NK; k++) {
+        const q = s.lattice[i * s.NK + k];
+        s.failed[q] = 1;
+        s.crackId[q] = 0;
+      }
+    }
+    s.cracks.push({ id: 0, t: 0, step: 0, x: 0, z: 0, sheetX: 0, sheetZ: 0, eta: 0, s1: 0, seq: 0, ep: 0, criterion: 'none', count: s.NK });
+    const w = { sum: 0, trace: 0, looks: 0, split: 0, failedIn: 0, failedOut: 0, failedSteps: 0 };
+    while (s.step < steps) {
+      s.advance();
+      let a = 0;
+      let b2 = 0;
+      let scale = 0;
+      for (let p = 0; p < s.n; p++) {
+        if (!s.active[p] || !s.inAvg[p]) continue;
+        const th = s.c00[p] + s.c11[p];
+        a += s.mass[p] * s.thUsed[p];
+        b2 += s.mass[p] * th;
+        scale += s.mass[p] * Math.abs(th);
+        w.trace = Math.max(w.trace, Math.abs(s.trIn[p] - s.thUsed[p]) / (Math.abs(s.c00[p]) + Math.abs(s.c11[p]) + Math.abs(s.thUsed[p])));
+        w.looks++;
+      }
+      if (scale > 0) w.sum = Math.max(w.sum, Math.abs(a - b2) / scale);
+      if (s.pf) w.split++;
+      w.failedIn += s.avgFailedIn;
+      w.failedOut += s.avgFailedOut;
+      if (s.avgFailedIn > 0) w.failedSteps++;
+    }
+    return w;
+  };
+  const one = watch('none', 1200);
+  const two = watch('dfg', 1200);
+  ok(one.looks > 1e5 && one.sum < 1e-12 && two.sum < 1e-12 && two.split > 1000,
+    'the averaging moves the volumetric rate between the points and keeps Σ m θ (one field and with the faces split)',
+    `worst ${one.sum.toExponential(1)} / ${two.sum.toExponential(1)} over ${one.looks} point-steps, ${two.split} steps with a second field`);
+  ok(one.trace < 1e-12 && two.trace < 1e-12, 'the deviatoric update sees the rate the averaging gave the point', `worst ${Math.max(one.trace, two.trace).toExponential(1)}`);
+  // T46: a failed point in compression is in the averages (the grid's scatter gave it pressure spikes otherwise), one
+  // in tension is not (an opening crack must not dilate its neighbours)
+  ok(one.failedIn > 1000 && one.failedOut > 1000 && two.failedIn > 1000,
+    'failed points: those under compression take part in the averages, those in tension do not (T46)',
+    `${one.failedIn} in / ${one.failedOut} out over ${one.failedSteps} steps (one field), ${two.failedIn} in with the faces split`);
+}
+
 ok(ps.looks > 0 && ps.worst <= 1e4, 'off the rolls: plane stress, |σ_yy| ≤ 0.01 MPa after every step of every run', `max ${(ps.worst * 1e-6).toExponential(2)} MPa (${ps.where}) over ${ps.looks} looks`);
 done();
