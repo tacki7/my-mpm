@@ -27,11 +27,30 @@
 import { biteGeometry, type DamageModel, type Defect, type SimParams } from '../params.ts';
 import { elasticConstants, flowStress, hmFractureStrain, homologousTemperature, jcFractureStrain, plasticIncrement, type Elastic } from '../material.ts';
 
+/**
+ * The edge's ductility varies along the strip (its microstructure, inclusion streaks, trimming marks), which is why
+ * real edge cracks sit apart from each other instead of forming one band along the edge. Within `width` of each edge
+ * a point's ductility is multiplied by 1 − amount·u, u ∈ [0, 1) from a seeded generator: the same conditions give the
+ * same strip. `length` is how far along the rolling direction one drawn value holds (one value across the band's
+ * width); 0 draws per point, which ties the scatter to the grid. docs/model.md「端の延性のばらつき」.
+ */
+export interface EdgeScatter {
+  /** from each edge [m] */
+  width: number;
+  /** the largest relative drop of the ductility (0.2: ductility 0.8 to 1) */
+  amount: number;
+  /** one drawn value holds over this length along the strip [m]; 0: per point */
+  length: number;
+  seed: number;
+}
+
 export interface PlanViewParams {
   /** full strip width at the entry [m] */
   width: number;
   /** grid cells across the half width */
   cellsHalfWidth: number;
+  /** the edge band's ductility along the strip (amount 0: none, the default) */
+  edgeScatter?: EdgeScatter;
 }
 
 export interface PlanSimParams extends SimParams {
@@ -262,6 +281,7 @@ export class PlanSim {
     const lattice = new Int32Array(NI * NK).fill(-1);
     const keep: number[] = [];
     const ductOf: number[] = [];
+    const sc = P.plan.edgeScatter;
     for (let i = 0; i < NI; i++) {
       for (let k = 0; k < NK; k++) {
         const X = xTail0 + (i + 0.5) * dp;
@@ -272,6 +292,11 @@ export class PlanSim {
         for (const d of P.defects) if (inside(d, sx, Z)) {
           if (d.kind === 'void') skip = true;
           else duct = Math.min(duct, d.ductility ?? 1);
+        }
+        // the edge band's ductility, drawn once per `length` of strip (or per point)
+        if (sc && sc.amount > 0 && Z > W2 - sc.width) {
+          const cell = sc.length > 0 ? Math.floor(sx / sc.length) : i * NK + k;
+          duct *= 1 - sc.amount * random01(sc.seed, cell);
         }
         if (skip) continue;
         lattice[i * NK + k] = keep.length;
@@ -1515,6 +1540,16 @@ export class PlanSim {
       })),
     };
   }
+}
+
+/** mulberry32 on (seed, cell): the same conditions draw the same numbers, and neighbouring cells are independent */
+function random01(seed: number, cell: number): number {
+  let a = (Math.imul(cell + 1, 0x9e3779b9) + Math.imul(seed + 1, 0x85ebca6b)) >>> 0;
+  a = (a + 0x6d2b79f5) >>> 0;
+  let t = a;
+  t = Math.imul(t ^ (t >>> 15), t | 1);
+  t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+  return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
 }
 
 function inside(d: Defect, x: number, z: number): boolean {
