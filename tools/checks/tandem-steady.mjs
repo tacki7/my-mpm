@@ -7,10 +7,12 @@
 // - its length is steadyLength, its mass ρ h1 L, and it is long enough: the second stand gets to a 'steady'
 //   handoff too
 // - the second stand's steady force is the whole-sheet handoff's (3.664 kN/mm, docs/validation.md「タンデム」)
+// - a stand's mean deformation resistance (StandResult.meanFlowStress) is the slab method's 2k mean, within −1 to +3 %
 // - a sheet too short to get there is carried whole, bit for bit as with handoff 'done'
 // @check
 import { ok, between, near, done } from './lib.mjs';
 import { defaultParams } from '../../src/mpm/params.ts';
+import { karman } from '../../src/mpm/slab.ts';
 import { READ_STEPS, STEADY_READS, TandemSim, steadyLength, steadySample } from '../../src/mpm/tandem.ts';
 
 const params = (L) => {
@@ -91,6 +93,14 @@ const params = (L) => {
   ok(b.result.phase === 'steady' && b.readings >= STEADY_READS, 'stand 2 hands on while steady (its sheet is long enough)', `${b.result.phase}, ${b.readings} steady readings, step ${b.result.steps}`);
   near(b.result.steadyForce, 3.664e6, 0.02, "stand 2's steady force is the whole-sheet handoff's");
   near(b.result.thicknessOut, 0.5601e-3, 3e-3, "stand 2's sheet out is the whole-sheet handoff's");
+
+  // the mean deformation resistance in the bite (2k along the contact length, at the points' own εp) is the slab
+  // method's with the strain of the stand before, a little over it (the redundant shear: +0.2 to +0.5 % at 6 cells, +1.4 % at 4)
+  const c = 2 / Math.sqrt(3);
+  const slab1 = karman(a.sim.params.rolling, a.sim.params.material).twoKMean;
+  const slab2 = karman(b.sim.params.rolling, b.sim.params.material, 2000, c * Math.log(a.sim.params.rolling.h0 / b.sim.params.rolling.h0)).twoKMean;
+  between(a.result.meanFlowStress / slab1, 0.99, 1.03, "stand 1's mean deformation resistance over the slab method's 2k mean");
+  between(b.result.meanFlowStress / slab2, 0.99, 1.03, "stand 2's, the slab method's with stand 1's strain brought in");
 }
 
 // ── too short a sheet: carried whole, as with 'done'

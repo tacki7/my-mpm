@@ -355,7 +355,7 @@ function onFrame(f: Frame) {
 /** the steady means a finished stand kept in its result (a picked stand's readouts; null: not finished) */
 function steadyOf(k: number): SteadyMeans | null {
   const r = standResults[k];
-  return r ? { readings: r.steadyForce != null ? 1 : 0, force: r.steadyForce, torque: r.steadyTorque, exitThickness: r.exitThickness, forwardSlip: r.forwardSlip } : null;
+  return r ? { readings: r.steadyForce != null ? 1 : 0, force: r.steadyForce, torque: r.steadyTorque, exitThickness: r.exitThickness, forwardSlip: r.forwardSlip, meanFlowStress: r.meanFlowStress } : null;
 }
 
 /** the frame whose numbers are on show: the stand the reader picked, else the newest */
