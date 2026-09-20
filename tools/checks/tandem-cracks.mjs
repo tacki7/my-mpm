@@ -7,6 +7,11 @@
 //   a crack of stand 1 that does not grow adds 0 in stand 2 (the finer lattice's recount is not growth), and
 //   what fails in stand 2, into an old crack or a new one, counts there; a crack of stand 1 is in stand 2
 //   with its records and points
+// The stand a crack is born in is read from a damage that crosses 1, so a point left at D just under 1 at the
+// end of a stand is a coin toss between the two builds of node (the last bit of Math.exp / log, as CLAUDE.md
+// has it for Chrome and node): the ductility of the milder band below keeps the highest damage of a point that
+// did not fail at about 0.69 at the end of stand 1, far from 1. Moving it near the boundary is what made this
+// check pass on macOS and fail on the CI (ubuntu) once. When you move these conditions, check the CI too.
 // @check
 import { ok, done } from './lib.mjs';
 import { Sim } from '../../src/mpm/solver.ts';
@@ -92,7 +97,7 @@ function bands(du2) {
   ok(st && st.failed > st.failedBefore && st.counted === st.failed && st.centroids === st.records, 'and its failed points (more of them on the finer lattice), each in its crack', `${st?.failedBefore} → ${st?.failed} failed points`);
 }
 {
-  const t = bands(0.02); // the milder band fails in stand 2: the old cracks grow and a new one starts
+  const t = bands(0.03); // the milder band fails in stand 2: the old cracks grow and new ones start
   const [r0, r1] = t.results;
   const rec = t.sim.cracks;
   const born2 = rec.filter((c) => c.stand === 1);
