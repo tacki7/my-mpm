@@ -162,7 +162,9 @@ const scenes = {
     }
   },
   async plan() {
-    await planScene('', 'plan-edge-crack.png');
+    // 'none' is written out: the faces of a crack are split by default since T74, and this picture is the pair's
+    // 'do not split' half (plan-dfg below is the default)
+    await planScene('&crack=none', 'plan-edge-crack.png');
   },
   async 'plan-dfg'() {
     await planScene('&crack=dfg', 'plan-edge-crack-dfg.png');

@@ -42,9 +42,13 @@ if (c) {
   between(c.eta, 0.4, 1, 'in tension (plane-strain tension η = 0.58)');
 }
 
-// ── the grip rule: with the front tension on, gripped points pushed past D = 1 keep flowing without failing
+// ── the grip rule: with the front tension on, gripped points pushed past D = 1 keep flowing without failing.
+// Read it before the strip breaks: once it has, the faces of the crack separate (the default 'dfg') and the head
+// piece flies free, so its points stop flowing and the positive control (flowed > 0) would say nothing
 {
-  const { sim } = above;
+  const sim = new Sim(build());
+  while (sim.step < 40000 && !(sim.frontNow > 0 && sim.phase() === 'steady')) sim.advance();
+  for (let k = 0; k < 250; k++) sim.advance();
   const grip = [];
   for (let p = 0; p < sim.n; p++) if (sim.li[p] >= sim.NI - sim.gripCols && sim.active[p]) grip.push(p);
   const ep0 = grip.map((p) => sim.ep[p]);
@@ -52,7 +56,7 @@ if (c) {
   for (let k = 0; k < 1000; k++) sim.advance();
   const flowed = grip.filter((p, i) => sim.ep[p] > ep0[i]).length;
   const failed = grip.filter((p) => sim.failed[p]).length;
-  ok(sim.frontNow > 0 && flowed > 0 && failed === 0, 'front tension on: gripped points with damage past 1 keep flowing without failing', `${grip.length} in the head grip, ${flowed} flowed, ${failed} failed`);
+  ok(sim.frontNow > 0 && sim.diagnostics().nFailed === 0 && flowed > 0 && failed === 0, 'front tension on, before the strip breaks: gripped points with damage past 1 keep flowing without failing', `${grip.length} in the head grip, ${flowed} flowed, ${failed} failed`);
 }
 // ... and before the front tension is switched on (the head still in the bite) they are ordinary points
 {

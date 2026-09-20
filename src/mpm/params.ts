@@ -156,10 +156,10 @@ export interface NumericsParams {
   /** which nodes the roll contact constrains */
   contact: ContactScheme;
   /**
-   * The faces of a crack (docs/model.md「亀裂の面」). 'none' (default): one velocity field, the two sides of a
-   * crack share the nodes around it. 'dfg': near a crack the points split, node by node, into two velocity fields
-   * by the side of the crack they are on (the gradient of the failed points' field, Homel & Herbold 2017); the
-   * fields meet by frictionless contact: they do not go through each other and are free to separate
+   * The faces of a crack (docs/model.md「亀裂の面」). 'dfg' (the default since T74): near a crack the points
+   * split, node by node, into two velocity fields by the side of the crack they are on (the gradient of the failed points' field, Homel & Herbold 2017); the
+   * fields meet by frictionless contact: they do not go through each other and are free to separate.
+   * 'none': one velocity field, the two sides of a crack share the nodes around it (what an omitted field means too)
    */
   crackFields?: 'none' | 'dfg';
   /**
@@ -327,7 +327,7 @@ export function defaultParams(): SimParams {
       volumetric: 'rate',
       volRelax: 1,
       volRelaxContact: 1,
-      crackFields: 'none',
+      crackFields: 'dfg',
       contact: 'surface',
     },
     defects: [],
