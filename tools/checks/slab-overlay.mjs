@@ -93,10 +93,14 @@ for (const [id, mod, want] of [
   const std = slabReference(presetById('standard').build());
   const lc = Math.sqrt(0.1 * 0.25e-3 - 0.25e-3 ** 2 / 4);
   near(std.delta, 0.875e-3 / lc, 1e-12, 'standard: Δ = mean thickness / contact length (0.875 / 5.00 mm)');
-  const before = forceNote(std, null);
-  ok(before.includes('定常になると') && before.includes('標準条件では') && !before.includes('板が厚い'), 'standard, before the steady phase: no ratio, the standard range', before);
-  const steady = forceNote(std, 1.0712 * std.force);
-  ok(steady.includes('定常の MPM / スラブ法 = 1.07。') && steady.includes('標準条件では'), 'standard, steady: the ratio 1.07 and the standard range', steady);
+  // the last argument says the pass is the standard preset's, whose measured range the note may quote
+  const before = forceNote(std, null, undefined, true);
+  ok(before.includes('定常になると') && before.includes('標準条件では 1.03〜1.07') && !before.includes('板が厚い'), 'standard, before the steady phase: no ratio, the standard range', before);
+  const steady = forceNote(std, 1.0712 * std.force, undefined, true);
+  ok(steady.includes('定常の MPM / スラブ法 = 1.07。') && steady.includes('標準条件では 1.03〜1.07'), 'standard, steady: the ratio 1.07 and the standard range', steady);
+  // another condition gets the ratio, but the range is named as the standard condition's, not its own
+  const other = forceNote(std, 1.0712 * std.force, undefined, false);
+  ok(other.includes('定常の MPM / スラブ法 = 1.07。') && other.includes('この条件で測った範囲は無い') && other.includes('目安'), 'another condition: the ratio, and the range named as the standard condition\'s', other);
   near(slabRatio(std, 1.0712 * std.force), 1.0712, 1e-9, 'standard: MPM / slab = the steady force over the slab force');
 
   const P = presetById('central-burst').build();
