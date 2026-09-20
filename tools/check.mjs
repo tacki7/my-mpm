@@ -53,6 +53,11 @@ const SELF = fileURLToPath(import.meta.url);
 const LIMIT_S = 180;
 // `// @check` on its own line, or `// @check 300s` for a script with its own limit.
 const MARK = /^\/\/\s*@check(?:\s+(\d+)\s*s)?\s*$/;
+// A line that meant to be the mark. `// @check 5m` and `// @check 300` are not
+// MARK, and a script whose mark is misspelt simply does not join the gate — the
+// worst way for a gate to break, since it then reports that everything passed.
+// So anything that starts as the mark and is not one is an error, not a miss.
+const LOOKS = /^\/\/\s*@check\b/;
 // What a normal run of each script took, from the last time it passed here. Only
 // used to say "normally M s" next to a script the watchdog killed; a fresh clone
 // (CI) simply has no record yet.
@@ -71,14 +76,26 @@ function scripts(dir) {
 
 const posix = (p) => relative(ROOT, p).split(sep).join('/');
 const checks = [];
+const malformed = [];
 for (const file of scripts(TOOLS).filter((f) => f !== SELF).map(posix).sort()) {
-  for (const line of readFileSync(join(ROOT, file), 'utf8').split('\n')) {
-    const m = MARK.exec(line);
+  const lines = readFileSync(join(ROOT, file), 'utf8').split('\n');
+  let marked = false;
+  for (let i = 0; i < lines.length; i++) {
+    const m = MARK.exec(lines[i]);
     if (m) {
-      checks.push({ file, limitS: m[1] ? Number(m[1]) : LIMIT_S });
-      break;
+      if (!marked) checks.push({ file, limitS: m[1] ? Number(m[1]) : LIMIT_S });
+      marked = true;
+    } else if (LOOKS.test(lines[i])) {
+      malformed.push({ file, line: i + 1, text: lines[i].trim() });
     }
   }
+}
+
+if (malformed.length) {
+  say('a line that looks like the @check mark but is not — the script would be left out of the gate:');
+  for (const b of malformed) say(`  ${b.file}:${b.line}  ${b.text}`);
+  say('\nwrite `// @check` on its own line, or `// @check 300s` for a limit in whole seconds.');
+  process.exit(1);
 }
 
 if (process.argv.includes('--list')) {
@@ -97,9 +114,12 @@ try {
 // The child runs in its own process group so that killing it on a timeout also
 // kills anything it spawned (neutral-point.mjs runs tools/run.mjs). That group
 // is not the terminal's foreground group any more, so Ctrl-C reaches only this
-// process — hence the relay below.
+// process — hence the relay below (SIGHUP too: the child is in another session
+// and does not get the hangup when the terminal closes). A SIGKILL to this
+// process cannot be relayed, so the running child is then orphaned and has to be
+// killed by hand; before the group it would have died with the terminal.
 let group = 0;
-for (const sig of ['SIGINT', 'SIGTERM']) {
+for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
   process.on(sig, () => {
     if (group) {
       try {
