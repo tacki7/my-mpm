@@ -430,6 +430,7 @@ export class PlanMode {
     const mmOf = (v: number) => +(v * 1e3).toFixed(3);
     this.$('plan-results-note').textContent =
       `定常の値は、頭端が出口の先に、尾端が入口の手前にそれぞれ ${mmOf(gap)} mm（8 mm か半幅の大きい方）以上ある間の平均（${SAMPLE_NOTE}）。` +
+      WIDTH_LOAD_NOTE +
       (steady
         ? ''
         : none
@@ -559,3 +560,6 @@ export class PlanMode {
 }
 
 const SAMPLE_NOTE = '250 ステップごと、tools/planview.mjs と同じ読み方';
+// the load's distribution across the width is not quantitative, its total is (docs/model.md「平面図モデル」の「使える範囲」)
+const WIDTH_LOAD_NOTE =
+  '半幅平均は平面ひずみと ±1 % で合うが、中央の単位幅荷重は定量でない: 端の影響が端から 20〜27 mm に及び、標準条件の板幅 20〜60 mm では中央が平面ひずみより約 3 割高く出る。';
