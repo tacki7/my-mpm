@@ -45,7 +45,7 @@ p.damage.gtn.nucleation = 'always';
 p.numerics.cellsThrough = 7;
 p.numerics.jbar = false;
 p.numerics.cfl = 0.33;
-p.numerics.crackFields = 'dfg';
+p.numerics.crackFields = 'none';  // 'dfg' is the default, so 'none' is what has to travel
 p.defects = [
   { kind: 'void', x: 2.5e-3, y: 0.1e-3, ax: 0.3e-3, ay: 0.08e-3 },
   { kind: 'weak', x: 4e-3, y: -0.2e-3, ax: 0.9e-3, ay: 0.25e-3, ductility: 0.35 },
@@ -53,9 +53,11 @@ p.defects = [
 const { q, back } = roundTrip('standard', p);
 ok(same(back, p), 'conditions changed everywhere come back exactly', same(back, p) ? `${q.toString().length} characters` : JSON.stringify(back));
 ok(q.has('h0') && q.has('mu') && q.has('mat') && q.has('cond'), 'the common ones stay readable, the rest goes in cond', [...q.keys()].join(' '));
-ok(q.get('crack') === 'dfg', 'the faces of a crack (numerics.crackFields) go as crack=', q.get('crack') ?? 'missing');
-ok(applyQuery(PRESETS[0].build(), new URLSearchParams('crack=dfg')).numerics.crackFields === 'dfg' && applyQuery(PRESETS[0].build(), new URLSearchParams('crack=wide')).numerics.crackFields === 'none',
-  'crack=dfg sets it, an unknown value is ignored');
+ok(q.get('crack') === 'none', 'the faces of a crack (numerics.crackFields) go as crack=', q.get('crack') ?? 'missing');
+ok(applyQuery(PRESETS[0].build(), new URLSearchParams('crack=none')).numerics.crackFields === 'none'
+  && applyQuery(PRESETS[0].build(), new URLSearchParams('crack=dfg')).numerics.crackFields === 'dfg'
+  && applyQuery(PRESETS[0].build(), new URLSearchParams('crack=wide')).numerics.crackFields === 'dfg',
+  'crack=none and crack=dfg set it, an unknown value leaves the default');
 
 // a cond that is not ours
 const base = PRESETS[0].build();

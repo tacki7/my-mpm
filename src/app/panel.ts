@@ -179,8 +179,8 @@ export function buildPanel(root: HTMLElement, onEdit: () => void): Panel {
   );
   matGroup.append(
     select('crack', '亀裂の面', [
-      ['none', '分けない（1 つの速度場）'],
       ['dfg', '場を分ける（面が開く）'],
+      ['none', '分けない（1 つの速度場）'],
     ]),
   );
 

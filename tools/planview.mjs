@@ -13,7 +13,7 @@
 // Lengths in mm, tensions in MPa; --W is the full width, --cells the grid cells across the
 // half width. --notch cuts a semicircular notch of that radius into the edge half-way along
 // the strip. --crack dfg splits the points near a crack into two velocity fields (docs/model.md
-// 「亀裂の面」). --nojbar turns the volume averaging off and runs the volumes point by point, as the plan view did
+// 「亀裂の面」; the default, so --crack none is what turns it off). --nojbar turns the volume averaging off and runs the volumes point by point, as the plan view did
 // before T63 (docs/model.md「体積の平均化」); 'total' has no meaning here and smooths the rate like 'rate'. Steady values are means over the samples (every 250 steps) in the steady phase while
 // the head is at least a gap past the exit and the tail at least a gap before the entry: the gap is
 // 8 mm or the half width, whichever is more (--gap sets it): the middle's load settles only a half
@@ -49,7 +49,7 @@ base.numerics.cfl = +opt('cfl', base.numerics.cfl);
 base.damage.model = opt('damage', 'none');
 base.damage.clCrit = +opt('cl', base.damage.clCrit);
 if (args.includes('--nojbar')) base.numerics.jbar = false;
-const crack = opt('crack', 'none');
+const crack = opt('crack', base.numerics.crackFields); // the default is the params' ('dfg' since T74)
 if (crack !== 'none' && crack !== 'dfg') throw new Error(`--crack ${crack}: none or dfg`);
 base.numerics.crackFields = crack;
 const W = +opt('W', 20) * 1e-3;
