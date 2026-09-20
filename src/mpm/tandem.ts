@@ -9,6 +9,10 @@
 // by the material along the row ("remap"). The lattice is rebuilt because the sheet thins and lengthens:
 // carried as they are, the points would sit 1/(1 − r)² times further apart along x than the grid
 // (h = h0 / cells) is made for. The tandem stops early at a stall, a strip break or points lost off the grid.
+//
+// A stand need not roll its whole sheet (handoff 'steady'): once it rolls steadily and enough steadily rolled
+// sheet is out, the next stand starts at once, with a sheet made of that stretch of sheet repeated along x
+// and only as long as the next stand needs to get steady itself.
 import { cloneParams, type SimParams } from './params.ts';
 import { Sim, type Crack, type Diagnostics } from './solver.ts';
 
@@ -19,6 +23,15 @@ export const MAX_STANDS = 5;
  * results and the next stand's start are the same for every caller that steps the tandem.
  */
 export const READ_STEPS = 2000;
+
+/**
+ * When a stand with another after it hands its sheet on: 'done' once the whole sheet is through (the sheet is
+ * carried whole, mass kept), 'steady' as soon as it rolls steadily and STEADY_READS steady readings and a
+ * steadily rolled stretch of sheet (steadySample) are there. A sheet too short for that is carried as in 'done'.
+ */
+export type Handoff = 'done' | 'steady';
+/** steady readings a stand takes before a 'steady' handoff */
+export const STEADY_READS = 2;
 
 export type StandCrack = Crack & { stand: number };
 
@@ -38,8 +51,9 @@ export interface StandResult {
   particles: number;
   steps: number;
   t: number;
-  /** how it ended: 'done', or 'stalled' (the rolls could not draw the sheet in; no stand after it) */
-  phase: 'done' | 'stalled';
+  /** how it ended: 'done', 'steady' (handed on while it rolled steadily, the rest of its sheet not rolled), or
+   *  'stalled' (the rolls could not draw the sheet in; no stand after it) */
+  phase: 'done' | 'steady' | 'stalled';
   /** means over the steady readings, as tools/run.mjs takes them over its reads; null without one */
   steadyForce: number | null;
   steadyTorque: number | null;
@@ -94,6 +108,7 @@ export class TandemSim {
   readonly stands: number;
   /** steps between the stand's own readings */
   readonly every: number;
+  readonly handoff: Handoff;
   /** the condition every stand shares (the first stand's sheet) */
   readonly base: SimParams;
   /** the stand now (0 first) and its Sim, replaced at every remap */
@@ -114,11 +129,12 @@ export class TandemSim {
   /** per crack id, the mass of its failed points when the current stand started (after the remap) */
   private crackBase: Float64Array = new Float64Array(0);
 
-  constructor(params: SimParams, stands: number, every = READ_STEPS) {
+  constructor(params: SimParams, stands: number, every = READ_STEPS, handoff: Handoff = 'done') {
     if (!(Number.isInteger(stands) && stands >= 1 && stands <= MAX_STANDS)) throw new Error(`stands must be 1 to ${MAX_STANDS}`);
     if (!(Number.isInteger(every) && every > 0)) throw new Error('every must be a positive whole number of steps');
     this.stands = stands;
     this.every = every;
+    this.handoff = handoff;
     this.base = cloneParams(params);
     this.sim = new Sim(params);
   }
@@ -127,7 +143,8 @@ export class TandemSim {
    * One step of the current stand; every `every` steps its own reading. A stand with another after it ends
    * at the first step it is 'done' (or stalled): later, a front tension would pull the rolled sheet on and
    * out of the grid. The last stand ends at the reading that finds it done, as tools/run.mjs reads a
-   * single pass. Ending here: the stand's result, onStandDone, and the remap into the next stand (sim is
+   * single pass. With handoff 'steady' a stand with another after it ends sooner, at the reading that finds it
+   * steady with STEADY_READS steady readings and a steady stretch of sheet out (steadySample). Ending here: the stand's result, onStandDone, and the remap into the next stand (sim is
    * then a new Sim at step 0), or the stop. After the end, sim keeps stepping as a single pass does.
    */
   advance(): void {
@@ -148,6 +165,10 @@ export class TandemSim {
       });
     }
     if (phase === 'done' || phase === 'stalled') this.endStand(phase);
+    else if (this.handoff === 'steady' && phase === 'steady' && read && this.stand + 1 < this.stands && this.steady.length >= STEADY_READS) {
+      const sample = steadySample(sim);
+      if (sample) this.endStand('steady', sample);
+    }
   }
 
   /** the current stand's Sim.diagnostics() with the stand: read it as often as you like, the results do not depend on it */
@@ -165,9 +186,9 @@ export class TandemSim {
     return this.sim.cracks.map((c) => ({ ...c, stand: c.stand ?? this.stand }));
   }
 
-  private endStand(phase: 'done' | 'stalled'): void {
+  private endStand(phase: 'done' | 'steady' | 'stalled', sample: [number, number] | null = null): void {
     const old = this.sim;
-    const { growth, ...result } = this.close(old, phase);
+    const { growth, ...result } = this.close(old, phase, sample);
     this.results.push(result);
     // a tandem of more than one stand marks its records with the stand and the area; a single stand leaves them as the
     // single pass has them
@@ -185,7 +206,7 @@ export class TandemSim {
       this.stopped =
         phase === 'stalled' ? 'stalled' : result.separated ? 'separated' : result.massLost > 0 || !(result.thicknessOut > 0) ? 'lost' : null;
     }
-    const [next, parentOf] = more && !this.stopped ? remap(old, this.base, result.thicknessOut) : [null, null];
+    const [next, parentOf] = more && !this.stopped ? remap(old, this.base, result.thicknessOut, sample, this.every) : [null, null];
     if (next) this.crackBase = crackMass(next);
     this.onStandDone?.({ stand: this.stand, sim: old, next, parentOf, result });
     if (!next) {
@@ -217,7 +238,7 @@ export class TandemSim {
     };
   }
 
-  private close(sim: Sim, phase: 'done' | 'stalled'): StandResult & { growth: number[] } {
+  private close(sim: Sim, phase: 'done' | 'steady' | 'stalled', sample: [number, number] | null): StandResult & { growth: number[] } {
     const m = this.steadyMeans();
     let maxDamage = 0;
     let nFailed = 0;
@@ -252,7 +273,7 @@ export class TandemSim {
       steadyTorque: m.torque,
       exitThickness: m.exitThickness,
       forwardSlip: m.forwardSlip,
-      thicknessOut: thicknessOut(sim),
+      thicknessOut: thicknessOut(sim, sample),
       massLost: lost / mass,
       separated: separated(sim),
       cracksBorn: born,
@@ -271,11 +292,12 @@ export class TandemSim {
  * more). The edges of the outermost points (the exit probe's measure) come out 0.3 % thinner than this
  * after the standard pass: the surface rows thin more than the inner ones, and their deformed height is
  * not the rows' spacing. The area measure is what the mass needs (the next stand's length is M / (ρ h)).
+ * With `sample` (a 'steady' handoff: the rest of the sheet is not rolled yet) the columns are the sample's.
  */
-export function thicknessOut(sim: Sim): number {
+export function thicknessOut(sim: Sim, sample: [number, number] | null = null): number {
   const { NI, NJ, lattice, px, vol0, f00, f01, f10, f11, active } = sim;
-  const i0 = Math.floor(NI / 4);
-  const i1 = Math.max(i0 + 2, Math.ceil((3 * NI) / 4));
+  const i0 = sample ? sample[0] : Math.floor(NI / 4);
+  const i1 = sample ? sample[1] + 1 : Math.max(i0 + 2, Math.ceil((3 * NI) / 4));
   let area = 0;
   const meanX = (i: number) => {
     let s = 0;
@@ -298,6 +320,47 @@ export function thicknessOut(sim: Sim): number {
   const length = ((meanX(i1 - 1) - meanX(i0)) * (i1 - i0)) / (i1 - 1 - i0);
   // NaN when an end column of the middle half has no point on the grid (the caller stops: 'lost')
   return area / length;
+}
+
+/**
+ * The steadily rolled stretch of sheet that is out of the rolls, as lattice columns [first, last] (last nearer
+ * the head), or null while it is shorter than 2 h0. It starts one entry thickness past the roll centres (the
+ * stresses settle over that distance) and ends a contact length short of the head: the head end went through
+ * the bite with no sheet ahead of it, and its damage is 2 to 4 times the steady sheet's over about 0.6 contact
+ * lengths (docs/validation.md「タンデム」). Every column of the stretch has to have a point on the grid.
+ */
+export function steadySample(sim: Sim): [number, number] | null {
+  const { NI, NJ, lattice, px, active } = sim;
+  const x0 = sim.params.rolling.h0;
+  const x1 = sim.headX() - sim.contactLength;
+  let first = -1;
+  let last = -1;
+  let xFirst = 0;
+  let xLast = 0;
+  for (let i = NI - 1; i >= 0; i--) {
+    let s = 0;
+    let c = 0;
+    for (let j = 0; j < NJ; j++) {
+      const p = lattice[i * NJ + j];
+      if (p < 0 || !active[p]) continue;
+      s += px[p];
+      c++;
+    }
+    const x = c ? s / c : NaN;
+    if (x > x1) continue;
+    if (!(x >= x0)) {
+      // behind the stretch, or a column with no point on the grid inside it
+      if (c) break;
+      return null;
+    }
+    if (last < 0) {
+      last = i;
+      xLast = x;
+    }
+    first = i;
+    xFirst = x;
+  }
+  return last - first >= 2 && xLast - xFirst >= 2 * x0 ? [first, last] : null;
 }
 
 /** A crack through the thickness: three neighbouring lattice columns that have a failed point in every row between them. */
@@ -333,23 +396,37 @@ export function separated(sim: Sim): boolean {
  *   and vol0 = dp² / J so that it fills its lattice cell now; the mass is the old total over the new points
  * - the crack records carry over (ids as they were; counts over the new points), and the points leave with
  *   the pusher's speed like a first stand
+ * - with `sample` (a 'steady' handoff, the old sheet only partly rolled): the new sheet is the sample's columns
+ *   repeated along x, as steady rolling would go on making them, each old point still with (h0 / h1)² new
+ *   ones (the masses' ratio), so that what varies along the sheet (the grid's period in the damage, cracks)
+ *   keeps its length and its share of the sheet. Its length is what the next stand needs to get to a 'steady'
+ *   handoff itself (steadyLength), not the mass's
  */
-export function remap(old: Sim, base: SimParams, h1: number): [Sim, Int32Array] {
+export function remap(old: Sim, base: SimParams, h1: number, sample: [number, number] | null = null, every = READ_STEPS): [Sim, Int32Array] {
   const P = cloneParams(base);
-  let M = 0;
-  for (let p = 0; p < old.n; p++) if (old.active[p]) M += old.mass[p];
   const rho = P.material.rho * P.numerics.massScale;
   P.rolling.h0 = h1;
-  P.rolling.sheetLength = M / (rho * h1);
   P.defects = [];
+  let M = 0;
+  if (sample) {
+    P.rolling.sheetLength = steadyLength(P, every);
+    M = rho * h1 * P.rolling.sheetLength;
+  } else {
+    for (let p = 0; p < old.n; p++) if (old.active[p]) M += old.mass[p];
+    P.rolling.sheetLength = M / (rho * h1);
+  }
   const sim = new Sim(P);
   const n = sim.n;
   const K = sim.el.K;
 
   // the old points by lattice row, head first (in the lattice's order: the order of the material along the row)
   const rows: number[][] = Array.from({ length: old.NJ }, () => []);
-  for (let p = 0; p < old.n; p++) if (old.active[p]) rows[old.lj[p]].push(p);
+  for (let p = 0; p < old.n; p++) {
+    if (old.active[p] && (!sample || (old.li[p] >= sample[0] && old.li[p] <= sample[1]))) rows[old.lj[p]].push(p);
+  }
   for (const r of rows) r.sort((a, b) => old.li[b] - old.li[a]);
+  // new points per old point along a row: the ratio of the masses of a lattice column's point, old to new
+  const share = sample ? (old.dp * old.params.rolling.h0) / (sim.dp * h1) : 0;
 
   const parentOf = new Int32Array(n);
   for (let q = 0; q < n; q++) {
@@ -366,6 +443,11 @@ export function remap(old: Sim, base: SimParams, h1: number): [Sim, Int32Array] 
     // tail are not rolled steadily), and the damage there would move by 10 to 20 %
     // (cell-centred shares, so that every old point, the end ones too, gets NI' / NI of the new ones ± 1)
     const row = rows[j];
+    if (sample) {
+      // the sample over and over, from the head
+      parentOf[q] = row[Math.floor((sim.NI - 1 - sim.li[q] + 0.5) / share) % row.length];
+      continue;
+    }
     const u = (sim.NI - 1 - sim.li[q] + 0.5) / sim.NI;
     parentOf[q] = row[Math.min(row.length - 1, Math.floor(u * row.length))];
   }
@@ -408,6 +490,21 @@ export function remap(old: Sim, base: SimParams, h1: number): [Sim, Int32Array] 
   for (const c of old.cracks) sim.cracks.push({ ...c, count: 0, ...(c.areaByStand ? { areaByStand: c.areaByStand.slice() } : {}) });
   for (let q = 0; q < n; q++) if (sim.crackId[q] >= 0) sim.cracks[sim.crackId[q]].count++;
   return [sim, parentOf];
+}
+
+/**
+ * The sheet length a stand needs to get to a 'steady' handoff (P is the stand's condition, h0 its entry
+ * thickness): what fills the bite (a contact length at most), what has to come out by then (the head at
+ * 3 h0 + a contact length for steadySample, or STEADY_READS readings after the exit probe, whichever is later,
+ * and one reading more, for the readings fall where they fall), × (1 − r) back to entry length, and one h0 over.
+ */
+export function steadyLength(P: SimParams, every: number): number {
+  // a Sim of any length has the stand's dt, contact length, exit probe and entry speed
+  const probe = new Sim(P);
+  const r = P.rolling;
+  const read = every * probe.dt * probe.vIn;
+  const out = Math.max((3 * r.h0 + probe.contactLength) * (1 - r.reduction), probe.xExitProbe * (1 - r.reduction) + STEADY_READS * read);
+  return probe.contactLength + out + read + r.h0;
 }
 
 /** per crack id, the mass of the failed points in it (every point, on the grid or not) */

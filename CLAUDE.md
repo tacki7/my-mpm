@@ -13,7 +13,7 @@ Hancock-MacKenzie、破壊した粒子の応力の扱い）。式と出典の対
 | `src/mpm/solver.ts` | `Sim`: P2G → 格子更新（ロール接触）→ G2P 2 段（体積の平均化）→ 構成則・損傷 |
 | `src/mpm/material.ts` | 流動応力、J2 リターンマップ、破断ひずみ（純関数） |
 | `src/mpm/params.ts` / `presets.ts` | 入力（SI 単位）と、名前付きの条件 |
-| `src/mpm/tandem.ts` | タンデム（`TandemSim`: スタンドを 1 つずつ解き、材料の状態を次のスタンドの新しい格子へ写す）。`node tools/tandem.mjs --stands 3`（`run.mjs` と同じ引数） |
+| `src/mpm/tandem.ts` | タンデム（`TandemSim`: スタンドを 1 つずつ解き、材料の状態を次のスタンドの新しい格子へ写す）。`node tools/tandem.mjs --stands 3 [--handoff steady]`（`run.mjs` と同じ引数） |
 | `src/mpm/planview/` | 平面図モデル（x 圧延方向・z 板幅方向、板厚は粒子の状態）。耳割れ用。`node tools/planview.mjs --W 20`。定常の読み方は `steady.ts`（ツールと画面の平面図で共通） |
 | `src/app/` | ワーカー（`sim.worker.ts`）、描画（`view.ts`）、グラフ、条件パネル |
 | `tools/check.mjs` | 回帰関門。`// @check` の付いたスクリプトを集めて回す |
@@ -109,6 +109,7 @@ Math.exp・log の最後の 1 ビットが違うのでビット一致はしな�
 `&view=plan&W=20&wcells=10&notch=0&pfield=sxx|szz|seq|eta|damage|spread`（平面図。板幅 mm・半幅のセル数・端の切り欠きの半径 mm）
 `&escatter=0&ewidth=1&elen=1&eseed=1`（端の延性のばらつき。大きさ %・帯の幅 mm・相関長 mm・種。`escatter=0`（既定）で無し）
 `&stands=1..5`（タンデムのスタンド数。どのスタンドも同じ条件で、圧下率は各スタンドの入側板厚に対して。断面の画面だけ）
+`&handoff=done|steady`（タンデムの引き継ぎ。既定は `done` = 板が抜けてから。`steady` = 定常になったらすぐ次のスタンドへ、定常の部分を繰り返した板で。数倍速い）
 `&crack=none|dfg`（亀裂の面。既定は `dfg` = 亀裂の近くの節点で点を両側の 2 つの速度場に分け、面が開く。`none` は 1 つの速度場で、T74 より前の既定）
 `&cond=<base64url JSON>`（「条件の URL をコピー」が書く。読みやすいキーに無い条件を、プリセットとの差分で。範囲外・型の合わないもの・知らないキーは無視）
 — 長さは mm、張力は MPa、`r` は %。不正な値は黙って無視される（`h0`・`r`・`R` はロールが噛めない組み合わせなら 3 つとも）。

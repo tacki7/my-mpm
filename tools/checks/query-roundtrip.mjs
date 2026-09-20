@@ -105,6 +105,15 @@ ok(fine.numerics.cellsThrough === 80, 'the largest the URL keys allow at the def
   const q = conditionsQuery('standard', base, one);
   ok(!('stands' in one.rolling) && !q.has('stands') && !q.has('cond'), '?stands=1 is one stand as the preset has it: no stands key, and its URL has neither stands nor cond', q.toString());
 }
+// a tandem's handoff: ?handoff=steady sets it and comes back as the readable key; 'done' is no handoff at all
+{
+  const st = applyQuery(base, new URLSearchParams({ stands: '3', handoff: 'steady' }));
+  const q = conditionsQuery('standard', base, st);
+  ok(st.rolling.handoff === 'steady' && q.get('handoff') === 'steady' && !q.has('cond') && same(applyQuery(base, q), st), '?handoff=steady sets rolling.handoff and goes back into the URL as handoff=steady, no cond', q.toString());
+  const dn = applyQuery(base, new URLSearchParams({ handoff: 'done' }));
+  const odd = applyQuery(base, new URLSearchParams({ handoff: 'soon' }));
+  ok(!('handoff' in dn.rolling) && !('handoff' in odd.rolling) && !conditionsQuery('standard', base, dn).has('handoff'), "handoff=done and an unknown value are the preset's: no handoff key");
+}
 const noBite = applyQuery(base, new URLSearchParams({ cond: enc({ rolling: { h0: 0.05, reduction: 0.7, rollRadius: 0.005 } }) }));
 ok(same(noBite.rolling, cloneParams(base).rolling), 'h0, r and R that cannot bite are ignored together, as with the readable keys');
 done();
