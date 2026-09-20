@@ -75,13 +75,16 @@ export function planSettingsOf(q: URLSearchParams, sheetLength: number, ppc: num
 
 /**
  * The URL keys of settings that differ from the defaults (in the panel's units). Without scatter
- * (amount 0) its band, correlation length and seed change nothing, so they stay out of the URL.
+ * (amount 0) its band, correlation length and seed change nothing, so they stay out of the URL; with
+ * scatter the seed is always written, default or not — a link is meant to open the same strip, and
+ * leaving the seed implicit would tie that to the default never changing.
  */
 export function planSettingsQuery(s: PlanSettings): [string, string][] {
   const out: [string, string][] = [];
   for (const f of PLAN_SETTINGS) {
     if (f.group === 'edge' && f.key !== 'edgeAmount' && s.edgeAmount === 0) continue;
-    if (s[f.key] !== PLAN_DEFAULTS[f.key]) out.push([f.query, String(+(s[f.key] / f.scale).toPrecision(12))]);
+    const always = f.key === 'edgeSeed' && s.edgeAmount > 0;
+    if (always || s[f.key] !== PLAN_DEFAULTS[f.key]) out.push([f.query, String(+(s[f.key] / f.scale).toPrecision(12))]);
   }
   return out;
 }

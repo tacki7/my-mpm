@@ -324,7 +324,7 @@ Lode パラメータ、塑性ひずみ εp、3 つの損傷（JC・HM・CL。判
 （[docs/model.md](docs/model.md)「端の延性のばらつき」、[docs/validation.md](docs/validation.md)の同じ名前の節）
 
 - URL: `?view=plan&W=20&wcells=10&notch=0.5&pfield=sxx`（板幅 mm、半幅のセル数、切り欠きの半径 mm、色の量）。
-  端のばらつきは `&escatter=20&ewidth=1&elen=1&eseed=1`（大きさ %、帯の幅 mm、相関長 mm、種。`escatter=0` のときは書かない）。
+  端のばらつきは `&escatter=20&ewidth=1&elen=1&eseed=1`（大きさ %、帯の幅 mm、相関長 mm、種。`escatter=0` のときは 4 つとも書かず、ばらつきを入れたときは種を既定のままでも書く）。
   ほかの条件のキーは断面と同じ。「条件の URL をコピー」は平面図のキーも書く。粒子が 50 万点を超える組み合わせ（細い板幅に
   多いセル数、長い板）は板幅とセル数を既定に戻し、板幅の 1/4 より深い切り欠きは無視し、半幅より広い帯は半幅に切り詰める
 

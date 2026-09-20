@@ -53,7 +53,8 @@ ok(Math.abs(of('W=2&ewidth=5').edgeWidth - 1e-3) < 1e-15, 'a band wider than the
 
 // without scatter the band, length and seed change nothing, so a shared link does not carry them
 ok(planSettingsQuery(of('ewidth=2&elen=0.5&eseed=7')).length === 0, 'amount 0: the band, the length and the seed stay out of the URL', JSON.stringify(planSettingsQuery(of('ewidth=2&elen=0.5&eseed=7'))));
-ok(planSettingsQuery(of('escatter=20&ewidth=2')).length === 2, 'with scatter they are written', JSON.stringify(planSettingsQuery(of('escatter=20&ewidth=2'))));
+ok(JSON.stringify(planSettingsQuery(of('escatter=20&ewidth=2'))) === '[["escatter","20"],["ewidth","2"],["eseed","1"]]',
+  'with scatter they are written, the seed even when it is the default one (the link is meant to open the same strip)', JSON.stringify(planSettingsQuery(of('escatter=20&ewidth=2'))));
 
 // written back: the same settings
 for (const qs of ['', 'W=16&wcells=8&notch=0.5', 'W=37.5&wcells=13', 'notch=2.25', 'escatter=20&ewidth=2&elen=0.5&eseed=7', 'escatter=5.5&elen=0']) {
