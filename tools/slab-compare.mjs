@@ -4,20 +4,22 @@
 //
 //   node tools/slab-compare.mjs [--cells 10] [--L 16] [--mu 0.08] [--ms 10000] [--r 0.25]
 //                               [--R 100] [--h0 1] [--tb 0] [--tf 0] [--every 2000] [--contact surface|stencil]
-//                               [--slab-only] [--profile [--merge 3]] [--json]
+//                               [--slab-only] [--profile [--merge 3]] [--bf [--bins 10]] [--json]
 //
 // Lengths in mm, tensions in MPa. The steady values are the plain mean of the
 // `--every`-step averages whose phase is 'steady' (head past the exit probe, tail not
 // yet in the bite), the same as tools/run.mjs. --profile also prints the contact
 // pressure averaged over the steady phase next to the slab pressure, and ∫p dx over
-// the zones of the slab solution.
+// the zones of the slab solution. --bf adds Bland & Ford's closed form of the same bite
+// (slab.ts, blandFord()) next to karman(): the forward slip, the neutral point and the pressure
+// at --bins equally spaced points along the contact.
 //
 // Uses only the public Sim API (advance, diagnostics, pressureProfile), so it runs on
 // any version of the solver; the MPM neutral point is shown when the diagnostics
 // carry one (`neutralX`), the profile is skipped when the solver has none.
 import { Sim } from '../src/mpm/solver.ts';
 import { defaultParams } from '../src/mpm/params.ts';
-import { karman } from '../src/mpm/slab.ts';
+import { blandFord, karman } from '../src/mpm/slab.ts';
 
 const args = process.argv.slice(2);
 const opt = (name, def) => {
@@ -62,6 +64,44 @@ if (slab.sticking) say('warning: μp > k somewhere in the bite, the slab method 
 if (slab.tensionAtYield) say('warning: a tension reaches 2k, the strip would yield outside the bite');
 say(`slab: F ${out.slab.force_kN_per_mm.toFixed(4)} kN/mm  T ${slab.torque.toFixed(1)} N  slip ${(slab.forwardSlip * 100).toFixed(2)} %  xn ${out.slab.xNeutral_mm.toFixed(3)} mm  p̄ ${out.slab.pMean_MPa.toFixed(1)} MPa  2k̄ ${out.slab.twoKMean_MPa.toFixed(1)} MPa${slab.crossed ? '' : '  (no neutral point)'}`);
 
+if (flag('bf')) {
+  const bf = blandFord(r, P.material);
+  const bins = +opt('bins', 10);
+  const at = (a, x) => {
+    const i = Math.min(a.x.length - 2, Math.max(0, Math.floor(((x - a.x[0]) / (0 - a.x[0])) * (a.x.length - 1))));
+    const f = (x - a.x[i]) / (a.x[i + 1] - a.x[i]);
+    return a.p[i] + f * (a.p[i + 1] - a.p[i]);
+  };
+  out.blandFord = {
+    forwardSlip: bf.forwardSlip,
+    xNeutral_mm: bf.xNeutral * 1e3,
+    crossed: bf.crossed,
+    force_kN_per_mm: bf.force * 1e-6,
+    pMean_MPa: bf.pMean * 1e-6,
+    twoK_MPa: bf.twoK * 1e-6,
+    twoKEntry_MPa: bf.twoKEntry * 1e-6,
+    twoKExit_MPa: bf.twoKExit * 1e-6,
+    HNeutral: bf.HNeutral,
+    tensionAt: bf.tensionAt,
+    slipRatio: slab.forwardSlip / bf.forwardSlip,
+    xNeutralRatio: slab.xNeutral / bf.xNeutral,
+    forceRatio: slab.force / bf.force,
+  };
+  const b = out.blandFord;
+  say(`bf:   F ${b.force_kN_per_mm.toFixed(4)} kN/mm (∫p dx only)  slip ${(bf.forwardSlip * 100).toFixed(2)} %  xn ${b.xNeutral_mm.toFixed(3)} mm  2k ${b.twoK_MPa.toFixed(1)} MPa (2k2 ${b.twoKEntry_MPa.toFixed(1)}, 2k1 ${b.twoKExit_MPa.toFixed(1)})${bf.crossed ? '' : '  (no neutral point)'}`);
+  say(`karman / bf: slip ${b.slipRatio.toFixed(4)}, xn ${b.xNeutralRatio.toFixed(4)}, ∫p dx ${b.forceRatio.toFixed(4)}`);
+  const L = slab.contactLength;
+  out.bfProfile = [];
+  say(`x/L      x [mm]   p karman [MPa]   p bf [MPa]   karman / bf`);
+  for (let i = 0; i <= bins; i++) {
+    const x = -L + (i / bins) * L;
+    const pk = at(slab, x);
+    const pb = at(bf, x);
+    out.bfProfile.push({ x_mm: x * 1e3, karman_MPa: pk * 1e-6, bf_MPa: pb * 1e-6, ratio: pk / pb });
+    say(`${(-x / L).toFixed(2).padStart(4)}  ${(x * 1e3).toFixed(3).padStart(8)}  ${(pk * 1e-6).toFixed(1).padStart(14)}  ${(pb * 1e-6).toFixed(1).padStart(11)}  ${(pk / pb).toFixed(4).padStart(12)}`);
+  }
+}
+
 if (!flag('slab-only')) {
   const t0 = performance.now();
   const sim = new Sim(P);
@@ -102,9 +142,11 @@ if (!flag('slab-only')) {
     torque_N: mean(steady.map((h) => h.rollTorque)),
     exitThickness_mm: mean(steady.filter((h) => h.exitThickness).map((h) => h.exitThickness)) * 1e3,
     forwardSlip: mean(slips),
+    forwardSlipSd: sd(slips),
     forwardSlipMin: Math.min(...slips),
     forwardSlipMax: Math.max(...slips),
     xNeutral_mm: xns.length ? mean(xns) * 1e3 : null,
+    xNeutralSd_mm: xns.length ? sd(xns) * 1e3 : null,
   };
   // Mass scaling makes the rolls accelerate a heavier strip: the extra forward friction
   // ṁ (v1 − v0), ṁ = ms ρ h0 v0, costs each roll about ṁ (v1 − v0) R / 2 of torque.
@@ -117,7 +159,7 @@ if (!flag('slab-only')) {
     torqueLessInertia: (out.mpm.torque_N - out.mpm.inertiaTorque_N) / out.slab.torque_N,
   };
   const m = out.mpm;
-  say(`mpm:  F ${m.force_kN_per_mm.toFixed(4)} ± ${m.forceSd_kN_per_mm.toFixed(4)} kN/mm  T ${m.torque_N.toFixed(1)} N  slip ${(m.forwardSlip * 100).toFixed(2)} % (${(m.forwardSlipMin * 100).toFixed(2)}〜${(m.forwardSlipMax * 100).toFixed(2)})  h1 ${m.exitThickness_mm.toFixed(4)} mm${m.xNeutral_mm != null ? `  xn ${m.xNeutral_mm.toFixed(3)} mm` : ''}  — ${m.steadySamples} steady samples × ${every} steps, ${m.steps} steps, ${secs.toFixed(1)} s, phase ${m.phase}`);
+  say(`mpm:  F ${m.force_kN_per_mm.toFixed(4)} ± ${m.forceSd_kN_per_mm.toFixed(4)} kN/mm  T ${m.torque_N.toFixed(1)} N  slip ${(m.forwardSlip * 100).toFixed(2)} ± ${(m.forwardSlipSd * 100).toFixed(2)} % (${(m.forwardSlipMin * 100).toFixed(2)}〜${(m.forwardSlipMax * 100).toFixed(2)})  h1 ${m.exitThickness_mm.toFixed(4)} mm${m.xNeutral_mm != null ? `  xn ${m.xNeutral_mm.toFixed(3)} ± ${m.xNeutralSd_mm.toFixed(3)} mm` : ''}  — ${m.steadySamples} steady samples × ${every} steps, ${m.steps} steps, ${secs.toFixed(1)} s, phase ${m.phase}`);
   say(`mpm / slab: force ${out.ratio.force.toFixed(3)}, torque ${out.ratio.torque.toFixed(3)} (${out.ratio.torqueLessInertia.toFixed(3)} without the inertia of the mass scaling, ${m.inertiaTorque_N.toFixed(0)} N)`);
   if (flag('profile') && prof) {
     // Print means over `--merge` bins: in solvers whose bins have the grid nodes on

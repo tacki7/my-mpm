@@ -202,3 +202,142 @@ export function karman(r: RollingParams, m: MaterialParams, n = 2000, ep0 = 0): 
   }
   return out!;
 }
+
+/**
+ * Bland & Ford's closed-form solution of the same bite, for comparison only: `karman()` above
+ * stays what the app uses. Source: 柳本 潤「圧延理論－1（圧延概論・Karman の理論）」東京大学
+ * 生産技術研究所, §5 (eqs. 29-1, 29-2) and §6; D. R. Bland, H. Ford, Proc. Instn Mech. Engrs 159
+ * (1948) 144–163.
+ *
+ * The approximations are the source's: a small bite angle (h = h1 + Rφ², tan φ = φ), the term
+ * 2 tan φ (p − 2k) dropped from the equilibrium, and a **constant** 2k along the bite. With those,
+ *
+ *   entry side (φ > φn):  p = 2k (1 − σb/2k2) (h/h2) exp{ μ (H2 − H(φ)) }        (eq. 29-1)
+ *   exit  side (φ < φn):  p = 2k (1 − σf/2k1) (h/h1) exp{ μ H(φ) }              (eq. 29-2)
+ *
+ * with H(φ) = 2√(R/h1) atan(√(R/h1) φ) and H2 = 2√(R/h1) atan(√((h2 − h1)/h1)) (the source's
+ * form of H at the entry, exactly 2√(R/h1) atan(√(R/h1) φ2) under the small-angle law). The two
+ * branches meet at
+ *
+ *   Hn = H2/2 − (1/(2μ)) ln[ (h2/h1) (1 − σf/2k1)/(1 − σb/2k2) ]                (eq. 3-2)
+ *
+ * so the neutral angle is φn = √(h1/R) tan(√(h1/R) Hn/2) and the forward slip
+ * f = tan²(√(h1/R) Hn/2) = R φn²/h1 — the same f = xn²/(R h1) the diagnostics invert.
+ * Tensions are tension-positive, as in `RollingParams`: a front tension lowers the exit branch,
+ * which moves the neutral point towards the entry and raises f.
+ *
+ * 2k: the source takes it constant, the solver's material hardens along the bite, so this function
+ * borrows `karman()`'s flow stress (same εp = ep0 + (2/√3) ln(h0/h) and strain rate of the mass
+ * flow) and reduces it to three numbers — 2k2 and 2k1 at the entry and the exit for the tension
+ * terms, and `karman()`'s mean over the projected contact (`twoKMean`) as the constant 2k of the
+ * pressure. So both distributions carry the same mean flow stress and only the shape differs;
+ * `twoKEntry`/`twoKExit`/`twoK` report all three. With no tension, 2k cancels out of f entirely.
+ *
+ * On a hardening strip the two 2k's disagree by a factor of two (SPCC: 2k2 = 267 MPa at εp = 0,
+ * 2k1 = 511 MPa at the exit), and then a back tension read against 2k2 alone scales the whole entry
+ * branch far too much — f comes out 4 times below `karman()`'s at σb = 100 MPa (docs/validation.md).
+ * `tensionAt` picks which reference the tension terms use: 'ends' is the source's 2k2 and 2k1
+ * (the default), 'mean' reads both tensions against the same mean 2k, which is what the constant-2k
+ * derivation assumes and brings the tension cases back within 21 % of `karman()`.
+ */
+export interface BlandFordResult {
+  /** positions from the entry (−L) to the exit (0) [m]: the grid `karman()` returns */
+  x: Float64Array;
+  /** thickness of the small-angle law h1 + Rφ² [m] (at the entry it misses h0 by 2e-4 of it) */
+  h: Float64Array;
+  /** roll pressure: the entry branch before the neutral point, the exit branch after it [Pa] */
+  p: Float64Array;
+  pEntry: Float64Array;
+  pExit: Float64Array;
+  /** the constant 2k of the pressure, and 2k2 (entry) and 2k1 (exit) of the tension terms [Pa] */
+  twoK: number;
+  twoKEntry: number;
+  twoKExit: number;
+  /** H at the entry (H2) and at the neutral point (Hn), the source's variable */
+  HEntry: number;
+  HNeutral: number;
+  /** neutral point [m] (negative, from the exit) and angle [rad] */
+  xNeutral: number;
+  phiNeutral: number;
+  /** exit speed / roll surface speed − 1 = tan²(√(h1/R) Hn/2) */
+  forwardSlip: number;
+  /** false when Hn falls outside [0, H2]: no neutral point in the bite (the values are clamped to its end) */
+  crossed: boolean;
+  /** which 2k the tension terms were read against */
+  tensionAt: 'ends' | 'mean';
+  /** ∫p dx over the contact [N/m]: the pressure's vertical part only (the small-angle solution
+   * drops the friction's share μp tan φ, ±0.2 % at the standard condition and cancelling across
+   * the neutral point) */
+  force: number;
+  pMean: number;
+  contactLength: number;
+  biteAngle: number;
+}
+
+export function blandFord(
+  r: RollingParams,
+  m: MaterialParams,
+  n = 2000,
+  ep0 = 0,
+  tensionAt: 'ends' | 'mean' = 'ends',
+): BlandFordResult {
+  const { gap: h1, contactLength: L, biteAngle } = biteGeometry(r);
+  const h2 = r.h0;
+  const R = r.rollRadius;
+  const mu = r.mu;
+  const k = karman(r, m, n, ep0);
+  const twoKEntry = k.twoK[0];
+  const twoKExit = k.twoK[n];
+  const twoK = k.twoKMean;
+  const q = Math.sqrt(R / h1);
+  const bigH = (phi: number) => 2 * q * Math.atan(q * phi);
+  const HEntry = 2 * q * Math.atan(Math.sqrt((h2 - h1) / h1));
+  const back = 1 - r.backTension / (tensionAt === 'mean' ? twoK : twoKEntry);
+  const front = 1 - r.frontTension / (tensionAt === 'mean' ? twoK : twoKExit);
+  // mu = 0 gives Hn = −∞: no friction, no neutral point (the strip cannot be drawn in)
+  const HNeutral = HEntry / 2 - Math.log((h2 / h1) * (front / back)) / (2 * mu);
+  const crossed = HNeutral > 0 && HNeutral < HEntry;
+  const Hn = Math.min(Math.max(HNeutral, 0), HEntry);
+  const tanN = Math.tan(Hn / (2 * q));
+  const phiNeutral = tanN / q;
+  const xNeutral = -R * Math.sin(Math.min(phiNeutral, biteAngle));
+
+  const dx = L / n;
+  const x = new Float64Array(n + 1);
+  const h = new Float64Array(n + 1);
+  const p = new Float64Array(n + 1);
+  const pEntry = new Float64Array(n + 1);
+  const pExit = new Float64Array(n + 1);
+  for (let i = 0; i <= n; i++) {
+    x[i] = i === n ? 0 : -L + i * dx;
+    const phi = Math.asin(Math.min(1, -x[i] / R));
+    h[i] = h1 + R * phi * phi;
+    pEntry[i] = twoK * back * (h[i] / h2) * Math.exp(mu * (HEntry - bigH(phi)));
+    pExit[i] = twoK * front * (h[i] / h1) * Math.exp(mu * bigH(phi));
+    p[i] = x[i] < xNeutral ? pEntry[i] : pExit[i];
+  }
+  let force = 0;
+  for (let i = 0; i < n; i++) force += ((x[i + 1] - x[i]) / 2) * (p[i] + p[i + 1]);
+
+  return {
+    x,
+    h,
+    p,
+    pEntry,
+    pExit,
+    twoK,
+    twoKEntry,
+    twoKExit,
+    HEntry,
+    HNeutral,
+    xNeutral,
+    phiNeutral,
+    forwardSlip: tanN * tanN,
+    crossed,
+    tensionAt,
+    force,
+    pMean: force / L,
+    contactLength: L,
+    biteAngle,
+  };
+}
