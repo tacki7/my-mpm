@@ -40,6 +40,8 @@ const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as 
 const query = new URLSearchParams(location.search);
 let presetId = presetById(query.get('preset') ?? '')?.id ?? 'standard';
 let params: SimParams = applyQuery(presetById(presetId)!.build(), query);
+/** the conditions are the standard preset's pass (the force chart says its standard-condition range only then) */
+let standardPass = false;
 let field: FieldName = (FIELDS.find((f) => f.id === query.get('field'))?.id ?? 'seq') as FieldName;
 const stopAfter = stopAfterOf(query);
 
@@ -132,7 +134,7 @@ const presetNote = new PresetNote($('preset-note'));
 const presetBadge = new PresetBadge($('preset-custom'));
 const showNote = () => {
   presetNote.show(presetById(presetId)?.note ?? '');
-  presetBadge.update(presetId, presetById(presetId)!.build(), params);
+  noteConditions();
 };
 showNote();
 
@@ -252,11 +254,18 @@ function readConditions() {
   $('reset').classList.remove('pending');
 }
 
+/** the conditions changed (a run starts, the preset is picked): the badge, and whether this is the standard pass */
+function noteConditions() {
+  const preset = presetById(presetId)!.build();
+  presetBadge.update(presetId, preset, params);
+  standardPass = presetId === 'standard' && samePassAsPreset(presetId, preset, params);
+}
+
 function restart() {
   readConditions();
   shownStand = null;
   standViews.setPicked(null);
-  presetBadge.update(presetId, presetById(presetId)!.build(), params);
+  noteConditions();
   history.t.length = 0;
   kineticSum = 0;
   kineticN = 0;
@@ -363,7 +372,9 @@ function refreshReadouts(rebuildCracks = false): void {
   updateResults(f.diag, f, picked ? (steadyOf(shownStand!) ?? f.steady) : f.steady, picked ? (standMidEta[shownStand!] ?? null) : f.midEta);
   updateStandTable();
   updateCracks(f.cracks, rebuildCracks);
-  explorer.update(f, params);
+  // the explorer and its rings stay with the running stand's frame: a point's id means something only in the frame it
+  // came from, and the live canvas draws that one (a picked stand's points would ring unrelated points there)
+  explorer.update(last ?? f, params);
   view.marks = explorer.marks();
   showClock();
   dirty = true;
@@ -522,7 +533,7 @@ function drawCharts() {
   const start = standStarts[k];
   const f = shownFrame();
   forceChart = drawForceChart($<HTMLCanvasElement>('chart-force'), $('legend-force'), history.t, history.F, params, steadyForce.mean, runStands > 1 ? standStarts : undefined,
-    presetId === 'standard' && samePassAsPreset(presetId, presetById(presetId)!.build(), params));
+    standardPass);
   // every stand's steady hill, by stand: the finished ones were kept, the running one is still being averaged
   const hills: (HillStand | undefined)[] = [...hillStands];
   const live = last?.stand ?? 0;
@@ -646,10 +657,10 @@ window.__mpm = {
   get standResults() {
     return standResults.map((r) => ({ ...r }));
   },
-  /** what the roll bite is drawing: the stand of its frame (null: no sheet) and the stand of its geometry (the rolls) */
+  /** what the roll bite is drawing: the stand of its frame (null: no sheet), the stand of its geometry (the rolls) and the points it rings */
   get drawn() {
     const g = view.geometry;
-    return { frameStand: view.frame ? view.frame.stand : null, geometryStand: g ? standGeometries.indexOf(g) : null };
+    return { frameStand: view.frame ? view.frame.stand : null, geometryStand: g ? standGeometries.indexOf(g) : null, marks: view.marks.map((m) => m.id) };
   },
   /** why the tandem stopped before its last stand ('stalled' | 'separated' | 'lost'), null otherwise */
   get stopped() {

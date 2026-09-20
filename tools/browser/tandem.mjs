@@ -247,7 +247,10 @@ try {
       hillShown: (document.getElementById('legend-hill').textContent.match(/スラブ法 p（#(\\d)）/) ?? [])[1],
       burst: document.getElementById('burst-hint').dataset.delta, pressed: [...document.querySelectorAll('.stand-label')].map((b) => b.getAttribute('aria-pressed')),
       shownCol: [...document.querySelectorAll('#stand-results thead th')].map((h) => h.className) })`);
+  // the explorer's point and the rings on the live canvas: ids of the running stand's frame, whichever stand is picked
+  const rings = () => c.evaluate(`({ explorer: __mpm.explorer.id, marks: __mpm.drawn.marks, tracked: __mpm.tracks.map((t) => t.id) })`);
   const live = await readings();
+  const liveRings = await rings();
   await click('.stand-slot[data-stand="1"] .stand-label');
   await painted();
   const first = await readings();
@@ -256,6 +259,12 @@ try {
     +first.force * 1e6 === standForce[0] && first.hillShown === '1' && first.clock.includes('スタンド 1 / 3') && first.pressed.join() === 'true,false,false' && first.shownCol[0].includes('shown'),
     "a finished stand's number shows that stand: its steady load, its friction hill, the clock and the table's column",
     `load ${(+first.force).toFixed(3)} kN/mm (result ${(standForce[0] * 1e-6).toFixed(3)}), hill #${first.hillShown}, ${first.clock.slice(-20)}`,
+  );
+  const firstRings = await rings();
+  ok(
+    firstRings.explorer === liveRings.explorer && firstRings.marks.join() === liveRings.marks.join() && firstRings.marks.length > 0 && firstRings.marks.every((id) => firstRings.tracked.includes(id)),
+    "a picked stand leaves the explorer's point and the rings on the running stand's frame (a stand's own point ids ring unrelated points on the live canvas)",
+    `explorer #${firstRings.explorer} (before picking #${liveRings.explorer}), rings ${firstRings.marks.join(',')} of tracked ${firstRings.tracked.join(',')}`,
   );
   ok(+first.burst > +live.burst, "the central-burst hint follows the picked stand's entry thickness (the first stand is the thickest)", `Δ ${(+first.burst).toFixed(2)} against #3's ${(+live.burst).toFixed(2)}`);
   // the keyboard: Tab onto the second stand's number and press it
