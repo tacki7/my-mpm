@@ -28,6 +28,8 @@ export function runParams(args) {
   num('cells', (v) => (P.numerics.cellsThrough = v));
   num('ms', (v) => (P.numerics.massScale = v));
   if (has('nojbar')) P.numerics.jbar = false;
+  // solve the upper half only, y = 0 a symmetry plane (docs/model.md「板厚方向の対称モード」)
+  if (has('sym')) P.numerics.symmetry = true;
   // 'stencil': the contact of before (a band 1.5 cells deep); the same as before only with --vrc 5 as well
   text('contact', (v) => (P.numerics.contact = v));
   num('vrc', (v) => (P.numerics.volRelaxContact = v)); // relaxation near the rolls ('rate')

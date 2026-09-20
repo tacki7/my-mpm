@@ -18,8 +18,10 @@ export class MidPlaneEta {
   constructor(sim: Sim) {
     this.last = new Float64Array(sim.n);
     const NJ = sim.NJ;
-    this.mid = [NJ / 2 - 1, NJ / 2];
-    this.surf = [0, NJ - 1];
+    // symmetry mode: the upper half only, so the first row is the mid-plane's and there is one surface row.
+    // The mean is weighted by Δep, so one row of a mirror pair gives the same value as both
+    this.mid = sim.sym ? [0] : [NJ / 2 - 1, NJ / 2];
+    this.surf = sim.sym ? [NJ - 1] : [0, NJ - 1];
   }
 
   /** one look (every LOOK steps); outside the steady phase it only moves the reference strain on */

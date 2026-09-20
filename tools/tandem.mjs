@@ -6,6 +6,7 @@
 // Each stand's summary is the one tools/run.mjs prints for a pass (tools/run-summary.mjs), plus its
 // entry sheet and the thickness of the sheet it let out; with --stands 1 it is run.mjs's.
 import { READ_STEPS, TandemSim } from '../src/mpm/tandem.ts';
+import { symmetryUnavailable } from '../src/mpm/symmetry.ts';
 import { runParams } from './run-params.mjs';
 import { summarize } from './run-summary.mjs';
 
@@ -21,6 +22,13 @@ const every = +opt('every', READ_STEPS);
 const maxSteps = +opt('max', 400000);
 const json = flag('json');
 const P = runParams(args.filter((a, i) => a !== '--stands' && args[i - 1] !== '--stands'));
+
+// --sym: not every condition can be folded onto the half section; say which and stop
+const whyNotSym = P.numerics.symmetry ? symmetryUnavailable(P) : null;
+if (whyNotSym) {
+  console.error(`--sym: ${whyNotSym}`);
+  process.exit(1);
+}
 
 // the stand ends inside advance(), at its own reading every `every` steps; these reads of diagnostics() come
 // at the same steps (blocks of `every` from the stand's step 0), so a stand's summary is run.mjs's for the pass

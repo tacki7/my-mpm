@@ -156,6 +156,12 @@ export interface NumericsParams {
   /** which nodes the roll contact constrains */
   contact: ContactScheme;
   /**
+   * Solve the upper half of the sheet only, with y = 0 a symmetry plane and one roll (about twice as
+   * fast; docs/model.md「板厚方向の対称モード」). Default false. Not every condition can be folded onto
+   * the half section — `symmetryUnavailable` (src/mpm/symmetry.ts) says which, and Sim refuses those
+   */
+  symmetry?: boolean;
+  /**
    * The faces of a crack (docs/model.md「亀裂の面」). 'none' (default): one velocity field, the two sides of a
    * crack share the nodes around it. 'dfg': near a crack the points split, node by node, into two velocity fields
    * by the side of the crack they are on (the gradient of the failed points' field, Homel & Herbold 2017); the

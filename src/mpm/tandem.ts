@@ -296,8 +296,9 @@ export function thicknessOut(sim: Sim): number {
     }
   }
   const length = ((meanX(i1 - 1) - meanX(i0)) * (i1 - i0)) / (i1 - 1 - i0);
-  // NaN when an end column of the middle half has no point on the grid (the caller stops: 'lost')
-  return area / length;
+  // NaN when an end column of the middle half has no point on the grid (the caller stops: 'lost').
+  // symmetry mode: the area is the half section's, so area / length is half the thickness
+  return (sim.sym ? 2 * area : area) / length;
 }
 
 /** A crack through the thickness: three neighbouring lattice columns that have a failed point in every row between them. */

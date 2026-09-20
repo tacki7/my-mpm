@@ -4,12 +4,13 @@
 //                      [--mat spcc|s4340|al6061] [--damage johnson-cook|hancock-mackenzie|cockcroft-latham|gtn|localization|none]
 //                      [--yield von-mises|gtn] [--preset <id>] [--chi 0.9] [--nonlocal <ℓ mm>]
 //                      [--tb 0] [--tf 0] [--every 2000] [--max 400000] [--contact surface|stencil] [--vrc 1]
-//                      [--crack none|dfg] [--json]
+//                      [--crack none|dfg] [--sym] [--json]
 //
 // Lengths in mm, tensions in MPa. An option left out keeps the preset's value (or the
 // default): `--preset front-tension` runs with its front tension. Prints a line every
 // --every steps and a summary at the end (or one JSON object with --json).
 import { Sim } from '../src/mpm/solver.ts';
+import { symmetryUnavailable } from '../src/mpm/symmetry.ts';
 import { runParams } from './run-params.mjs';
 import { summarize } from './run-summary.mjs';
 
@@ -25,6 +26,13 @@ const P = runParams(args);
 const every = +opt('every', 2000);
 const maxSteps = +opt('max', 400000);
 const json = flag('json');
+
+// --sym: not every condition can be folded onto the half section; say which and stop
+const whyNotSym = P.numerics.symmetry ? symmetryUnavailable(P) : null;
+if (whyNotSym) {
+  console.error(`--sym: ${whyNotSym}`);
+  process.exit(1);
+}
 
 const t0 = performance.now();
 const sim = new Sim(P);

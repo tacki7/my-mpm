@@ -33,6 +33,7 @@ import {
   strengthFactor,
   type Elastic,
 } from './material.ts';
+import { symmetryUnavailable } from './symmetry.ts';
 
 export interface Roll {
   cx: number;
@@ -61,6 +62,11 @@ export interface Crack {
   criterion: DamageModel;
   /** failed points that belong to this crack */
   count: number;
+  /**
+   * symmetry mode (numerics.symmetry): the crack reaches the mid-plane, so it is its own mirror image and
+   * `count` is already the whole section's. A crack away from the plane has a separate mirror instead
+   */
+  mid?: boolean;
   /** tandem (src/mpm/tandem.ts): the stand it started in, set once that stand is over; absent in a single pass */
   stand?: number;
   /**
@@ -168,6 +174,13 @@ export class Sim {
   readonly oy: number;
   readonly nxN: number; // nodes along x
   readonly nyN: number;
+  /**
+   * Symmetry mode (numerics.symmetry): only the upper half of the sheet is solved, y = 0 is a symmetry
+   * plane and there is one roll. The plane sits on node row `kSym`, with `kSym` ghost rows below it that
+   * carry the mirror images (0 and no ghost rows when the whole section is solved).
+   */
+  readonly sym: boolean;
+  readonly kSym: number;
   readonly dt: number;
   readonly rolls: Roll[];
   readonly gap: number;
@@ -375,11 +388,19 @@ export class Sim {
     // Enough room for the whole sheet to come out on the exit side.
     const elongated = r.sheetLength / (1 - r.reduction);
     const xEnd = 2 * r.h0 + 2 * h + elongated * 1.1 + 8 * h;
-    const yHalf = r.h0 / 2 + 4 * h;
+    const sym = num.symmetry === true;
+    this.sym = sym;
+    if (sym) {
+      const why = symmetryUnavailable(P);
+      if (why) throw new Error(`the thickness-symmetry mode cannot be used here: ${why}`);
+    }
+    const yTop = r.h0 / 2 + 4 * h;
+    // symmetry: the plane y = 0 sits on node row 3, with three ghost rows below it (as the plan view does)
+    this.kSym = sym ? 3 : 0;
     this.ox = xTail0 - 6 * h;
-    this.oy = -yHalf;
+    this.oy = sym ? -this.kSym * h : -yTop;
     this.nxN = Math.ceil((xEnd - this.ox) / h) + 1;
-    this.nyN = Math.ceil((2 * yHalf) / h) + 1;
+    this.nyN = Math.ceil((yTop - this.oy) / h) + 1;
     const nNodes = this.nxN * this.nyN;
     // 'dfg': the second velocity field of the crack faces sits in the node arrays after the first, at nNodes + node
     const NN = (num.crackFields ?? 'none') === 'dfg' ? 2 * nNodes : nNodes;
@@ -387,16 +408,19 @@ export class Sim {
     this.gm = new Float64Array(NN);
     this.gvx = new Float64Array(NN);
     this.gvy = new Float64Array(NN);
-    this.gpen = [new Float64Array(NN), new Float64Array(NN)];
+    // symmetry: one roll, so the per-roll arrays and their projections are half as large
+    const nRolls = sym ? 1 : 2;
+    this.gpen = [];
+    for (let k = 0; k < nRolls; k++) this.gpen.push(new Float64Array(NN));
     this.gpush = new Uint8Array(NN);
     this.gcon = new Uint8Array(NN);
-    this.gslipX = new Float64Array(2 * NN);
-    this.gslipY = new Float64Array(2 * NN);
+    this.gslipX = new Float64Array(nRolls * NN);
+    this.gslipY = new Float64Array(nRolls * NN);
     this.contactJn = new Float64Array(NN);
     this.contactJt = new Float64Array(NN);
     this.contactSlip = new Uint8Array(NN);
-    this.gfolN = new Float64Array(2 * NN);
-    this.gfolD = new Float64Array(2 * NN);
+    this.gfolN = new Float64Array(nRolls * NN);
+    this.gfolD = new Float64Array(nRolls * NN);
     this.gJ = new Float64Array(NN);
     this.gJe = new Float64Array(NN);
     this.gB = new Float64Array(NN);
@@ -411,10 +435,13 @@ export class Sim {
     const R = r.rollRadius;
     const cy = R + this.gap / 2;
     const omega = r.rollSpeed / R;
-    this.rolls = [
-      { cx: 0, cy, R, omega }, // top: counter-clockwise → bottom surface moves +x
-      { cx: 0, cy: -cy, R, omega: -omega },
-    ];
+    // symmetry: the bottom roll is the mirror of the top one across y = 0, so only the top one is solved
+    this.rolls = sym
+      ? [{ cx: 0, cy, R, omega }]
+      : [
+          { cx: 0, cy, R, omega }, // top: counter-clockwise → bottom surface moves +x
+          { cx: 0, cy: -cy, R, omega: -omega },
+        ];
     // 3 h0 past the exit, but not more than 2 contact lengths: on a thick plate (h0 10 mm, Lc 2.7 mm) 3 h0 is
     // 30 mm and the head never got there before the tail entered the bite (no steady phase, no exit gauge).
     // Thin sheets are unchanged (3 h0 < 2 Lc)
@@ -422,7 +449,8 @@ export class Sim {
 
     // Material points on a regular lattice.
     const NI = Math.round(r.sheetLength / dp);
-    const NJ = Math.round(r.h0 / dp);
+    // symmetry: the upper half only (the plane falls between two point rows; symmetryUnavailable checks it)
+    const NJ = sym ? Math.round(r.h0 / dp) / 2 : Math.round(r.h0 / dp);
     this.NI = NI;
     // h0 of strip at each end, but never more than half the strip
     this.gripCols = Math.max(1, Math.min(Math.round(r.h0 / dp), Math.floor(NI / 2)));
@@ -433,7 +461,7 @@ export class Sim {
     for (let i = 0; i < NI; i++) {
       for (let j = 0; j < NJ; j++) {
         const X = xTail0 + (i + 0.5) * dp;
-        const Y = -r.h0 / 2 + (j + 0.5) * dp;
+        const Y = sym ? (j + 0.5) * dp : -r.h0 / 2 + (j + 0.5) * dp;
         const sx = this.xHead0 - X; // sheet coordinate from the head
         let inVoid = false;
         let duct = 1;
@@ -514,7 +542,7 @@ export class Sim {
       this.li[k] = i;
       this.lj[k] = j;
       const X = xTail0 + (i + 0.5) * dp;
-      const Y = -r.h0 / 2 + (j + 0.5) * dp;
+      const Y = sym ? (j + 0.5) * dp : -r.h0 / 2 + (j + 0.5) * dp;
       this.px[k] = X;
       this.py[k] = Y;
       this.x0[k] = X;
@@ -562,7 +590,9 @@ export class Sim {
   /** Advance one explicit step. */
   advance(): void {
     const { gm, gvx, gvy, gpush } = this;
-    const [gpen0, gpen1] = this.gpen;
+    const gpen0 = this.gpen[0];
+    const gpen1 = this.gpen[1]; // symmetry: there is no second roll
+
     // clear what last step wrote (the whole grid at the first step)
     const lo = this.gPrevLo;
     const hi = this.gPrevHi;
@@ -570,7 +600,7 @@ export class Sim {
     gvx.fill(0, lo, hi);
     gvy.fill(0, lo, hi);
     gpen0.fill(INF, lo, hi);
-    gpen1.fill(INF, lo, hi);
+    gpen1?.fill(INF, lo, hi);
     gpush.fill(0, lo, hi);
     this.gcon.fill(0, lo, hi);
     this.contactJn.fill(0, lo, hi);
@@ -585,13 +615,14 @@ export class Sim {
       gvx.fill(0, lo2, hi2);
       gvy.fill(0, lo2, hi2);
       gpen0.fill(INF, lo2, hi2);
-      gpen1.fill(INF, lo2, hi2);
+      gpen1?.fill(INF, lo2, hi2);
       gpush.fill(0, lo2, hi2);
       this.gcon.fill(0, lo2, hi2);
       this.contactJn.fill(0, lo2, hi2);
       this.contactJt.fill(0, lo2, hi2);
       this.contactSlip.fill(0, lo2, hi2);
     }
+    if (this.sym) this.clearGhosts();
     this.updatePusher();
     if (!this.pusherActive && !this.stalled && this.step % 50 === 0) this.checkStall();
     this.pf = this.NN > N ? this.assignFields() : null;
@@ -610,6 +641,7 @@ export class Sim {
         this.gB.fill(0, lo2, hi2);
         this.gMv.fill(0, lo2, hi2);
       }
+      if (this.sym) this.clearGhostScalars();
     }
     this.g2pVelocity();
     this.g2pUpdate();
@@ -625,8 +657,12 @@ export class Sim {
     const nNodes = this.nxN * nyN;
     const { f00, f01, f10, f11, sxx, syy, sxy, pres, c00, c01, c10, c11, touch } = this;
     const halfDp = 0.5 * this.dp;
-    const [gpen0, gpen1] = this.gpen;
-    const [r0, r1] = this.rolls;
+    const gpen0 = this.gpen[0];
+    const sym = this.sym;
+    // symmetry: one roll, so these two stand in for the second and `sym` keeps them out of the test below
+    const gpen1 = sym ? gpen0 : this.gpen[1];
+    const r0 = this.rolls[0];
+    const r1 = sym ? r0 : this.rolls[1];
     const k4 = 4 * invH * invH;
     this.updateTension();
     // force per gripped point [N/m] per unit of its current height and of its grip weight (see gripScale):
@@ -697,7 +733,7 @@ export class Sim {
       let n1x = 0;
       let n1y = 0;
       const near0 = e0x * e0x + e0y * e0y <= reach0;
-      const near1 = e1x * e1x + e1y * e1y <= reach1;
+      const near1 = !sym && e1x * e1x + e1y * e1y <= reach1;
       if (near0 || near1) {
         const rp = halfDp * Math.hypot(F01, F11);
         if (near0) {
@@ -744,6 +780,110 @@ export class Sim {
     } else {
       this.gLo = loBase;
       this.gHi = hiBase + 2 * nyN + 3;
+    }
+    if (this.sym) this.fold();
+  }
+
+  /**
+   * Symmetry mode. mirrorBack() left velocities on the ghost rows, and the clear in advance() only covers
+   * the nodes last step's stencils reached, so those rows would be folded back in as momentum. Clear them
+   * over the whole grid — cheap, it is kSym rows.
+   */
+  private clearGhosts(): void {
+    const { gm, gvx, gvy, gpush, nyN, nxN, kSym } = this;
+    for (let i = 0; i < nxN; i++) {
+      const col = i * nyN;
+      for (let k = 0; k < kSym; k++) {
+        gm[col + k] = 0;
+        gvx[col + k] = 0;
+        gvy[col + k] = 0;
+        gpush[col + k] = 0;
+      }
+    }
+  }
+
+  /** the same for the J-bar sums, which foldScalars(true) leaves on the ghost rows */
+  private clearGhostScalars(): void {
+    const { gJ, gJe, gB, gMv, nyN, nxN, kSym } = this;
+    for (let i = 0; i < nxN; i++) {
+      const col = i * nyN;
+      for (let k = 0; k < kSym; k++) {
+        gJ[col + k] = 0;
+        gJe[col + k] = 0;
+        gB[col + k] = 0;
+        gMv[col + k] = 0;
+      }
+    }
+  }
+
+  /** the node columns this step's stencils covered */
+  private colRange(): [number, number] {
+    if (this.gHi <= this.gLo) return [0, -1];
+    return [Math.floor(this.gLo / this.nyN), Math.floor((this.gHi - 1) / this.nyN)];
+  }
+
+  /**
+   * Symmetry mode, after p2g. What the mirror points below the plane would have scattered sits on the ghost
+   * rows: fold it onto the mirror row (mass and x-momentum with their sign, y-momentum negated). The plane's
+   * own row is its own mirror, so its y-momentum cancels — gridUpdate writes that as v_y = 0.
+   */
+  private fold(): void {
+    const { gm, gvx, gvy, gpush, nyN, kSym } = this;
+    const [c0, c1] = this.colRange();
+    for (let i = c0; i <= c1; i++) {
+      const col = i * nyN;
+      for (let k = 0; k < kSym; k++) {
+        const g = col + k;
+        const q = col + 2 * kSym - k;
+        gm[q] += gm[g];
+        gvx[q] += gvx[g];
+        gvy[q] -= gvy[g];
+        if (gpush[g]) gpush[q] = 1;
+      }
+    }
+  }
+
+  /** the ghost rows take the updated velocities back, mirrored, for the transfer to the points */
+  private mirrorBack(): void {
+    const { gvx, gvy, nyN, kSym } = this;
+    const [c0, c1] = this.colRange();
+    for (let i = c0; i <= c1; i++) {
+      const col = i * nyN;
+      for (let k = 0; k < kSym; k++) {
+        const g = col + k;
+        const q = col + 2 * kSym - k;
+        gvx[g] = gvx[q];
+        gvy[g] = -gvy[q];
+      }
+    }
+  }
+
+  /**
+   * The same fold for the J-bar sums, which are scalars (no sign change): `back` false adds the ghosts onto
+   * their mirrors before the sums are normalised, true writes the normalised values back onto the ghosts so
+   * that pass 2 reads the same smoothed field there as it would in the whole section. Leaving either out
+   * diverges within a couple of steps.
+   */
+  private foldScalars(back: boolean): void {
+    const { gJ, gJe, gB, gMv, nyN, kSym } = this;
+    const [c0, c1] = this.colRange();
+    for (let i = c0; i <= c1; i++) {
+      const col = i * nyN;
+      for (let k = 0; k < kSym; k++) {
+        const g = col + k;
+        const q = col + 2 * kSym - k;
+        if (back) {
+          gJ[g] = gJ[q];
+          gJe[g] = gJe[q];
+          gB[g] = gB[q];
+          gMv[g] = gMv[q];
+        } else {
+          gJ[q] += gJ[g];
+          gJe[q] += gJe[g];
+          gB[q] += gB[g];
+          gMv[q] += gMv[g];
+        }
+      }
     }
   }
 
@@ -995,6 +1135,11 @@ export class Sim {
     const mMin = 1e-12 * this.mass[0];
     const proj = this.projBuf;
     const NN = this.NN;
+    const nRolls = this.rolls.length; // symmetry: 1
+    const gpen0 = this.gpen[0];
+    const gpen1 = nRolls > 1 ? this.gpen[1] : gpen0;
+    // symmetry: the node row of the plane y = 0 (the rows below it are ghosts); -1 in the whole section
+    const symRow = this.sym ? this.kSym : -1;
     const two = this.pf !== null;
     // every step, so a step with no second field reads 0 (not the last step that had one)
     this.fieldContacts = 0;
@@ -1006,6 +1151,8 @@ export class Sim {
     const from = half === 0 ? this.gLo : Math.max(this.gLo, this.fLo);
     const to = half === 0 ? this.gHi : Math.min(this.gHi, this.fHi);
     for (let node = from; node < to; node++) {
+      const row = node % nyN;
+      if (row < symRow) continue; // a ghost row: mirrorBack() writes it after the update
       const idx = node + off;
       const m = gm[idx];
       if (m <= mMin) {
@@ -1014,15 +1161,16 @@ export class Sim {
         continue;
       }
       let vx = gvx[idx] / m;
-      let vy = gvy[idx] / m;
+      // on the symmetry plane the mirror momentum cancels the node's own
+      let vy = row === symRow ? 0 : gvy[idx] / m;
       const col = Math.floor(node / nyN);
       const xi = ox + col * h;
-      const yi = oy + (node % nyN) * h;
+      const yi = oy + row * h;
       // Each roll projects the velocity before contact. A node both rolls would hold (a gap of a cell or
       // two) takes the nearer roll only, or the mean of the two at the same distance (on the mid-plane):
       // one after the other favoured the roll projected last and broke the pass's symmetry.
-      const on0 = this.gpen[0][idx] < 0 && this.projectRoll(0, vx, vy, xi, yi, mu, proj, 0);
-      const on1 = this.gpen[1][idx] < 0 && this.projectRoll(1, vx, vy, xi, yi, mu, proj, 1);
+      const on0 = gpen0[idx] < 0 && this.projectRoll(0, vx, vy, xi, yi, mu, proj, 0);
+      const on1 = nRolls > 1 && gpen1[idx] < 0 && this.projectRoll(1, vx, vy, xi, yi, mu, proj, 1);
       let w0 = on0 ? 1 : 0;
       let w1 = on1 ? 1 : 0;
       if (on0 && on1) {
@@ -1083,6 +1231,7 @@ export class Sim {
     }
     }
     if (this.params.numerics.contact === 'surface') this.followRoll(fyAcc, tqAcc);
+    if (this.sym) this.mirrorBack();
     this.accSteps++;
     this.binSteps++;
     this.accFy[0] += fyAcc[0];
@@ -1117,7 +1266,10 @@ export class Sim {
     const cIn = num.volRelax ?? 1;
     const cContact = num.volRelaxContact ?? 1;
     // contact band: within 2h of a roll surface, i.e. |x − c| < R + 2h (squared, no sqrt per point)
-    const [r0, r1] = this.rolls;
+    const r0 = this.rolls[0];
+    // symmetry: the other roll is not solved, but its band still has to be tested — a point near the plane
+    // inside the bite is within 2h of the mirror roll's surface there just as it is in the whole section
+    const r1 = this.rolls[1] ?? { cx: r0.cx, cy: -r0.cy, R: r0.R, omega: -r0.omega };
     const b0 = (r0.R + 2 * h) * (r0.R + 2 * h);
     const b1 = (r1.R + 2 * h) * (r1.R + 2 * h);
     const invK = 1 / this.el.K;
@@ -1256,6 +1408,7 @@ export class Sim {
       }
     }
     if (!jbar) return;
+    if (this.sym) this.foldScalars(false);
     const gMa = rate ? gMv : gm;
     const halves = pf !== null ? 2 : 1;
     for (let half = 0; half < halves; half++) {
@@ -1283,6 +1436,7 @@ export class Sim {
         }
       }
     }
+    if (this.sym) this.foldScalars(true); // the ghosts take the normalised sums back for pass 2
   }
 
   /**
@@ -1438,6 +1592,7 @@ export class Sim {
     const rate = P.numerics.volumetric !== 'total';
     const { K, G } = this.el;
     const rateScale = P.rolling.millSpeed / P.rolling.rollSpeed;
+    const sym = this.sym;
     const failMode = dmg.failure;
     const gtn = dmg.yield === 'gtn' ? dmg.gtn : null;
     const nl = dmg.nonlocalLength > 0 ? (this.nlInc ??= [0, 1, 2].map(() => new Float64Array(n))) : null;
@@ -1513,7 +1668,8 @@ export class Sim {
         }
       }
       const nx = xp + dt * vx[p];
-      const ny = yp + dt * vy[p];
+      let ny = yp + dt * vy[p];
+      if (sym && ny < 0) ny = 0; // the symmetry plane
       px[p] = nx;
       py[p] = ny;
       if (nx < xMin || nx > xMax || ny < yMin || ny > yMax) {
@@ -1846,9 +2002,18 @@ export class Sim {
         }
       }
     }
+    // symmetry: point p stands for itself and its mirror. A crack that reaches the first row merges with
+    // its own mirror image into one crack of the whole section, so its count is doubled once and every
+    // point that joins it afterwards counts twice; a crack away from the plane has a separate mirror crack
+    // of the same count instead, and is left alone
+    const onMid = this.sym && j0 === 0;
     if (id >= 0) {
       crackId[p] = id;
-      this.cracks[id].count++;
+      const k = this.cracks[id];
+      if (onMid && !k.mid) {
+        k.mid = true;
+        k.count = 2 * k.count + 2;
+      } else k.count += k.mid ? 2 : 1;
       return;
     }
     id = this.cracks.length;
@@ -1866,7 +2031,8 @@ export class Sim {
       seq: this.seq[p],
       ep: this.ep[p],
       criterion: this.params.damage.model,
-      count: 1,
+      count: onMid ? 2 : 1,
+      mid: onMid ? true : undefined,
     });
   }
 
@@ -1976,7 +2142,7 @@ export class Sim {
       c++;
     }
     if (c < this.NJ) return null;
-    return { thickness: top - bot, speed: sv / c };
+    return { thickness: this.sym ? 2 * top : top - bot, speed: sv / c };
   }
 
   /**
@@ -1988,8 +2154,9 @@ export class Sim {
     const w = this.win;
     const steps = w.steps;
     if (steps === 0) return null;
-    const force = (Math.abs(w.fy[0]) + Math.abs(w.fy[1])) / 2 / steps;
-    const torque = (-w.tq[0] + w.tq[1]) / 2 / steps;
+    // symmetry: only the top roll is solved, so its force and torque are already the pass's, not a mean of two
+    const force = this.sym ? Math.abs(w.fy[0]) / steps : (Math.abs(w.fy[0]) + Math.abs(w.fy[1])) / 2 / steps;
+    const torque = this.sym ? -w.tq[0] / steps : (-w.tq[0] + w.tq[1]) / 2 / steps;
     w.steps = 0;
     w.fy[0] = w.fy[1] = w.tq[0] = w.tq[1] = 0;
     return { force, torque, steps };
@@ -1999,9 +2166,12 @@ export class Sim {
   diagnostics(): Diagnostics {
     if (this.accSteps > 0) {
       const steps = this.accSteps;
-      this.lastForce = (Math.abs(this.accFy[0]) + Math.abs(this.accFy[1])) / 2 / steps;
-      // top roll turns counter-clockwise (ω > 0): driving torque opposes the resisting torque of the sheet
-      this.lastTorque = (-this.accTorque[0] + this.accTorque[1]) / 2 / steps;
+      // top roll turns counter-clockwise (ω > 0): driving torque opposes the resisting torque of the sheet.
+      // symmetry: only that roll is solved, so its force and torque are already the pass's (see readWindow)
+      this.lastForce = this.sym
+        ? Math.abs(this.accFy[0]) / steps
+        : (Math.abs(this.accFy[0]) + Math.abs(this.accFy[1])) / 2 / steps;
+      this.lastTorque = this.sym ? -this.accTorque[0] / steps : (-this.accTorque[0] + this.accTorque[1]) / 2 / steps;
       this.lastPush = this.accPush / steps;
       [this.lastNeutral, this.lastNeutralState] = this.neutralPoint(this.accTau, this.accN);
     }
@@ -2031,7 +2201,8 @@ export class Sim {
       const r = this.params.rolling;
       const v1 = ex.speed;
       const v0 = (v1 * ex.thickness) / r.h0; // mass flow
-      const mdot = this.params.material.rho * this.params.numerics.massScale * r.h0 * v0;
+      // symmetry: the plastic work below is the half section's, so the mass flow has to be too
+      const mdot = this.params.material.rho * this.params.numerics.massScale * (this.sym ? r.h0 / 2 : r.h0) * v0;
       kineticRatio = (0.5 * mdot * (v1 * v1 - v0 * v0)) / ((this.plasticWork - this.lastWork) / dt);
     }
     this.lastWork = this.plasticWork;
@@ -2135,8 +2306,9 @@ export class Sim {
     const { nBins, binW, binSteps, lastP, lastTau } = this;
     if (binSteps > 0) {
       for (let b = 0; b < nBins; b++) {
-        lastP[b] = this.binN[b] / (2 * binSteps * binW);
-        lastTau[b] = this.binT[b] / (2 * binSteps * binW);
+        // the bins hold the force of every roll; symmetry solves one, the whole section two
+        lastP[b] = this.binN[b] / (this.rolls.length * binSteps * binW);
+        lastTau[b] = this.binT[b] / (this.rolls.length * binSteps * binW);
       }
       this.binN.fill(0);
       this.binT.fill(0);
@@ -2160,7 +2332,13 @@ export class Sim {
       c[id]++;
     }
     // a record whose points are all gone (a tandem's next stand only takes the points on the grid) stays where it started
-    return this.cracks.map((k) => ({ id: k.id, x: c[k.id] ? sx[k.id] / c[k.id] : k.x, y: c[k.id] ? sy[k.id] / c[k.id] : k.y, count: k.count }));
+    // symmetry: a crack that reaches the plane is its own mirror, so its centroid sits on it
+    return this.cracks.map((k) => ({
+      id: k.id,
+      x: c[k.id] ? sx[k.id] / c[k.id] : k.x,
+      y: k.mid ? 0 : c[k.id] ? sy[k.id] / c[k.id] : k.y,
+      count: k.count,
+    }));
   }
 
   /** Per-particle values of a display field (MPa for stresses). */
