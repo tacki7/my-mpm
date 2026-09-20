@@ -184,6 +184,15 @@ export function buildPanel(root: HTMLElement, onEdit: () => void): Panel {
     ]),
   );
 
+  // with the sheet and the rolls, under the number of stands
+  const handoff = select('handoff', 'スタンドの引き継ぎ', [
+    ['done', '板が全部抜けてから'],
+    ['steady', '定常になったらすぐ（速い）'],
+  ]);
+  handoff.classList.add('section-only');
+  handoff.title =
+    'タンデムで、次のスタンドへ移るとき。「定常になったらすぐ」は、出側の定常に圧延された部分を繰り返して次のスタンドの板を作る（板の残りは圧延しない。頭端・尾端の非定常な部分は引き継がない）';
+
   for (const g of GROUPS) {
     // a folded group is a <details> (its summary is the title); the others a <fieldset>
     let fs: HTMLElement;
@@ -216,6 +225,7 @@ export function buildPanel(root: HTMLElement, onEdit: () => void): Panel {
       checks.push(checkRange(inp, row, () => [f.min, f.max], f.unit));
       fs.append(row);
       inputs.set(f.key, inp);
+      if (f.key === 'stands') fs.append(handoff);
     }
     root.append(fs);
     if (g.title === '潤滑と張力') root.append(matGroup, materialEditor.root, defectEditor.root);
@@ -246,6 +256,7 @@ export function buildPanel(root: HTMLElement, onEdit: () => void): Panel {
       selects.get('damage')!.value = p.damage.model;
       selects.get('failure')!.value = p.damage.failure;
       selects.get('crack')!.value = p.numerics.crackFields ?? 'none';
+      selects.get('handoff')!.value = p.rolling.handoff ?? 'done';
     },
     read(base) {
       const p: SimParams = structuredClone(base);
@@ -256,6 +267,9 @@ export function buildPanel(root: HTMLElement, onEdit: () => void): Panel {
       p.damage.model = selects.get('damage')!.value as SimParams['damage']['model'];
       p.damage.failure = selects.get('failure')!.value as SimParams['damage']['failure'];
       p.numerics.crackFields = selects.get('crack')!.value as NonNullable<SimParams['numerics']['crackFields']>;
+      // 'done' is written as no handoff at all (as the presets have it), so that it is not a difference
+      if (selects.get('handoff')!.value === 'steady') p.rolling.handoff = 'steady';
+      else delete p.rolling.handoff;
       for (const g of GROUPS) {
         for (const f of g.fields) {
           const input = inputs.get(f.key)!;

@@ -300,7 +300,7 @@ self.onmessage = (e: MessageEvent<ToWorker>) => {
         field = m.field;
         stopAfter = m.stopAfter;
         params = m.params;
-        tandem = new TandemSim(params, m.stands, EVERY);
+        tandem = new TandemSim(params, m.stands, EVERY, params.rolling.handoff ?? 'done');
         tandem.onStandDone = onStandDone;
         sim = tandem.sim;
         tracker = new Tracker(sim);

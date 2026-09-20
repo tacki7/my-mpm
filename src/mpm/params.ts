@@ -111,6 +111,11 @@ export interface RollingParams {
   tensionRamp?: number;
   /** stands of a tandem, each rolling the one before's exit strip by the same reduction (1 or absent: one stand). Sim does not read it */
   stands?: number;
+  /**
+   * When a tandem's stand hands its sheet on (src/mpm/tandem.ts): 'done' (or absent) once the whole sheet is
+   * rolled, 'steady' as soon as it rolls steadily, the next stand's sheet made of the steady stretch. Sim does not read it
+   */
+  handoff?: 'done' | 'steady';
 }
 
 /**

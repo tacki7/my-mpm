@@ -1,7 +1,7 @@
 // Tandem rolling headless: the same pass over --stands stands, the material state carried from each
 // stand to the next (src/mpm/tandem.ts). Prints a line per stand (or one JSON object with --json).
 //
-//   node tools/tandem.mjs --stands 3 [the options of tools/run.mjs]
+//   node tools/tandem.mjs --stands 3 [--handoff steady] [the options of tools/run.mjs]
 //
 // Each stand's summary is the one tools/run.mjs prints for a pass (tools/run-summary.mjs), plus its
 // entry sheet and the thickness of the sheet it let out; with --stands 1 it is run.mjs's.
@@ -17,14 +17,17 @@ const opt = (name, def) => {
 const flag = (name) => args.includes(`--${name}`);
 
 const stands = +opt('stands', 1);
+// when a stand hands its sheet on: 'done' (the whole sheet rolled) or 'steady' (as soon as it rolls steadily)
+const handoff = opt('handoff', 'done');
 const every = +opt('every', READ_STEPS);
 const maxSteps = +opt('max', 400000);
 const json = flag('json');
-const P = runParams(args.filter((a, i) => a !== '--stands' && args[i - 1] !== '--stands'));
+const own = ['--stands', '--handoff'];
+const P = runParams(args.filter((a, i) => !own.includes(a) && !own.includes(args[i - 1])));
 
 // the stand ends inside advance(), at its own reading every `every` steps; these reads of diagnostics() come
 // at the same steps (blocks of `every` from the stand's step 0), so a stand's summary is run.mjs's for the pass
-const tandem = new TandemSim(P, stands, every);
+const tandem = new TandemSim(P, stands, every, handoff);
 const out = [];
 const log = (s) => { if (!json) console.log(s); };
 let hist = [];

@@ -2,7 +2,7 @@
 // and headless checks). Lengths in mm, tensions in MPa. Invalid values are ignored,
 // and so are h0, r and R together when the rolls could not bite with them.
 //   ?preset=<id>&h0=1&r=25&R=100&L=16&mu=0.08&tb=0&tf=0&mat=spcc&damage=johnson-cook
-//   &yield=gtn&f0=0.005&fc=0.05&nucleation=tension&crack=none|dfg
+//   &yield=gtn&f0=0.005&fc=0.05&nucleation=tension&crack=none|dfg&handoff=done|steady
 //   &cells=10&ms=10000&field=eta&autorun=1&stopafter=<steps>
 //   &cond=<base64url JSON>: every other condition, as the leaves that differ from the
 //   preset (conditionsQuery writes it, so a shared URL starts exactly the same run)
@@ -75,6 +75,10 @@ export function applyQuery(base: SimParams, q: URLSearchParams): SimParams {
   if (nu && NUCLEATION.includes(nu)) p.damage.gtn.nucleation = nu;
   const crack = q.get('crack') as NonNullable<SimParams['numerics']['crackFields']> | null;
   if (crack && CRACK_FIELDS.includes(crack)) p.numerics.crackFields = crack;
+  // 'done' is written as no handoff at all, as the presets have it
+  const handoff = q.get('handoff');
+  if (handoff === 'steady') p.rolling.handoff = 'steady';
+  else if (handoff === 'done') delete p.rolling.handoff;
   const cond = q.get('cond');
   if (cond) {
     const rolling = { ...p.rolling };
@@ -145,6 +149,7 @@ const RULES: Record<string, Rule> = {
   'rolling.rollRadius': r(5e-3, 2),
   'rolling.sheetLength': r(1e-3, 0.5),
   'rolling.stands': { range: [1, MAX_STANDS], int: true },
+  'rolling.handoff': { oneOf: ['done', 'steady'] },
   'rolling.rollSpeed': r(0.05, 20),
   'rolling.millSpeed': r(0.1, 60),
   'rolling.mu': r(0, 1),
@@ -280,6 +285,7 @@ export function conditionsQuery(presetId: string, preset: SimParams, params: Sim
   put('R', r.rollRadius * 1e3, b.rollRadius * 1e3);
   put('L', r.sheetLength * 1e3, b.sheetLength * 1e3);
   put('stands', r.stands ?? 1, b.stands ?? 1);
+  if ((r.handoff ?? 'done') !== (b.handoff ?? 'done')) q.set('handoff', r.handoff ?? 'done');
   put('mu', r.mu, b.mu);
   put('tb', r.backTension * 1e-6, b.backTension * 1e-6);
   put('tf', r.frontTension * 1e-6, b.frontTension * 1e-6);
