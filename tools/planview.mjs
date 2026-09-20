@@ -8,6 +8,7 @@
 //                           [--mu 0.08] [--ms 10000] [--cfl 0.4] [--tb 0] [--tf 0]
 //                           [--damage none|johnson-cook|hancock-mackenzie|cockcroft-latham] [--cl 0.6]
 //                           [--notch <radius mm>] [--crack none|dfg] [--nojbar] [--max 4000000] [--json]
+//                           [--escatter <%>] [--ewidth <mm>] [--elen <mm>] [--eseed <n>]
 //
 // Lengths in mm, tensions in MPa; --W is the full width, --cells the grid cells across the
 // half width. --notch cuts a semicircular notch of that radius into the edge half-way along
@@ -19,7 +20,7 @@
 // width past the exit and falls again within about a half width of the entry. A strip too short for
 // the window has no samples (lengthen it with --L to twice the gap and 8 mm).
 import { PlanSim } from '../src/mpm/planview/sim.ts';
-import { planCondition } from '../src/mpm/planview/condition.ts';
+import { PLAN_DEFAULTS, planCondition } from '../src/mpm/planview/condition.ts';
 import { SAMPLE_STEPS, SteadySampler, steadyGap, steadyLength } from '../src/mpm/planview/steady.ts';
 import { defaultParams } from '../src/mpm/params.ts';
 
@@ -53,9 +54,20 @@ if (crack !== 'none' && crack !== 'dfg') throw new Error(`--crack ${crack}: none
 base.numerics.crackFields = crack;
 const W = +opt('W', 20) * 1e-3;
 const notch = +opt('notch', 0) * 1e-3;
-const P = planCondition(base, { width: W, cells: +opt('cells', 20), notch });
+const P = planCondition(base, {
+  ...PLAN_DEFAULTS,
+  width: W,
+  cells: +opt('cells', 20),
+  notch,
+  edgeAmount: +opt('escatter', 0) / 100,
+  edgeWidth: +opt('ewidth', PLAN_DEFAULTS.edgeWidth * 1e3) * 1e-3,
+  edgeLength: +opt('elen', PLAN_DEFAULTS.edgeLength * 1e3) * 1e-3,
+  edgeSeed: +opt('eseed', PLAN_DEFAULTS.edgeSeed),
+});
+const sc = P.plan.edgeScatter;
 const sim = new PlanSim(P);
 say(`volumes ${sim.averaged ? "smoothed over the grid (the plan view's only scheme; 'total' smooths too)" : 'point by point (J-bar off)'}`);
+if (sc.amount > 0) say(`edge scatter: ductility ×(1 − ${(sc.amount * 100).toFixed(0)} % · u) within ${(sc.width * 1e3).toFixed(2)} mm of each edge, one value per ${sc.length > 0 ? `${(sc.length * 1e3).toFixed(2)} mm` : 'point'}, seed ${sc.seed}`);
 say(`plan view: W ${(W * 1e3).toFixed(1)} mm (W/h0 ${(W / r.h0).toFixed(0)}), ${sim.n} points, h ${(sim.h * 1e3).toFixed(3)} mm, dt ${sim.dt.toExponential(3)} s`);
 
 // Wusatowski (1955): W1/W0 = (h1/h0)^(−w), w = 10^(−1.269 (W0/h0) (h0/D)^0.556), D the roll diameter
@@ -92,6 +104,7 @@ const out = {
   pressureMean_MPa: m.pressureMean * 1e-6,
   pressureJumpMax_MPa: m.pressureJumpMax * 1e-6,
   pressureJumpP95_MPa: m.pressureJumpP95 * 1e-6,
+  edgeScatter: sc.amount > 0 ? { amount: sc.amount, width_mm: sc.width * 1e3, length_mm: sc.length * 1e3, seed: sc.seed } : null,
   cracks: sim.cracks.map((c) => {
     let xs = [Infinity, -Infinity];
     let zs = [Infinity, -Infinity];

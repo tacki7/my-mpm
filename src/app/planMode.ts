@@ -10,7 +10,7 @@ import { css, split, temper } from './colormap.ts';
 import { checkRange } from './fieldCheck.ts';
 import { edited, showNumber } from './numberInput.ts';
 import type { FromPlanWorker, PlanFieldName, PlanFrame, PlanGeometry, ToPlanWorker } from './planProtocol.ts';
-import { PLAN_SETTINGS, checkedSettings, maxNotch, planSettingsOf, planSettingsQuery } from './planQuery.ts';
+import { PLAN_SETTINGS, checkedSettings, maxEdgeWidth, maxNotch, planSettingsOf, planSettingsQuery } from './planQuery.ts';
 import { PLAN_FIELDS, PlanView, planFieldInfo } from './planView.ts';
 import { conditionsQuery } from './query.ts';
 import { radioGroup } from './radioGroup.ts';
@@ -125,6 +125,9 @@ export class PlanMode {
   private buildSettings(): void {
     const fs = el('fieldset', 'group plan-only');
     fs.append(el('legend', undefined, '板幅（平面図）'));
+    // the edge's ductility scatter is its own fieldset: it is a material condition, not a size
+    const edge = el('fieldset', 'group plan-only');
+    edge.append(el('legend', undefined, '端の延性のばらつき（平面図）'));
     for (const f of PLAN_SETTINGS) {
       const row = el('label', 'field');
       row.append(el('span', 'field-label', f.label));
@@ -144,19 +147,22 @@ export class PlanMode {
       row.append(box);
       if (f.hint) row.append(el('span', 'hint', f.hint));
       const range = (): [number, number] => {
-        if (f.key !== 'notch') return [f.min, f.max];
+        if (f.key !== 'notch' && f.key !== 'edgeWidth') return [f.min, f.max];
         const w = parseFloat(this.inputs.get('width')?.value ?? '');
-        return [f.min, Math.min(f.max, maxNotch(Number.isFinite(w) ? w : this.settings.width / mm))];
+        const width = Number.isFinite(w) ? w : this.settings.width / mm;
+        return [f.min, Math.min(f.max, f.key === 'notch' ? maxNotch(width) : maxEdgeWidth(width))];
       };
       this.checks.push(checkRange(inp, row, range, f.unit));
-      fs.append(row);
+      (f.group === 'edge' ? edge : fs).append(row);
       this.inputs.set(f.key, inp);
     }
     fs.append(el('p', 'hint', '板厚・圧下率・摩擦・材料・破壊の基準・亀裂の面は上の条件を使う（板厚方向のセル数は断面だけ）'));
+    edge.append(el('p', 'hint', '端の組織・介在物・トリミングの傷の代わり。ばらつきを入れると耳割れが帯ではなく離れた割れになる（docs/model.md）'));
     // right after the preset's note (and its button), where the view's own settings are looked for first
     const note = this.o.panelRoot.querySelector('.note-more') ?? this.o.panelRoot.querySelector('.preset-note');
     if (note) note.after(fs);
     else this.o.panelRoot.prepend(fs);
+    fs.after(edge);
     this.showSettings(this.settings);
   }
 
@@ -175,7 +181,7 @@ export class PlanMode {
       const v = parseFloat(inp.value);
       if (!Number.isFinite(v)) continue;
       const c = Math.min(f.max, Math.max(f.min, v));
-      s[f.key] = f.key === 'cells' ? Math.round(c) : c * f.scale;
+      s[f.key] = f.int ? Math.round(c) : c * f.scale;
     }
     return checkedSettings(s, params.rolling.sheetLength, params.numerics.ppc);
   }
