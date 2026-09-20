@@ -984,6 +984,15 @@ details.group > summary {
   cursor: pointer;
 }
 
+.preset-custom {
+  align-self: end;
+  margin: 0 0 6px -4px;
+  padding: 0 6px;
+  border: 1px solid var(--ink);
+  border-radius: 3px;
+  font-size: var(--fs-xs);
+}
+
 .custom-badge {
   margin-left: 8px;
   padding: 0 6px;
@@ -1125,9 +1134,28 @@ details.group > summary {
   top: 46px;
   font-size: var(--fs-s);
   color: var(--ink-soft);
-  pointer-events: none;
-  padding: 0 4px;
+  padding: 2px 6px;
+  min-height: 24px;
+  border: 1px solid transparent;
+  border-radius: 3px;
   background: rgba(244, 245, 243, 0.9);
+  cursor: pointer;
+}
+
+.stand-label:disabled {
+  cursor: default;
+  opacity: 1;
+}
+
+/* the stand whose readings the right column shows */
+.stand-slot.picked .stand-label {
+  border-color: var(--ink);
+  font-weight: 700;
+}
+
+.stand-results th.shown {
+  text-decoration: underline;
+  text-underline-offset: 3px;
 }
 
 .stand-slot.current .stand-label {

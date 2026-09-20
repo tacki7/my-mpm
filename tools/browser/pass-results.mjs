@@ -80,6 +80,14 @@ try {
   const short = await rows(c);
   const note = await c.evaluate(`document.getElementById('results-note').textContent`);
   ok(short.force.value === null && short.force.text === '—' && note.includes('定常の読みが無い'), 'a 4 mm sheet on 4 cells: no steady reading, the rows show — and the note says why', note.slice(0, 40));
+
+  // ── a front tension over 2k pulls the strip out: the torque turns negative, and the note says why
+  await c.navigate(page('?preset=front-tension&cells=4&L=16&autorun=1'));
+  await c.waitFor('__mpm.done', 300000);
+  const pulled = await rows(c);
+  const pulledNote = await c.evaluate(`document.getElementById('results-note').textContent`);
+  ok(pulled.torque.value < 0 && pulledNote.includes('圧延トルクが負'), 'the front-tension pass: a negative torque, with the reason under the table', `${pulled.torque.value.toFixed(3)} kN·m/m, 「${pulledNote.slice(pulledNote.indexOf('圧延トルク'))}」`);
+  ok(!note.includes('圧延トルクが負'), 'a pass with a positive torque says nothing about it');
 } finally {
   if (c) {
     await c.navigate('about:blank').catch(() => {});

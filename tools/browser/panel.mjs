@@ -19,6 +19,11 @@ if (!target || !process.env.CDP_PORT) {
 }
 const u = new URL(target);
 u.search = '?cells=6&L=8&stopafter=6000';
+const page = (q) => {
+  const v = new URL(target);
+  v.search = q;
+  return v.href;
+};
 
 const c = await connect(process.env.CDP_PORT);
 const type = (selector, value) =>
@@ -122,6 +127,22 @@ try {
     const diff = changed(before, await c.evaluate('__mpm.params'));
     ok(diff.length === 1 && diff[0] === key, `editing ${key} changes only it, bit for bit`, diff.join(', '));
   }
+
+  // ── the badge by the conditions' name: the pass is no longer the named one
+  await c.navigate(page('?preset=central-burst'));
+  await c.waitFor('__mpm.ready', 30000);
+  // (a version without the mark answers "not shown", so this reads as a plain failure)
+  const badge = () => c.evaluate(`(() => { const b = document.getElementById('preset-custom'); return b ? { shown: b.checkVisibility(), text: b.textContent } : { shown: false, text: '(no mark)' }; })()`);
+  const clean = await badge();
+  await type('#panel [name="mu"]', '0.3');
+  const edited = await badge();
+  await click('#reset');
+  await c.waitFor('__mpm.ready && __mpm.params.rolling.mu === 0.3', 30000);
+  const applied = await badge();
+  ok(!clean.shown && !edited.shown && applied.shown && applied.text.includes('変更あり'), 'the conditions that are no longer the preset\'s are marked (after they are applied, not while typing)', `preset ${clean.shown}, typing ${edited.shown}, applied ${applied.shown} 「${applied.text}」`);
+  await c.navigate(page('?preset=central-burst'));
+  await c.waitFor('__mpm.ready', 30000);
+  ok(!(await badge()).shown, 'the mark goes when the preset is loaded again');
 
   ok(c.errors.length === 0, 'no exceptions or console errors', c.errors.join(' | '));
   await c.navigate('about:blank');

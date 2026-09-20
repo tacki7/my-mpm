@@ -79,6 +79,7 @@ export class PlanMode {
     this.buildSwitch();
     this.buildSettings();
     this.buildTabs();
+    this.buildTools();
     this.buildUrl();
     new ResizeObserver(() => {
       this.view.resize();
@@ -177,6 +178,22 @@ export class PlanMode {
       s[f.key] = f.key === 'cells' ? Math.round(c) : c * f.scale;
     }
     return checkedSettings(s, params.rolling.sheetLength, params.numerics.ppc);
+  }
+
+  /** the one view control the plan picture has: frame the bite (the default) or the whole strip */
+  private buildTools(): void {
+    const b = el('button', undefined, '全体を見る');
+    b.type = 'button';
+    b.setAttribute('aria-pressed', 'false');
+    b.title = '板の全長を入れて見る（もう一度押すとロールバイトに戻る）';
+    b.addEventListener('click', () => {
+      const whole = this.view.fit === 'bite';
+      this.view.fit = whole ? 'strip' : 'bite';
+      b.setAttribute('aria-pressed', String(whole));
+      b.textContent = whole ? 'バイトを見る' : '全体を見る';
+      this.dirty = true;
+    });
+    this.$('plan-tools').append(b);
   }
 
   private buildTabs(): void {

@@ -41,6 +41,13 @@ export function passReadout(d: Diagnostics, s: SteadyMeans | null): Readout[] {
   ];
 }
 
+/** after the line above: why the torque is negative (a front tension that pulls the strip out) */
+export function torqueNote(torque: number | null | undefined): string {
+  return torque != null && torque < 0
+    ? '　圧延トルクが負なのは、前方張力が板を引き出していて、ロールが板を送るのでなく引き留めているから。'
+    : '';
+}
+
 /** the line under the results table: what the first four rows are */
 export function readoutNote(kind: ReadoutKind): string {
   return kind === 'steady'

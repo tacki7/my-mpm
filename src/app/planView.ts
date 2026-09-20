@@ -41,6 +41,8 @@ export class PlanView {
   private dpr = 1;
   geometry: PlanGeometry | null = null;
   frame: PlanFrame | null = null;
+  /** what the picture frames: the roll bite ('bite', the default) or the whole strip ('strip') */
+  fit: 'bite' | 'strip' = 'bite';
   /** colour range of the field last drawn */
   range: [number, number] = [0, 1];
 
@@ -59,7 +61,10 @@ export class PlanView {
     this.canvas.height = Math.round(this.h * this.dpr);
   }
 
-  /** metres → CSS pixels: the whole width (with room for the spread) fits, the bite in the middle */
+  /**
+   * metres → CSS pixels: the whole width (with room for the spread) fits, and along the rolling direction either
+   * the roll bite in the middle ('bite') or the whole strip with the bite ('strip'; the scale drops to fit it).
+   */
   private transform() {
     const g = this.geometry!;
     const top = 44; // under the toolbar-free top edge: the phase and the labels
@@ -67,11 +72,34 @@ export class PlanView {
     const usable = Math.max(60, this.h - top - bottom);
     const zSpan = 2 * g.halfWidth0 * 1.2;
     let s = usable / zSpan;
-    const xSpanMin = 3 * g.contactLength;
-    if (this.w / s < xSpanMin) s = this.w / xSpanMin;
-    const xMid = -0.5 * g.contactLength;
+    const strip = this.fit === 'strip' ? this.stripSpan() : null;
+    let xMid = -0.5 * g.contactLength;
+    if (strip) {
+      xMid = (strip[0] + strip[1]) / 2;
+      const need = (strip[1] - strip[0]) * 1.04;
+      if (this.w / s < need) s = this.w / need;
+    } else {
+      const xSpanMin = 3 * g.contactLength;
+      if (this.w / s < xSpanMin) s = this.w / xSpanMin;
+    }
     const yMid = top + usable / 2;
     return { s, X: (x: number) => this.w / 2 + (x - xMid) * s, Y: (z: number) => yMid - z * s };
+  }
+
+  /** the rolling-direction range to frame in 'strip': the points on show and the bite (null: nothing drawn yet) */
+  private stripSpan(): [number, number] | null {
+    const f = this.frame;
+    const g = this.geometry;
+    if (!f || !g) return null;
+    let lo = -g.contactLength;
+    let hi = 0;
+    for (let p = 0; p < f.flags.length; p++) {
+      if (!(f.flags[p] & 1)) continue;
+      const x = f.pos[2 * p];
+      if (x < lo) lo = x;
+      if (x > hi) hi = x;
+    }
+    return [lo, hi];
   }
 
   private colorOf(info: PlanFieldInfo): (v: number) => string {

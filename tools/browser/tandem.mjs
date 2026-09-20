@@ -241,6 +241,36 @@ try {
   const legend = await c.evaluate(`document.querySelector('.locus-legend').textContent`);
   ok(['#1', '#2', '#3'].every((s) => legend.includes(s)), 'the loading-path legend names the stands', legend.slice(0, 80));
 
+  // ── picking a stand to read: its number is a button (mouse and keyboard), the right column and the hill follow it
+  const readings = () =>
+    c.evaluate(`({ clock: document.getElementById('clock').textContent, force: document.querySelector('#results tr[data-key="force"]')?.dataset.value,
+      hillShown: (document.getElementById('legend-hill').textContent.match(/スラブ法 p（#(\\d)）/) ?? [])[1],
+      burst: document.getElementById('burst-hint').dataset.delta, pressed: [...document.querySelectorAll('.stand-label')].map((b) => b.getAttribute('aria-pressed')),
+      shownCol: [...document.querySelectorAll('#stand-results thead th')].map((h) => h.className) })`);
+  const live = await readings();
+  await click('.stand-slot[data-stand="1"] .stand-label');
+  await painted();
+  const first = await readings();
+  const standForce = await c.evaluate('__mpm.standResults.map((r) => r.steadyForce)');
+  ok(
+    +first.force * 1e6 === standForce[0] && first.hillShown === '1' && first.clock.includes('スタンド 1 / 3') && first.pressed.join() === 'true,false,false' && first.shownCol[0].includes('shown'),
+    "a finished stand's number shows that stand: its steady load, its friction hill, the clock and the table's column",
+    `load ${(+first.force).toFixed(3)} kN/mm (result ${(standForce[0] * 1e-6).toFixed(3)}), hill #${first.hillShown}, ${first.clock.slice(-20)}`,
+  );
+  ok(+first.burst > +live.burst, "the central-burst hint follows the picked stand's entry thickness (the first stand is the thickest)", `Δ ${(+first.burst).toFixed(2)} against #3's ${(+live.burst).toFixed(2)}`);
+  // the keyboard: Tab onto the second stand's number and press it
+  await c.evaluate(`document.querySelector('.stand-slot[data-stand="2"] .stand-label').focus(); true`);
+  await c.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, text: '\r' });
+  await c.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 });
+  await painted();
+  const second = await readings();
+  ok(+second.force * 1e6 === standForce[1] && second.hillShown === '2' && second.pressed.join() === 'false,true,false', 'Enter on a number picks that stand too', `load ${(+second.force).toFixed(3)} kN/mm (result ${(standForce[1] * 1e-6).toFixed(3)}), hill #${second.hillShown}`);
+  // pressing the running (here the last) stand's number goes back to following it
+  await click('.stand-slot[data-stand="3"] .stand-label');
+  await painted();
+  const back = await readings();
+  ok(back.force === live.force && back.hillShown === live.hillShown && back.clock === live.clock && !back.shownCol.some((c) => c.includes('shown')), 'the last stand\'s number goes back to the live readings', `load ${(+back.force).toFixed(3)} kN/mm`);
+
   // ── the force chart: a slab level per stand
   const force = await c.evaluate(`document.getElementById('legend-force').textContent`);
   ok(/スタンドごと/.test(force) && (force.match(/\d\.\d+/g) ?? []).length >= STANDS, 'the force chart gives the slab level of each stand', force.slice(0, 90));
@@ -376,10 +406,13 @@ try {
     const all = [];
     for (let id = 0; ; id++) { const s = __mpm.screenOf(id); if (!s) break; all.push(s); }
     const b = document.getElementById('bite').getBoundingClientRect();
+    // the stands' numbers are buttons (they pick the stand to read), so a click under one of them is theirs
+    const labels = [...document.querySelectorAll('.stand-label')].map((e) => e.getBoundingClientRect());
+    const onLabel = (x, y) => labels.some((r) => x >= r.x - 2 && x <= r.right + 2 && y >= r.y - 2 && y <= r.bottom + 2);
     const xs = all.map((o) => o.x), head = Math.max(...xs), tail = Math.min(...xs);
     for (let id = 0; id < all.length; id++) {
       const s = all[id], rel = (head - s.x) / (head - tail);
-      if (rel < 0.35 || rel > 0.65 || s.y < b.y + 60 || s.y > b.y + b.height - 60) continue;
+      if (rel < 0.35 || rel > 0.65 || s.y < b.y + 60 || s.y > b.y + b.height - 60 || onLabel(s.x, s.y)) continue;
       const x = Math.round(s.x), y = Math.round(s.y), d = Math.hypot(s.x - x, s.y - y);
       if (all.every((o, j) => j === id || Math.hypot(o.x - x, o.y - y) >= d + 1)) return { id, x, y, rel, stand: __mpm.stand, step: __mpm.diag.step };
     }
