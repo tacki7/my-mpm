@@ -223,7 +223,13 @@ export function buildPanel(root: HTMLElement, onEdit: () => void): Panel {
     ['steady', '定常状態になるまで（長さは自動）'],
   ]);
   length.classList.add('section-only');
-  length.addEventListener('change', () => (inputs.get('L')!.disabled = selects.get('length')!.value === 'steady'));
+  // the length is then not an input: the field is off, and shows the length worked out once the run starts
+  const lockLength = (auto: boolean) => {
+    const L = inputs.get('L')!;
+    L.disabled = auto;
+    L.title = auto ? '「定常状態になるまで」では自動で決まる（圧延を始めると、決まった長さが出る）' : '';
+  };
+  length.addEventListener('change', () => lockLength(selects.get('length')!.value === 'steady'));
   length.title =
     '「定常状態になるまで」は、1 スタンド目の板の長さを、定常になって定常の読みが揃うのに要る長さに自動で決める（ロール偏平・圧下率一定ではロールの調整が落ち着くぶん長い）。決めた長さは、圧延を始めると「板の長さ」に出る。タンデムの 2 スタンド目以降は引き継ぎ方で決まる';
   const flatten = select('flatten', 'ロール偏平', [
@@ -303,7 +309,7 @@ export function buildPanel(root: HTMLElement, onEdit: () => void): Panel {
       selects.get('handoff')!.value = p.rolling.handoff ?? 'done';
       selects.get('control')!.value = p.rolling.gapControl ?? 'gap';
       selects.get('length')!.value = p.rolling.lengthMode ?? 'fixed';
-      inputs.get('L')!.disabled = p.rolling.lengthMode === 'steady';
+      lockLength(p.rolling.lengthMode === 'steady');
       selects.get('flatten')!.value = p.rolling.flattening ?? 'none';
     },
     read(base) {
