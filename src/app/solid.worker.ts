@@ -1,20 +1,21 @@
 // Runs the three-dimensional model (src/mpm/solid/sim3.ts) in its own thread and streams the strip's faces to
 // the page. The steady values are read as tools/solid.mjs reads them (a look every READ_STEPS steps).
-import { Sim3, solidParams } from '../mpm/solid/sim3.ts';
-import { READ_STEPS, SolidSampler } from '../mpm/solid/steady.ts';
+import { solidParams, type Sim3 } from '../mpm/solid/sim3.ts';
+import { READ_STEPS } from '../mpm/solid/steady.ts';
+import { Tandem3 } from '../mpm/solid/tandem3.ts';
 import { faces } from '../mpm/solid/surface.ts';
 import { karman } from '../mpm/slab.ts';
 import type { FromSolidWorker, SolidFieldName, SolidFrame, ToSolidWorker } from './solidProtocol.ts';
 
-let sim: Sim3 | null = null;
-let sampler: SolidSampler | null = null;
+let tandem: Tandem3 | null = null;
 let field: SolidFieldName = 'seq';
 let running = false;
 let finished = false;
 let stopAfter: number | null = null;
 let timer: ReturnType<typeof setTimeout> | null = null;
 let msPerStep = 0;
-let history: { t: number[]; force: number[] } = { t: [], force: [] };
+let history: { t: number[]; force: number[]; stand: number[] } = { t: [], force: [], stand: [] };
+
 
 // a frame of the faces is light, but a step is heavy (tens of ms on a fine grid): a frame at least every FRAME_MS
 const FRAME_MS = 80;
@@ -47,9 +48,37 @@ function fieldValue(s: Sim3, f: SolidFieldName): (p: number) => number {
   }
 }
 
+function ready(T: Tandem3): void {
+  const sim = T.sim;
+  post({
+    type: 'ready',
+    geometry: {
+      stand: T.stand,
+      stands: T.stands,
+      sheetLength: sim.params.rolling.sheetLength,
+      n: sim.n,
+      lattice: [sim.NI, sim.NJ, sim.NK],
+      h: sim.h,
+      dt: sim.dt,
+      h0: sim.params.rolling.h0,
+      gap: sim.gap,
+      rollRadius: sim.roll.R,
+      contactLength: sim.contactLength,
+      xExitProbe: sim.xExitProbe,
+      halfWidth0: sim.halfWidth0,
+      mapX0: sim.ox + sim.binCol0 * sim.h,
+      // a later stand's strip comes in hardened
+      slabForce: karman(sim.params.rolling, sim.params.material, 2000, sim.params.rolling.entryStrain ?? 0).force,
+    },
+  });
+  // headless checks can read the simulation through the worker target
+  (self as unknown as { __solid: Sim3 }).__solid = sim;
+}
+
 function frame(): void {
-  if (!sim) return;
-  const s = sim;
+  if (!tandem) return;
+  const T = tandem;
+  const s = T.sim;
   const fs = faces(s, fieldValue(s, field));
   const edge = s.edgeProfile();
   const msg: SolidFrame = {
@@ -59,44 +88,54 @@ function frame(): void {
     edgeX: Float32Array.from(edge.x),
     edgeHalfWidth: Float32Array.from(edge.halfWidth),
     diag: {
-      t: s.t,
-      step: s.step,
+      t: T.tOffset + s.t,
+      step: T.stepOffset + s.step,
+      stand: T.stand,
+      finished,
+      stopped: T.stopped,
+      rollRadius: s.roll.R,
+      gap: s.gap,
+      rollsSettled: s.rollsSettled,
       phase: s.phase(),
-      now: sampler!.last,
-      steady: sampler!.means(s),
+      now: T.sampler.last,
+      steady: T.sampler.means(s),
       nFailed: s.nFailed,
       maxDamage: s.maxDamage(),
       firstCrack: s.firstCrack,
       inertiaRatio: s.inertiaRatio,
     },
-    history: { t: history.t.slice(), force: history.force.slice() },
+    history: { t: history.t.slice(), force: history.force.slice(), stand: history.stand.slice() },
     running,
     msPerStep,
   };
   post(msg, [...fs.flatMap((f) => [f.pos.buffer, f.val.buffer, f.failed.buffer]), msg.edgeX.buffer, msg.edgeHalfWidth.buffer]);
 }
 
-function look(s: Sim3): void {
-  const l = sampler!.look(s);
-  history.t.push(s.t);
-  history.force.push(l.force);
-  if (l.phase === 'done' || l.phase === 'stalled') finished = true;
-}
-
 function loop(): void {
   timer = null;
-  if (!sim || !running) return;
-  const s = sim;
+  if (!tandem || !running) return;
+  const T = tandem;
   const t0 = performance.now();
   let steps = 0;
   let reached = false;
   while (performance.now() - t0 < FRAME_MS && !finished) {
-    let chunk = Math.min(5, READ_STEPS - (s.step % READ_STEPS));
-    if (stopAfter !== null) chunk = Math.min(chunk, stopAfter - s.step);
-    for (let k = 0; k < chunk; k++) s.advance();
+    const at = T.stepOffset + T.sim.step;
+    let chunk = Math.min(5, READ_STEPS - (T.sim.step % READ_STEPS));
+    if (stopAfter !== null) chunk = Math.min(chunk, stopAfter - at);
+    for (let k = 0; k < chunk; k++) {
+      const stand = T.stand;
+      const t = T.tOffset + T.sim.t + T.sim.dt;
+      const l = T.advance();
+      if (!l) continue;
+      // a look ends the chunk (chunks stop at the looks), and it may have ended the stand
+      history.t.push(t);
+      history.force.push(l.force);
+      history.stand.push(stand);
+      if (T.done) finished = true;
+      else if (T.stand !== stand) ready(T);
+    }
     steps += Math.max(0, chunk);
-    if (s.step % READ_STEPS === 0) look(s);
-    if (stopAfter !== null && s.step >= stopAfter) {
+    if (stopAfter !== null && T.stepOffset + T.sim.step >= stopAfter) {
       reached = true;
       break;
     }
@@ -119,33 +158,17 @@ self.onmessage = (e: MessageEvent<ToSolidWorker>) => {
         finished = false;
         field = m.field;
         stopAfter = m.stopAfter;
-        history = { t: [], force: [] };
-        sim = new Sim3(solidParams(m.params, m.solid));
-        sampler = new SolidSampler();
-        // headless checks can read the simulation through the worker target
-        (self as unknown as { __solid: Sim3 }).__solid = sim;
-        post({
-          type: 'ready',
-          geometry: {
-            n: sim.n,
-            lattice: [sim.NI, sim.NJ, sim.NK],
-            h: sim.h,
-            dt: sim.dt,
-            h0: m.params.rolling.h0,
-            gap: sim.gap,
-            rollRadius: sim.roll.R,
-            contactLength: sim.contactLength,
-            xExitProbe: sim.xExitProbe,
-            halfWidth0: sim.halfWidth0,
-            mapX0: sim.ox + sim.binCol0 * sim.h,
-            slabForce: karman(m.params.rolling, m.params.material).force,
-          },
-        });
+        history = { t: [], force: [], stand: [] };
+        tandem = new Tandem3(solidParams(m.params, m.solid), m.stands, m.handoff);
+        tandem.onStandDone = (e) => {
+          post({ type: 'stand', result: e.result });
+        };
+        ready(tandem);
         frame();
         break;
       }
       case 'run':
-        if (sim && !running && !finished) {
+        if (tandem && !running && !finished) {
           running = true;
           loop();
         }

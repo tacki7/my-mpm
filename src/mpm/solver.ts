@@ -38,9 +38,9 @@ import {
 /** the rolls' adjustment: steps between the gap control's thickness readings, and what counts as settled (relative) */
 /** where the flattened rolls start: the MPM's roll force over the slab method's, about */
 const PRESET_FORCE_RATIO = 1.09;
-const CTL_EVERY = 20;
-const CTL_TOL_R = 5e-3;
-const CTL_TOL_H = 5e-4;
+export const CTL_EVERY = 20;
+export const CTL_TOL_R = 5e-3;
+export const CTL_TOL_H = 5e-4;
 
 export interface Roll {
   cx: number;
@@ -2477,7 +2477,7 @@ export class Sim {
  * on the standard pass). Flattened: karmanFlattened's R' and force. Constant reduction: the gap less the sheet's
  * elastic recovery, h (1 − ν²) 2k / E with 2k the slab method's at the exit.
  */
-function presetRolls(r: RollingParams, m: MaterialParams): { rollRadius: number; gap: number; force: number } {
+export function presetRolls(r: RollingParams, m: MaterialParams): { rollRadius: number; gap: number; force: number } {
   const flat = r.flattening === 'hitchcock';
   const ep0 = r.entryStrain ?? 0;
   // the MPM's force is 1.07 to 1.14 times the slab method's on thin sheet (docs/validation.md): Hitchcock's radius
