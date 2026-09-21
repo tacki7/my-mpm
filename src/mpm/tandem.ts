@@ -59,6 +59,8 @@ export interface StandResult {
   steadyTorque: number | null;
   exitThickness: number | null;
   forwardSlip: number | null;
+  /** mean deformation resistance in the bite, 2k = (2/√3) σy along the contact length [Pa] (Sim.biteFlowStress) */
+  meanFlowStress: number | null;
   /** thickness of the sheet that came out (area over length of its middle half; the next stand's h0) */
   thicknessOut: number;
   /** the fraction of the stand's mass on points that left the grid (0 normally) */
@@ -84,6 +86,7 @@ export interface SteadyMeans {
   torque: number | null;
   exitThickness: number | null;
   forwardSlip: number | null;
+  meanFlowStress: number | null;
 }
 
 export interface StandDone {
@@ -102,6 +105,7 @@ interface Reading {
   torque: number;
   exitThickness: number | null;
   forwardSlip: number | null;
+  meanFlowStress: number | null;
 }
 
 export class TandemSim {
@@ -162,6 +166,7 @@ export class TandemSim {
         torque: w.torque,
         exitThickness: ex ? ex.thickness : null,
         forwardSlip: ex ? ex.speed / sim.params.rolling.rollSpeed - 1 : null,
+        meanFlowStress: sim.biteFlowStress(),
       });
     }
     if (phase === 'done' || phase === 'stalled') this.endStand(phase);
@@ -235,6 +240,7 @@ export class TandemSim {
       torque: mean(s.map((d) => d.torque)),
       exitThickness: mean(s.filter((d) => d.exitThickness).map((d) => d.exitThickness as number)),
       forwardSlip: mean(s.filter((d) => d.forwardSlip != null).map((d) => d.forwardSlip as number)),
+      meanFlowStress: mean(s.filter((d) => d.meanFlowStress != null).map((d) => d.meanFlowStress as number)),
     };
   }
 
@@ -273,6 +279,7 @@ export class TandemSim {
       steadyTorque: m.torque,
       exitThickness: m.exitThickness,
       forwardSlip: m.forwardSlip,
+      meanFlowStress: m.meanFlowStress,
       thicknessOut: thicknessOut(sim, sample),
       massLost: lost / mass,
       separated: separated(sim),

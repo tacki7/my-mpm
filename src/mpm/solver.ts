@@ -1957,6 +1957,38 @@ export class Sim {
     if (this.pusherActive && this.headX() > this.xExitProbe) this.pusherActive = false;
   }
 
+  /**
+   * Mean deformation resistance of the sheet in the bite now [Pa]: the plane-strain flow stress 2k = (2/√3) σy,
+   * averaged along the contact length (entry plane to the roll centres), as the slab method's twoKMean is, but
+   * with σy at each point's own εp and temperature (so with the strain of the stands before, the redundant shear
+   * and the heating). The strain rate is the slab method's nominal one at the point's x, at the mill speed
+   * (|ε̇| = (2/√3) v hf 2 tan φ / h²): the points do not keep theirs. With the points' own σeq instead the mean
+   * is within 0.1 % (docs/validation.md「平均変形抵抗」). A point's weight is its area over the gap's height
+   * at its x, so that the mean is along x, not over the area (the bite is thicker at the entry). Failed points
+   * carry no flow stress and are left out. null with no point in the bite.
+   */
+  biteFlowStress(): number | null {
+    const { n, active, failed, px, ep, temp, vol0, f00, f01, f10, f11 } = this;
+    const r = this.params.rolling;
+    const mat = this.params.material;
+    const R = r.rollRadius;
+    const hf = biteGeometry(r).gap;
+    const c = 2 / Math.sqrt(3);
+    let sum = 0;
+    let weight = 0;
+    for (let p = 0; p < n; p++) {
+      const x = px[p];
+      if (!active[p] || failed[p] || x < -this.contactLength || x > 0) continue;
+      const root = Math.sqrt(R * R - x * x);
+      const h = hf + 2 * (R - root);
+      const rate = (c * r.millSpeed * hf * 2 * (-x / root)) / (h * h);
+      const w = (vol0[p] * (f00[p] * f11[p] - f01[p] * f10[p])) / h;
+      sum += w * c * flowStress(mat, ep[p], rate, temp[p]).sy;
+      weight += w;
+    }
+    return weight > 0 ? sum / weight : null;
+  }
+
   /** Thickness and mean speed of the sheet at the exit probe (null until material is there). */
   exitMeasure(): { thickness: number; speed: number } | null {
     const { n, active, px, py, vx } = this;

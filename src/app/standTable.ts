@@ -1,5 +1,5 @@
 // A tandem's results, one column per stand (the column heads in the stand's colour, the running one
-// underlined): entry and exit thickness, reduction, roll force, forward slip, damage and failed points of
+// underlined): entry and exit thickness, reduction, roll force, mean deformation resistance, forward slip, damage and failed points of
 // each finished stand. The stand running now shows its entry thickness only; the ones to come, dashes.
 // Five stands must fit the record column (about 264 px wide by default): each quantity is a line of its own,
 // its name and unit across the stands' columns, with its values on the line below, so the width is the numbers'
@@ -13,6 +13,8 @@ const ROWS: [string, (r: StandResult) => string, string][] = [
   ['出側板厚', (r) => mm(r.exitThickness), 'mm'],
   ['圧下率', (r) => (r.exitThickness != null ? ((1 - r.exitThickness / r.h0) * 100).toFixed(1) : '—'), '%'],
   ['圧延荷重', (r) => (r.steadyForce != null ? (r.steadyForce * 1e-6).toFixed(2) : '—'), 'kN/mm'],
+  // 2k = (2/√3) σy along the contact length, at the points' own εp and temperature (Sim.biteFlowStress)
+  ['平均変形抵抗', (r) => (r.meanFlowStress != null ? (r.meanFlowStress * 1e-6).toFixed(0) : '—'), 'MPa'],
   ['先進率', (r) => (r.forwardSlip != null ? (r.forwardSlip * 100).toFixed(2) : '—'), '%'],
   ['最大損傷', (r) => r.maxDamage.toFixed(3), ''],
   ['亀裂の点', (r) => String(r.nFailed), '個'],
