@@ -354,7 +354,8 @@ export class SolidMode {
         this.view.panX += dx;
         this.view.panY += dy;
       } else {
-        this.view.rotate(dx * 0.008, dy * 0.008);
+        // the strip follows the hand: a drag to the right brings its left side round
+        this.view.rotate(-dx * 0.008, dy * 0.008);
         this.markLook(null);
       }
       this.dirty = true;
@@ -381,8 +382,8 @@ export class SolidMode {
     });
     c.addEventListener('keydown', (e) => {
       const step = 5 * (Math.PI / 180);
-      if (e.key === 'ArrowLeft') this.view.rotate(-step, 0);
-      else if (e.key === 'ArrowRight') this.view.rotate(step, 0);
+      if (e.key === 'ArrowLeft') this.view.rotate(step, 0);
+      else if (e.key === 'ArrowRight') this.view.rotate(-step, 0);
       else if (e.key === 'ArrowUp') this.view.rotate(0, step);
       else if (e.key === 'ArrowDown') this.view.rotate(0, -step);
       else if (e.key === '+' || e.key === ';') this.view.zoom = Math.min(12, this.view.zoom * 1.2);
@@ -662,7 +663,7 @@ export class SolidMode {
     const html = `
       <div class="bar" style="background:linear-gradient(90deg,${stops.join(',')})"></div>
       <div class="ends"><span>${fmt(lo)}${unit}</span><span>${info.label}</span><span>${fmt(hi)}${unit}</span></div>
-      <div class="exag">板の表面の色。解くのは 1/4 で、板厚と板幅の中央で鏡映して表示${ys !== 1 ? `。板厚方向を ${ys} 倍に拡大（ロールの円弧も）` : ''}${this.settings.planeStrain ? '。板幅方向を止めた計算（平面ひずみ）' : ''}</div>
+      <div class="exag">板の表面の色。解くのは 1/4 で、板厚と板幅の中央（点線）で鏡映して表示${ys !== 1 ? `。板厚方向を ${ys} 倍に拡大（ロールの円弧も）` : ''}${this.settings.planeStrain ? '。板幅方向を止めた計算（平面ひずみ）' : ''}</div>
       ${failed ? '<div class="failed-key"><span class="swatch"></span>藍墨の面は亀裂になった点</div>' : ''}`;
     if (lg.innerHTML !== html) lg.innerHTML = html;
   }

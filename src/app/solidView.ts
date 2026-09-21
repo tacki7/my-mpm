@@ -297,7 +297,7 @@ export class SolidView {
     const { rows, cols, pos } = face;
     const pr = new Float64Array(3);
     const line = (index: (k: number) => number, count: number) => {
-      // a line on a plane of symmetry is the seam between the quarter and its mirror image, not an edge of the strip
+      // a line on a plane of symmetry is the seam between the quarter and its mirror image, not an edge of the strip:
       // (the mid-width plane is one once the strip is cut open there)
       let onY = true;
       let onZ = true;
@@ -307,7 +307,9 @@ export class SolidView {
         if (Math.abs(pos[3 * v + 1]) > 1e-12) onY = false;
         if (Math.abs(pos[3 * v + 2]) > 1e-12) onZ = false;
       }
-      if (onY || (onZ && !this.cut)) return;
+      // drawn dotted: where the solved quarter meets its mirror image
+      const seam = onY || (onZ && !this.cut);
+      ctx.setLineDash(seam ? [2, 3] : []);
       let pen = false;
       ctx.beginPath();
       for (let k = 0; k < count; k++) {
@@ -322,6 +324,7 @@ export class SolidView {
         pen = true;
       }
       ctx.stroke();
+      ctx.setLineDash([]);
     };
     line((k) => k, cols);
     line((k) => (rows - 1) * cols + k, cols);
