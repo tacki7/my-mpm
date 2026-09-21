@@ -17,7 +17,8 @@ export interface SolidFieldInfo {
 }
 
 export const SOLID_FIELDS: SolidFieldInfo[] = [
-  { id: 'seq', label: '相当応力 σeq', unit: 'MPa', scale: 'sequential' },
+  // a fixed bar, the same from run to run (σeq itself is never negative: the colours use the upper half)
+  { id: 'seq', label: '相当応力 σeq', unit: 'MPa', scale: 'sequential', range: [-3000, 3000] },
   { id: 'ep', label: '塑性ひずみ εp', unit: '', scale: 'sequential' },
   { id: 'pres', label: '静水圧 p（圧縮が正）', tab: '静水圧 p', unit: 'MPa', scale: 'diverging' },
   { id: 'eta', label: '応力三軸度 η', unit: '', scale: 'diverging', range: [-1.5, 1.5] },
