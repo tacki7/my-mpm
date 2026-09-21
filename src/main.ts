@@ -406,7 +406,7 @@ function updateResults(d: Diagnostics, f: Frame, steady: SteadyMeans | null = f.
   // the load, torque, exit thickness and slip: the steady means once there are any (they stay after the pass)
   const P = standStarts[f.stand]?.P ?? params;
   const pass = passReadout(d, steady, P.rolling.flattening === 'hitchcock' || P.rolling.gapControl === 'reduction' ? { h0: P.rolling.h0 } : null);
-  $('results-note').textContent = readoutNote(readoutKind(d, steady)) + torqueNote(pass.find((r) => r.key === 'torque')?.value);
+  $('results-note').textContent = readoutNote(readoutKind(d, steady), d.rollsSettled) + torqueNote(pass.find((r) => r.key === 'torque')?.value);
   // the shape against the central-burst map (the stand on show's entry thickness), and the mid-plane η measured
   burstHint.update(P, midEta);
   const rows: [string, string, string][] = [

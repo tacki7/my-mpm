@@ -119,8 +119,14 @@ export class StandTable {
     const notes: string[] = [];
     const k = results.length; // the stand it stopped at (1 = the first)
     if (stopped) notes.push(`${STOP_TEXT[stopped](k, results[k - 1])}。その先のスタンドは計算していない`);
-    const unsteady = results.filter((r) => r.steadyForce == null).map((r) => `#${r.stand + 1}`);
-    if (unsteady.length) notes.push(`${unsteady.join('・')} は定常の読みが無い（板が短く、頭端が出口の先に届く前に尾端がバイトに入る）ので、荷重・出側板厚・先進率は —`);
+    // rolls that follow the pass (flattening, constant reduction) are 'steady' only once they settled, a transit
+    // time or so after the head is out: a sheet long enough for rigid rolls can be too short for them
+    const names = (rs: StandResult[]) => rs.map((r) => `#${r.stand + 1}`).join('・');
+    const unsteady = results.filter((r) => r.steadyForce == null);
+    const short = unsteady.filter((r) => r.rollsSettled);
+    const unsettled = unsteady.filter((r) => !r.rollsSettled);
+    if (short.length) notes.push(`${names(short)} は定常の読みが無い（板が短く、頭端が出口の先に届く前に尾端がバイトに入る）ので、荷重・出側板厚・先進率は —`);
+    if (unsettled.length) notes.push(`${names(unsettled)} は定常の読みが無い（板が短く、ロールの調整（偏平・ギャップ）が落ち着く前に尾端がバイトに入る。板の長さを延ばす）ので、荷重・出側板厚・先進率は —。ロール半径 R'・ギャップは調整の途中の値`);
     const caption = document.createElement('caption');
     caption.className = 'table-note';
     caption.textContent = notes.join('。');

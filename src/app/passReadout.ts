@@ -65,11 +65,13 @@ export function torqueNote(torque: number | null | undefined): string {
     : '';
 }
 
-/** the line under the results table: what the first four rows are */
-export function readoutNote(kind: ReadoutKind): string {
+/** the line under the results table: what the first four rows are. `settled`: false when rolls that follow the pass (flattening, constant reduction) had not settled when the sheet ran out */
+export function readoutNote(kind: ReadoutKind, settled = true): string {
   return kind === 'steady'
     ? '（定常）は定常の読み（2000 ステップごと）の平均。板が抜けた後も残る。node tools/run.mjs・スタンドごとの表と同じ読み方'
     : kind === 'none'
-      ? '定常の読みが無い（板が短く、頭端が出口の先に届く前に尾端がバイトに入る）ので、荷重・トルク・出側板厚・先進率は —'
+      ? settled
+        ? '定常の読みが無い（板が短く、頭端が出口の先に届く前に尾端がバイトに入る）ので、荷重・トルク・出側板厚・先進率は —'
+        : "定常の読みが無い（板が短く、ロールの調整（偏平・ギャップ）が落ち着く前に尾端がバイトに入る。板の長さを延ばす）ので、荷重・トルク・出側板厚・先進率は —。ロール半径 R'・ギャップは調整の途中の値"
       : '定常の読みが出るまでは、その瞬間の値';
 }
