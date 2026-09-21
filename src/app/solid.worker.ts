@@ -2,7 +2,8 @@
 // the page. The steady values are read as tools/solid.mjs reads them (a look every READ_STEPS steps).
 import { solidParams, type Sim3 } from '../mpm/solid/sim3.ts';
 import { READ_STEPS } from '../mpm/solid/steady.ts';
-import { Tandem3 } from '../mpm/solid/tandem3.ts';
+import { Tandem3, steadyLength3 } from '../mpm/solid/tandem3.ts';
+import { standEndTail, standProgress } from '../mpm/progress.ts';
 import { faces } from '../mpm/solid/surface.ts';
 import { karman } from '../mpm/slab.ts';
 import type { FromSolidWorker, SolidFieldName, SolidFrame, ToSolidWorker } from './solidProtocol.ts';
@@ -16,6 +17,25 @@ let timer: ReturnType<typeof setTimeout> | null = null;
 let msPerStep = 0;
 let history: { t: number[]; force: number[]; stand: number[] } = { t: [], force: [], stand: [] };
 
+/** where each stand's tail began and where it is when the stand ends (src/mpm/progress.ts), found at the stand's first frame */
+const tailSpan = new WeakMap<Sim3, [number, number]>();
+
+/** how far the running stand is through its pass, 0..1 (for the page's estimate of the time left) */
+function progressOf(T: Tandem3): number {
+  const s = T.sim;
+  let span = tailSpan.get(s);
+  if (!span) {
+    const tail0 = s.tailX();
+    const length = s.headX() - tail0;
+    // a stand with another after it hands on once it is steady: the first stand's strip may be longer than that
+    // reading needs, the later ones are made that long
+    const handsOn = T.handoff === 'steady' && T.stand < T.stands - 1;
+    const need = !handsOn ? null : T.stand === 0 ? steadyLength3(s.params) : length;
+    span = [tail0, standEndTail(s.params.rolling.h0, s.contactLength, length, need)];
+    tailSpan.set(s, span);
+  }
+  return standProgress(s.tailX(), span[0], span[1], s.contactLength, s.params.rolling.reduction);
+}
 
 // a frame of the faces is light, but a step is heavy (tens of ms on a fine grid): a frame at least every FRAME_MS
 const FRAME_MS = 80;
@@ -97,6 +117,7 @@ function frame(): void {
       gap: s.gap,
       rollsSettled: s.rollsSettled,
       phase: s.phase(),
+      progress: finished ? 1 : progressOf(T),
       now: T.sampler.last,
       steady: T.sampler.means(s),
       nFailed: s.nFailed,

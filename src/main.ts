@@ -26,6 +26,7 @@ import { ChartSummary } from './app/chartSummary.ts';
 import { PresetNote } from './app/presetNote.ts';
 import { radioGroup } from './app/radioGroup.ts';
 import { say } from './app/liveText.ts';
+import { Eta, etaText, standGrowth } from './app/eta.ts';
 import { SteadyForce, SteadyProfile, drawForceChart, drawHillChart, slabRatio, type HillStand, type HillChartData, type Profile, slabReference, type ForceChartData, type StandStart } from './app/slabOverlay.ts';
 
 let forceChart: ForceChartData | null = null;
@@ -300,8 +301,12 @@ function noteConditions() {
   standardPass = presetId === 'standard' && samePassAsPreset(presetId, preset, params);
 }
 
+/** the time the run still needs, beside the clock (src/app/eta.ts) */
+const eta = new Eta();
+
 function restart() {
   readConditions();
+  eta.reset();
   shownStand = null;
   standViews.setPicked(null);
   noteConditions();
@@ -376,6 +381,7 @@ function followRolls(d: Diagnostics) {
 
 function onFrame(f: Frame) {
   last = f;
+  eta.update(performance.now(), f.running, f.progress, f.stand, f.stands, standGrowth(params.rolling.reduction, params.rolling.handoff ?? 'done', false));
   if (runStands > 1 && geometry && standStarts.length <= f.stand) standStarts.push(standStart(f.tOffset * 1e3, geometry.h0));
   frames++;
   running = f.running;
@@ -505,6 +511,7 @@ function showClock() {
   const stand =
     runStands > 1 ? `　スタンド ${(shownStand ?? last?.stand ?? 0) + 1} / ${runStands}${shownStand != null ? '（選んで表示中）' : ''}` : '';
   $('clock').textContent = `t = ${(t * 1e3).toFixed(2)} ms　${step.toLocaleString()} step${stand}`;
+  $('eta').textContent = etaText(eta.seconds, frames > 1, !!last?.passDone);
 }
 
 let crackSeen = 0;
@@ -637,6 +644,10 @@ declare global {
 window.__mpm = {
   get frames() {
     return frames;
+  },
+  /** the time left [s] the section view shows (null before there is a rate to go by) */
+  get eta() {
+    return eta.seconds;
   },
   get running() {
     return running;

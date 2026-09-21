@@ -30,7 +30,11 @@
         <button id="pause" type="button">一時停止</button>
         <button id="reset" type="button">条件を反映してやり直す</button>
       </div>
-      <div class="clock" id="clock" aria-live="off"></div>
+      <!-- the run's clock and, while it runs, the time it still needs (src/app/eta.ts) -->
+      <div class="clock" aria-live="off">
+        <span class="eta" id="eta"></span>
+        <span id="clock"></span>
+      </div>
       <!-- the two models, as index tabs standing on the masthead's rule (src/app/solidMode.ts) -->
       <nav class="dim-tabs" id="dim-tabs" role="tablist" aria-label="計算の次元"></nav>
     </header>

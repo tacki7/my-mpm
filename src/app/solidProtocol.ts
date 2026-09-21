@@ -51,6 +51,8 @@ export interface SolidDiag {
   gap: number;
   rollsSettled: boolean;
   phase: SolidPhase;
+  /** how far the running stand is through its pass, 0..1 (src/mpm/progress.ts) */
+  progress: number;
   /** the last look (every READ_STEPS steps) */
   now: SolidLook | null;
   steady: SolidSteady | null;

@@ -144,6 +144,14 @@ button.pending {
   text-align: right;
 }
 
+/* the time the run still needs, over the clock; its line is kept while it is empty so the masthead does not jump */
+.eta {
+  display: block;
+  min-height: 1.5em;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+
 /* ── layout ───────────────────────────────────────────────────────────── */
 .layout {
   display: grid;
