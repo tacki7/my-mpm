@@ -54,7 +54,7 @@ interface NumberField {
 }
 
 const NUMBERS: NumberField[] = [
-  { key: 'width', query: 'W3', label: '板幅', unit: 'mm', step: 1, min: 2, max: 40, scale: mm, hint: '解くのは 1/4（板幅と板厚の中央で鏡映）。広いほど点が増えて遅い' },
+  { key: 'width', query: 'W3', label: '板幅', unit: 'mm', step: 1, min: 2, max: 200, scale: mm, hint: '解くのは 1/4（板幅と板厚の中央で鏡映）。時間は板幅に比例: 8 mm で約 2.5 分、40 mm で約 14 分、200 mm は 1 時間以上' },
   { key: 'length', query: 'L3', label: '板の長さ', unit: 'mm', step: 1, min: 6, max: 40, scale: mm, hint: '定常の読みには 12 mm ほど要る' },
   { key: 'cells', query: 'cells3', label: '板厚方向のセル数', unit: '', step: 2, min: 4, max: 8, scale: 1, hint: '偶数。4 で約 2〜3 分、6 で約 14 分' },
 ];
@@ -714,7 +714,20 @@ export class SolidMode {
       xRange: [-(g.halfWidth0 / mm) * 1.25, (g.halfWidth0 / mm) * 1.25],
       yRange: [0, Math.max(g.slabForce * 1e-6 * 1.5, ...q) || 1],
     });
+    if (!st) this.emptyNote(this.$<HTMLCanvasElement>('solid-chart-width'));
     this.drawPressureMap(st);
+  }
+
+  /** a graph of steady means, before there are any: say when it comes (or that it did not) */
+  private emptyNote(canvas: HTMLCanvasElement): void {
+    const ctx = canvas.getContext('2d')!;
+    const r = canvas.getBoundingClientRect();
+    ctx.save();
+    ctx.font = uiFont(11);
+    ctx.fillStyle = STEEL;
+    ctx.textAlign = 'center';
+    ctx.fillText(this.finished ? '定常の読みが無かった（板の長さを延ばす）' : '定常になると出る', r.width / 2 + 20, r.height / 2 + 14);
+    ctx.restore();
   }
 
   /** the contact pressure over the bite, seen from above: x along the rolling direction, z across the width */
@@ -737,7 +750,7 @@ export class SolidMode {
     const cap = this.$('solid-map-range');
     if (!st) {
       ctx.textAlign = 'center';
-      ctx.fillText('定常になると出る', W / 2, H / 2);
+      ctx.fillText(this.finished ? '定常の読みが無かった' : '定常になると出る', W / 2, H / 2);
       cap.textContent = '';
       return;
     }
@@ -748,12 +761,15 @@ export class SolidMode {
     const x0 = -g.contactLength * 1.3;
     const x1 = g.contactLength * 0.3;
     const zMax = Math.max(st.halfWidth, g.halfWidth0) * 1.12;
-    // one scale for both axes: the bite's true shape
-    const s = Math.min((W - L - Rm) / (x1 - x0), (H - Tm - B) / (2 * zMax));
+    // one scale for both axes (the bite's true shape), unless the strip is so wide that the bite would be a sliver:
+    // then the rolling direction is stretched to a third of the plot, and the caption says so
+    const sz = Math.min((W - L - Rm) / (x1 - x0), (H - Tm - B) / (2 * zMax));
+    const stretched = (x1 - x0) * sz < 0.33 * (W - L - Rm);
+    const sx = stretched ? (0.33 * (W - L - Rm)) / (x1 - x0) : sz;
     const cx = L + (W - L - Rm) / 2;
     const cy = Tm + (H - Tm - B) / 2;
-    const X = (x: number) => cx + (x - (x0 + x1) / 2) * s;
-    const Z = (z: number) => cy - z * s;
+    const X = (x: number) => cx + (x - (x0 + x1) / 2) * sx;
+    const Z = (z: number) => cy - z * sz;
     let max = 0;
     for (const p of st.pressureMap) if (p > max) max = p;
     const h = g.h;
@@ -767,8 +783,8 @@ export class SolidMode {
         const za = k === 0 ? 0 : (k - 0.5) * h;
         const zb = (k + 0.5) * h;
         // both halves of the width
-        ctx.fillRect(X(xa), Z(zb), h * s + 0.6, (zb - za) * s + 0.6);
-        ctx.fillRect(X(xa), Z(-za), h * s + 0.6, (zb - za) * s + 0.6);
+        ctx.fillRect(X(xa), Z(zb), h * sx + 0.6, (zb - za) * sz + 0.6);
+        ctx.fillRect(X(xa), Z(-za), h * sx + 0.6, (zb - za) * sz + 0.6);
       }
     }
     // entry and exit lines, the strip's edges coming in
@@ -797,8 +813,8 @@ export class SolidMode {
     ctx.fillText(`${(st.halfWidth / mm).toFixed(1)}`, L - 4, Z(st.halfWidth) + 4);
     ctx.fillText('0', L - 4, Z(0) + 4);
     ctx.fillText(`−${(st.halfWidth / mm).toFixed(1)}`, L - 4, Z(-st.halfWidth) + 4);
-    cap.textContent = `0 〜 ${(max * 1e-6).toFixed(0)} MPa`;
-    canvas.title = '定常の平均。縦と横は同じ縮尺';
+    cap.textContent = `0 〜 ${(max * 1e-6).toFixed(0)} MPa${stretched ? `（圧延方向を ${(sx / sz).toFixed(0)} 倍に拡大）` : ''}`;
+    canvas.title = stretched ? '定常の平均' : '定常の平均。縦と横は同じ縮尺';
   }
 
   private drawLoop(): void {
