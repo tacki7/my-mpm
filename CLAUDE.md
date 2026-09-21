@@ -15,6 +15,7 @@ Hancock-MacKenzie、破壊した粒子の応力の扱い）。式と出典の対
 | `src/mpm/params.ts` / `presets.ts` | 入力（SI 単位）と、名前付きの条件 |
 | `src/mpm/tandem.ts` | タンデム（`TandemSim`: スタンドを 1 つずつ解き、材料の状態を次のスタンドの新しい格子へ写す）。`node tools/tandem.mjs --stands 3 [--handoff steady]`（`run.mjs` と同じ引数） |
 | `src/mpm/planview/` | 平面図モデル（x 圧延方向・z 板幅方向、板厚は粒子の状態）。耳割れ用。`node tools/planview.mjs --W 20`。定常の読み方は `steady.ts`（ツールと画面の平面図で共通） |
+| `src/mpm/solid/` | 3 次元モデル（`Sim3`: x・y・z を解く 1/4 モデル、幅広がり・板幅方向の荷重分布）。画面の「3 次元」のタブ（`src/app/solidMode.ts`・`solidView.ts`・`solid.worker.ts`）。`node tools/solid.mjs --W 8 --L 12 --cells 4 [--plane-strain]`（4 セルで約 2.5 分） |
 | `src/app/` | ワーカー（`sim.worker.ts`）、描画（`view.ts`）、グラフ、条件パネル |
 | `tools/check.mjs` | 回帰関門。`// @check` の付いたスクリプトを集めて回す |
 | `tools/run.mjs` | ヘッドレスで 1 回圧延して数値を出す（`npm run sim -- --cells 6 --L 8`） |
@@ -86,6 +87,9 @@ tools/browser/browser.sh stop <cdp>; tools/browser/browser.sh stop <dev>
 （1 分弱。実クリックで切り替えて最後まで回し、`node tools/planview.mjs` と定常の値を比べる（相対 1e-5。Chrome と Node の V8 で
 Math.exp・log の最後の 1 ビットが違うのでビット一致はしない）、もう一度回してビット一致、タブ、16 mm の注、亀裂の記録、URL、断面に戻る・切り替えで一時停止・
 時計が表示中のビュー・未反映の編集は切り替えで反映しない・やり直すは両方、700 px。`pv-*.png` を自分で見る）。
+2 次元・3 次元のタブや 3 次元の画面（`solidMode.ts`・`solidView.ts`・3 次元のワーカー）を触ったら `CDP_PORT=<cdp> node tools/browser/solid.mjs http://localhost:<dev>/ <作業用ディレクトリ>/sol`
+（約 3 分。実クリックでタブを移り、板幅 4 mm を最後まで回して `node tools/solid.mjs` と比べる（相対 1e-5）、色の量のタブ、実ドラッグ・ホイール・ダブルクリック、見る向き、URL、
+2 次元に戻って断面が動く・3 次元を出すと一時停止、700 px。`sol-*.png` を自分で見る）。
 荷重・フリクションヒルのグラフ（スラブ法の重ね描き・移動平均・凡例）を触ったら `CDP_PORT=<cdp> node tools/browser/slab-overlay.mjs http://localhost:<dev>/ <作業用ディレクトリ>/ov`
 （約 40 秒。スラブ法の値を node の `karman()` と比べ、方法の外の条件の凡例、定常の移動平均の揺れ、狭い幅の凡例。`ov-*.png` を自分で見る）。
 タンデムの画面（スタンドの枠・スタンドごとの表・負荷経路の色分け）を触ったら `CDP_PORT=<cdp> node tools/browser/tandem.mjs http://localhost:<dev>/ <作業用ディレクトリ>/tan`
@@ -95,6 +99,7 @@ Math.exp・log の最後の 1 ビットが違うのでビット一致はしな�
 ポートは必ず渡す（既定値は無い）。`window.__mpm` は `frames` `running` `ready` `done` `diag` `cracks`
 `geometry` `params` `history` `slab`（スラブ法の荷重・中立点・方法の外の理由、`delta` = 平均板厚 / 接触長、`steadyForce` = 定常の荷重をステップ数で重み付けした平均 [N/m]、`ratio` = MPM / スラブ法。定常の前と方法の外では null）`forceChart`（荷重のグラフに描いた生の値と移動平均）`explorer`（表示中の点）`tracks`（追っている点と経路）`view`（拡大率・パン・倍率・主応力の向き）
 `plan`（平面図: `active` `ready` `running` `done` `diag`（`steady` が定常の平均、SI）`cracks` `settings` `url` `setMode()` `setField()` `drawMs()`）
+`solid`（3 次元のタブ: `active` `ready` `running` `frames` `done` `diag`（`steady` が定常の平均、SI）`geometry` `settings` `params` `field` `range` `url` `view`（向き・拡大・切る・ロール）`setDim('2'|'3')` `setField()` `run()` `drawMs()`）
 `stand` `stands` `standResults` `standFrames` `stopped`（タンデム: 表示中のスタンド（0 始まり）・スタンド数・済んだスタンドの結果・並んだ枠の状態・最後のスタンドまで行かずに止まった理由 'stalled' | 'separated' | 'lost'、ふだんは null）と
 `run()` `restart()` `setField(id)` `screenOf(id)`（粒子の画面座標）`drawMs(n)`（今のフレームを n 回描いた 1 回の ms）、
 `pressing`（亀裂の印が押されている最中）`pressAgain()`（印をもう一度押す。瞬間を撮る用）を持つ。
@@ -107,6 +112,7 @@ Math.exp・log の最後の 1 ビットが違うのでビット一致はしな�
 `&yield=von-mises|gtn&nucleation=tension|always&f0=0.005&fc=0.05`
 `&field=seq|eta|s1|pres|ep|damage|sxx|syy|sxy|dT|lagrange|porosity|loc|drucker&autorun=1&stopafter=<step>`
 `&view=plan&W=20&wcells=10&notch=0&pfield=sxx|szz|seq|eta|damage|spread`（平面図。板幅 mm・半幅のセル数・端の切り欠きの半径 mm）
+`&dim=3&W3=8&L3=12&cells3=4&ps3=1&f3=seq|ep|pres|eta|sxx|syy|szz|damage|spread`（3 次元のタブ。板幅 mm・板の長さ mm・板厚方向のセル数（偶数 4〜8）・平面ひずみで解く・色の量。ほかの条件は 2 次元と共通で、張力・`stands`・`flatten`・`control`・`crack`・`L`・`cells` は 3 次元では使わない）
 `&escatter=0&ewidth=1&elen=1&eseed=1`（端の延性のばらつき。大きさ %・帯の幅 mm・相関長 mm・種。`escatter=0`（既定）で無し）
 `&stands=1..5`（タンデムのスタンド数。どのスタンドも同じ条件で、圧下率は各スタンドの入側板厚に対して。断面の画面だけ）
 `&length=fixed|steady`（板の長さの取り方。`steady` = 1 スタンド目の板を、定常の読みが揃うのに要る長さに自動で（`L` は使わない。決めた長さは `__mpm.params.rolling.sheetLength`）。ツールは `--length steady`）

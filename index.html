@@ -31,9 +31,11 @@
         <button id="reset" type="button">条件を反映してやり直す</button>
       </div>
       <div class="clock" id="clock" aria-live="off"></div>
+      <!-- the two models, as index tabs standing on the masthead's rule (src/app/solidMode.ts) -->
+      <nav class="dim-tabs" id="dim-tabs" role="tablist" aria-label="計算の次元"></nav>
     </header>
 
-    <main class="layout">
+    <main class="layout" id="dim-panel" role="tabpanel" aria-labelledby="dim-tab-2">
       <aside class="conditions" id="panel" aria-label="圧延条件">
         <p class="preset-note" id="preset-note"></p>
       </aside>
@@ -81,6 +83,31 @@
         </div>
       </section>
 
+      <section class="solid-stage dim3-only" id="solid-stage" aria-label="3 次元（ロールの間の板）">
+        <div class="field-tabs" id="solid-tabs" role="radiogroup" aria-label="色で表す量（3 次元）"></div>
+        <div class="bite solid-bite">
+          <canvas id="solid-canvas" tabindex="0" aria-label="ロールの間の板の立体図。ドラッグか矢印キーで回す、ホイールか + − で拡大、ダブルクリックか 0 で元に戻す"></canvas>
+          <div class="view-tools solid-tools" id="solid-tools" aria-label="表示の操作（3 次元）">
+            <div class="phase" id="solid-phase" aria-live="polite"></div>
+          </div>
+          <div class="legend" id="solid-legend"></div>
+        </div>
+        <div class="charts solid-charts">
+          <figure>
+            <figcaption>圧延荷重（ロール 1 本あたり、全幅）</figcaption>
+            <canvas id="solid-chart-force"></canvas>
+          </figure>
+          <figure>
+            <figcaption>板幅方向の荷重の分布（定常）</figcaption>
+            <canvas id="solid-chart-width"></canvas>
+          </figure>
+          <figure>
+            <figcaption>接触圧力（上から見たバイト）<span class="fig-range" id="solid-map-range"></span></figcaption>
+            <canvas id="solid-chart-map"></canvas>
+          </figure>
+        </div>
+      </section>
+
       <div class="splitter split-right" data-size="right" aria-label="結果の欄の幅（ドラッグか矢印キー、ダブルクリックで元に戻す）"></div>
       <aside class="record" aria-label="結果">
         <section class="certificate section-only">
@@ -110,6 +137,12 @@
           <ol id="plan-crack-log" aria-live="polite"></ol>
         </section>
         <section class="export plan-only" id="plan-export" aria-label="結果の書き出し（平面図）"></section>
+        <section class="certificate dim3-only">
+          <h2>圧延結果（3 次元）</h2>
+          <table id="solid-results"></table>
+          <p class="table-note" id="solid-results-note"></p>
+        </section>
+        <section class="export dim3-only" id="solid-export" aria-label="結果の書き出し（3 次元）"></section>
       </aside>
     </main>
     <script type="module" src="/src/main.ts"></script>

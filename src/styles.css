@@ -25,6 +25,8 @@
   --fs-xl: 24px;
 
   --gap: 16px;
+  /* the masthead with the 2 次元 / 3 次元 tabs standing on its rule */
+  --masthead-h: 119px;
   color-scheme: light;
 }
 
@@ -148,7 +150,7 @@ button.pending {
   /* the side panes' widths can be dragged (src/app/splitters.ts sets these variables) */
   grid-template-columns: var(--w-left, 250px) 6px minmax(0, 1fr) 6px var(--w-right, 300px);
   gap: 0;
-  min-height: calc(100vh - 90px);
+  min-height: calc(100vh - var(--masthead-h));
 }
 
 .conditions,
@@ -165,13 +167,13 @@ button.pending {
 .conditions {
   border-right: 1px solid var(--rule);
   overflow-y: auto;
-  max-height: calc(100vh - 90px);
+  max-height: calc(100vh - var(--masthead-h));
 }
 
 .record {
   border-left: 1px solid var(--rule);
   overflow-y: auto;
-  max-height: calc(100vh - 90px);
+  max-height: calc(100vh - var(--masthead-h));
 }
 
 .preset-note {
@@ -1227,6 +1229,151 @@ body[data-view='plan'] .section-only {
   color: var(--ink-soft);
 }
 
+/* ── 2 次元 / 3 次元 (src/app/solidMode.ts) ─────────────────────────────── */
+/* everything the 2 次元 tab owns (the section and the plan view) goes when the 3 次元 tab is shown */
+body[data-dim='3'] .section-only,
+body[data-dim='3'] .plan-only,
+body[data-dim='3'] .dim2-only,
+body[data-dim='3'] .view-switch,
+body:not([data-dim='3']) .dim3-only {
+  display: none !important;
+}
+
+/* index tabs of a ledger: they stand on the masthead's ink rule, and the sheet shown is the one whose tab is inked */
+.dim-tabs {
+  grid-column: 1 / -1;
+  display: flex;
+  gap: 4px;
+  /* down onto the rule (the masthead's bottom padding) */
+  margin: 0 0 -14px;
+}
+
+.dim-tabs button {
+  font-family: var(--font-head);
+  font-weight: 600;
+  font-size: var(--fs-l);
+  line-height: 1.2;
+  letter-spacing: 0.04em;
+  padding: 5px 22px 4px;
+  border: 1px solid var(--ink);
+  border-bottom: 0;
+  border-radius: 3px 3px 0 0;
+  background: transparent;
+  color: var(--ink-soft);
+}
+
+.dim-tabs button:hover {
+  background: var(--sheet);
+  color: var(--ink);
+}
+
+.dim-tabs button[aria-selected='true'] {
+  background: var(--ink);
+  color: var(--sheet);
+  font-weight: 800;
+}
+
+.dim-tabs button:focus-visible {
+  position: relative;
+  z-index: 1;
+}
+
+.solid-stage {
+  display: grid;
+  /* tabs, the drawing, the graphs */
+  grid-template-rows: auto minmax(380px, 1fr) auto;
+  min-width: 0;
+}
+
+.solid-bite canvas {
+  cursor: grab;
+  touch-action: none;
+}
+
+.solid-bite canvas.dragging {
+  cursor: grabbing;
+}
+
+.solid-bite canvas:focus-visible {
+  outline: none;
+  box-shadow: none;
+}
+
+.solid-bite:has(canvas:focus-visible)::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border: 2px solid var(--focus);
+  box-shadow: inset 0 0 0 2px var(--sheet);
+  pointer-events: none;
+}
+
+/* the four directions to look from: one joined set */
+.look-from {
+  display: inline-flex;
+}
+
+.look-from button {
+  border-radius: 0;
+}
+
+.look-from button + button {
+  border-left: 0;
+}
+
+.look-from button:first-child {
+  border-radius: 3px 0 0 3px;
+}
+
+.look-from button:last-child {
+  border-radius: 0 3px 3px 0;
+}
+
+.look-from button:focus-visible {
+  position: relative;
+  z-index: 1;
+}
+
+.solid-tools button[aria-checked='true'],
+.solid-tools button[aria-pressed='true'] {
+  background: var(--ink);
+  color: var(--sheet);
+}
+
+.solid-charts {
+  grid-template-columns: 1fr 1.1fr 1fr;
+}
+
+.solid-charts figure + figure {
+  border-left: 1px solid var(--rule);
+}
+
+.fig-range {
+  margin-left: 8px;
+  color: var(--steel-ink);
+  font-size: var(--fs-xs);
+}
+
+.conditions .field.check input {
+  flex: none;
+  width: auto;
+  margin: 0;
+}
+
+.conditions .field.check span {
+  flex: 1;
+}
+
+.conditions .field.check {
+  width: 100%;
+  margin-right: 0;
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  grid-column: 1 / -1;
+  font-size: var(--fs-s);
+}
+
 /* ── narrow screens ───────────────────────────────────────────────────── */
 @media (max-width: 1100px) {
   .layout {
@@ -1273,8 +1420,22 @@ body[data-view='plan'] .section-only {
   /* on a phone the roll bite comes first, then the results, then the detailed conditions
      (the preset and the buttons stay at the top) */
   .stage,
-  .plan-stage {
+  .plan-stage,
+  .solid-stage {
     order: 1;
+  }
+  .solid-charts {
+    grid-template-columns: 1fr;
+  }
+  .solid-charts figure + figure {
+    border-left: 0;
+    border-top: 1px solid var(--rule);
+  }
+  .dim-tabs {
+    margin-bottom: -14px;
+  }
+  .dim-tabs button {
+    flex: 1;
   }
   /* the stands one above the other on a phone, each about as tall as a phone's picture is wide */
   .stand-row {
