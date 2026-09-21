@@ -8,7 +8,8 @@
 //   the rigid rolls'; settled rolls are held (R', the gap, no surface velocity)
 // - gapControl 'reduction' (at 40 %, where the gap the rolls start from is not enough): the sheet's thickness in
 //   the steady phase is h0 (1 − r) within 0.1 %, by a gap below it; no steady stretch for a tandem at the settling
-// - a tandem with both: both hold in its first stand, every stand gets its reduction on its own entry thickness, and a 'steady' handoff
+// - a tandem with both: the entry thickness of stand 2 is stand 1's target (one thickness, by area, for the gap and
+//   the handoff), its sheet starts before its flattened rolls' bite; both hold in its first stand, every stand gets its reduction on its own entry thickness, and a 'steady' handoff
 //   takes only sheet that went through the settled rolls
 // @check
 import { ok, between, near, done } from './lib.mjs';
@@ -127,7 +128,9 @@ const rigid = pass(params());
       for (let j = 0; j < e.sim.NJ; j++) s += e.sim.px[e.sim.lattice[sample[1] * e.sim.NJ + j]];
       xLast = s / e.sim.NJ;
     }
-    ends.push({ ...e, xLast, rolledSettled: e.sim.settledLength() });
+    // the next stand as it starts: its rolls (from the slab method with the strain brought in) and where its sheet lies
+    const start = e.next && { R: e.next.rolls[0].R, head: e.next.headX(), Lc: e.next.contactLength, phase: e.next.phase(), ep0: e.next.params.rolling.entryStrain };
+    ends.push({ ...e, xLast, rolledSettled: e.sim.settledLength(), start });
   };
   while (!t.done) t.advance();
   const [a, b] = ends;
@@ -135,6 +138,11 @@ const rigid = pass(params());
   ok(a.xLast <= a.rolledSettled, 'the stretch it hands on went through the settled rolls', `to x ${(a.xLast * 1e3).toFixed(2)} mm, ${(a.rolledSettled * 1e3).toFixed(2)} mm rolled since`);
   near(a.result.exitThickness, a.result.h0 * (1 - r0.reduction), 1.5e-3, "stand 1's sheet at its reduction");
   near(a.result.rollRadius, hitchcockRadius(r0, a.result.steadyForce, r0.h0 - a.result.gap), 5e-3, "and its R' is Hitchcock's for its steady force");
+  // the thickness the gap is held on is the one handed on (by area): the chain is h0 (1 − r)^k. With the gauge on the
+  // points' edges stand 2 came in 0.37 % thinner than stand 1's sheet was held at, and every stand's reduction was off
+  near(b.result.h0, a.result.h0 * (1 - r0.reduction), 1e-3, "stand 2's entry thickness is stand 1's target");
+  ok(a.start.phase === 'approach' && a.start.head < -a.start.Lc - b.result.h0 && a.start.R > 1.4 * r0.rollRadius && a.start.ep0 > 0.3, "stand 2's sheet starts before the bite of its flattened rolls, which start from the strain brought in", `R' ${(a.start.R * 1e3).toFixed(1)} mm, εp ${a.start.ep0.toFixed(3)}, head ${(a.start.head * 1e3).toFixed(2)} mm, Lc ${(a.start.Lc * 1e3).toFixed(2)} mm`);
+  between(b.result.rollRadius / a.start.R, 0.97, 1.03, "and end within 3 % of where they started");
   ok(b.result.rollsSettled && b.result.steadyForce > 0, 'stand 2 settles too and has steady readings');
   near(b.result.exitThickness, b.result.h0 * (1 - r0.reduction), 1.5e-3, "stand 2's sheet at its reduction of its own entry thickness");
   ok(b.result.rollRadius > a.result.rollRadius, "stand 2's R' is the larger (a harder sheet, a smaller draft)", `${(a.result.rollRadius * 1e3).toFixed(1)} → ${(b.result.rollRadius * 1e3).toFixed(1)} mm`);

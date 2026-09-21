@@ -424,6 +424,17 @@ export function remap(old: Sim, base: SimParams, h1: number, sample: [number, nu
   const rho = P.material.rho * P.numerics.massScale;
   P.rolling.h0 = h1;
   P.defects = [];
+  // the strain the sheet brings in: where rolls that follow the pass start from (and the sheet before them)
+  if (P.rolling.flattening === 'hitchcock' || P.rolling.gapControl === 'reduction') {
+    let ep = 0;
+    let c = 0;
+    for (let p = 0; p < old.n; p++) {
+      if (!old.active[p] || (sample && (old.li[p] < sample[0] || old.li[p] > sample[1]))) continue;
+      ep += old.ep[p];
+      c++;
+    }
+    P.rolling.entryStrain = c ? ep / c : 0;
+  }
   let M = 0;
   if (sample) {
     P.rolling.sheetLength = steadyLength(P, every);

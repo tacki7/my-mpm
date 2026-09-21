@@ -124,6 +124,9 @@ export interface RollingParams {
    * the pass runs until the thickness measured just past the rolls is h0 (1 − r)
    */
   gapControl?: 'gap' | 'reduction';
+  /** mean equivalent plastic strain the sheet brings in (a tandem's later stands; remap sets it): only where rolls
+   *  that follow the pass start from (Sim presetRolls). Default 0 */
+  entryStrain?: number;
   /** stands of a tandem, each rolling the one before's exit strip by the same reduction (1 or absent: one stand). Sim does not read it */
   stands?: number;
   /**

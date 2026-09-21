@@ -18,7 +18,7 @@
 //
 // World frame: x along rolling (the exit plane of the rigid rolls is x = 0),
 // y through the thickness (mid-plane y = 0). Everything per unit width.
-import { biteGeometry, cloneParams, hitchcockRadius, type DamageModel, type SimParams } from './params.ts';
+import { ROLL_E, biteGeometry, cloneParams, hitchcockRadius, type DamageModel, type MaterialParams, type RollingParams, type SimParams } from './params.ts';
 import { druckerWork, localization } from './bifurcation.ts';
 import { karmanFlattened, karman } from './slab.ts';
 import {
@@ -36,6 +36,8 @@ import {
 } from './material.ts';
 
 /** the rolls' adjustment: steps between the gap control's thickness readings, and what counts as settled (relative) */
+/** where the flattened rolls start: the MPM's roll force over the slab method's, about */
+const PRESET_FORCE_RATIO = 1.09;
 const CTL_EVERY = 20;
 const CTL_TOL_R = 5e-3;
 const CTL_TOL_H = 5e-4;
@@ -373,6 +375,8 @@ export class Sim {
   /** the slab method's force with flattened rolls: the floor of the force R' follows while the head comes through */
   private ctlForce0 = 0;
   private ctlThick = NaN;
+  private ctlThickRef = NaN;
+  private ctlGapRef = NaN;
   /** R' low-passed over half a transit time, and since when R' has been within CTL_TOL_R of it; since when the thickness has been on its target */
   private ctlRRef = 0;
   private ctlRSince = 0;
@@ -407,8 +411,12 @@ export class Sim {
     const num = P.numerics;
     this.el = elasticConstants(P.material);
     const geo = biteGeometry(r);
-    this.gap = geo.gap;
-    this.contactLength = geo.contactLength;
+    // rolls that follow the pass start from the slab method's answer (presetRolls): the sheet is laid out before
+    // that bite, not the rigid rolls' (a later stand's R' is twice R, and its arc would start inside the sheet)
+    const adjusted = r.flattening === 'hitchcock' || r.gapControl === 'reduction';
+    const start = adjusted ? presetRolls(r, P.material) : null;
+    this.gap = start ? start.gap : geo.gap;
+    this.contactLength = start ? Math.sqrt(start.rollRadius * (r.h0 - start.gap) - (r.h0 - start.gap) ** 2 / 4) : geo.contactLength;
 
     const h = r.h0 / num.cellsThrough;
     this.h = h;
@@ -417,7 +425,7 @@ export class Sim {
     this.dp = dp;
 
     // Sheet starts with its head a little before the entry of the bite.
-    const Lc = geo.contactLength;
+    const Lc = this.contactLength;
     this.xHead0 = -Lc - Math.max(2 * r.h0, 4 * h);
     const xTail0 = this.xHead0 - r.sheetLength;
     // Enough room for the whole sheet to come out on the exit side.
@@ -456,7 +464,7 @@ export class Sim {
     this.gCw = new Float64Array(NN > nNodes ? nNodes : 0);
     this.gPrevHi = nNodes;
 
-    const R = r.rollRadius;
+    const R = start ? start.rollRadius : r.rollRadius;
     const cy = R + this.gap / 2;
     const omega = r.rollSpeed / R;
     this.rolls = [
@@ -467,22 +475,23 @@ export class Sim {
     // 30 mm and the head never got there before the tail entered the bite (no steady phase, no exit gauge).
     // Thin sheets are unchanged (3 h0 < 2 Lc)
     this.xExitProbe = Math.max(6 * h, Math.min(3 * r.h0, 2 * this.contactLength));
-    this.rollsAdjusted = r.flattening === 'hitchcock' || r.gapControl === 'reduction';
+    this.rollsAdjusted = adjusted;
+    this.ctlForce0 = start ? start.force : 0;
     this.rollsSettled = !this.rollsAdjusted;
     if (this.rollsSettled) this.settledT = -Infinity;
-    this.xGauge = Math.max(0.5 * r.h0, 3 * h);
+    this.xGauge = r.h0;
     // the time the sheet takes through the bite sets the pace: the force over a quarter of it, the gauge's delay
     // (xGauge at the exit speed) for the thickness, the gap over four delays (an integrator on a pure delay d is
     // stable above 2 d / π; this one settles in about three of its own times without overshoot)
     const transit = this.contactLength / r.rollSpeed;
     const delay = this.xGauge / r.rollSpeed;
     this.ctlTauF = transit / 4;
-    this.ctlTauH = delay;
-    this.ctlTauG = 4 * delay;
+    this.ctlTauH = delay / 2;
+    this.ctlTauG = 2 * delay;
     this.ctlWindow = transit / 2;
     this.ctlTransit = transit;
-    this.gaugeBand = (2.2 * dp) / (1 - r.reduction);
-    this.ctlRRef = r.rollRadius;
+    this.gaugeBand = Math.min((4 * dp) / (1 - r.reduction), 0.8 * r.h0);
+    this.ctlRRef = R;
 
     // Material points on a regular lattice.
     const NI = Math.round(r.sheetLength / dp);
@@ -702,16 +711,22 @@ export class Sim {
     const red = r.gapControl === 'reduction';
     const target = r.h0 * (1 - r.reduction);
     const t = this.t;
-    if (this.step === 1) this.presetRolls(flat, red);
-    if (red && this.step % CTL_EVERY === 0) {
-      const m = this.exitMeasure(this.xGauge, this.gaugeBand);
+    const building = this.headX() < this.xExitProbe;
+    // not on the head end: it comes out thicker and wavy, and a gap driven by it swings the force
+    if (red && !building && this.step % CTL_EVERY === 0) {
+      const m = this.exitMeasure(this.xGauge);
       if (m) {
         const k = Math.min(1, (CTL_EVERY * this.dt) / this.ctlTauH);
         this.ctlThick = Number.isNaN(this.ctlThick) ? m.thickness : this.ctlThick + (m.thickness - this.ctlThick) * k;
         this.gap -= (this.ctlThick - target) * Math.min(1, (CTL_EVERY * this.dt) / this.ctlTauG);
+        // the means over half a transit time: the sheet's thickness varies with the lattice's period on the grid
+        // (± 0.15 % at 4 cells and r 40 %) and the gap follows it; what has to be on the target is the mean
+        const km = Math.min(1, (2 * CTL_EVERY * this.dt) / this.ctlTransit);
+        this.ctlThickRef = Number.isNaN(this.ctlThickRef) ? this.ctlThick : this.ctlThickRef + (this.ctlThick - this.ctlThickRef) * km;
+        this.ctlGapRef = Number.isNaN(this.ctlGapRef) ? this.gap : this.ctlGapRef + (this.gap - this.ctlGapRef) * km;
       }
-      // on its target since (∞: not on it)
-      const on = Math.abs(this.ctlThick - target) <= CTL_TOL_H * target;
+      // on its target since (∞: not on it): the mean within CTL_TOL_H, the thickness now within four times that
+      const on = Math.abs(this.ctlThickRef - target) <= CTL_TOL_H * target && Math.abs(this.ctlThick - target) <= 4 * CTL_TOL_H * target;
       if (!on) this.ctlHSince = Infinity;
       else if (this.ctlHSince === Infinity) this.ctlHSince = t;
     }
@@ -719,14 +734,13 @@ export class Sim {
     // smooth: straight from the low-passed force it carries the force's step-to-step noise, and the force swung
     const top0 = this.rolls[0];
     // until the head is at the exit probe the force is still building up: not below the slab method's
-    const force = this.headX() < this.xExitProbe ? Math.max(this.ctlForce, this.ctlForce0) : this.ctlForce;
+    const force = building ? Math.max(this.ctlForce, this.ctlForce0) : this.ctlForce;
     const goal = flat ? hitchcockRadius(r, force, r.h0 - this.gap) : r.rollRadius;
     const R = top0.R + (goal - top0.R) * Math.min(1, this.dt / this.ctlTauF);
     this.setRolls(R);
     // put: within CTL_TOL_R of its own mean over half a transit time (the roll force wanders by ± 2 % over thousands of
     // steps, R' with it by ± 0.6 %: a band about where R' was some time ago would never hold)
     this.ctlRRef += (R - this.ctlRRef) * Math.min(1, (2 * this.dt) / this.ctlTransit);
-    const building = this.headX() < this.xExitProbe;
     if (building || Math.abs(R - this.ctlRRef) > CTL_TOL_R * R || Math.abs(R - goal) > CTL_TOL_R * R) this.ctlRSince = t;
     if (building) {
       this.ctlHSince = Infinity;
@@ -735,36 +749,10 @@ export class Sim {
     if ((!flat || t - this.ctlRSince >= this.ctlWindow) && (!red || t - this.ctlHSince >= this.ctlWindow)) {
       this.rollsSettled = true;
       this.settledT = this.t;
-      // held from here: the surface moves no more
+      // held from here, the gap at its mean: the surface moves no more
+      if (red) this.gap = this.ctlGapRef;
       this.setRolls(R, false);
     }
-  }
-
-  /**
-   * Where the rolls start (at the first step, when a tandem's remap has given the points their strain): the slab
-   * method's answer with the sheet's mean εp brought in, so that the pass has only the difference to find (R'
-   * within 2 %, the gap within 0.1 µm on the standard pass). Flattened: karmanFlattened's R' and force. Constant
-   * reduction: the gap less the sheet's elastic recovery, h (1 − ν²) 2k / E with 2k the slab method's at the exit.
-   */
-  private presetRolls(flat: boolean, red: boolean): void {
-    const r = this.params.rolling;
-    const m = this.params.material;
-    let ep0 = 0;
-    let c = 0;
-    for (let p = 0; p < this.n; p++) {
-      if (!this.active[p]) continue;
-      ep0 += this.ep[p];
-      c++;
-    }
-    ep0 /= Math.max(1, c);
-    const guess = flat ? karmanFlattened(r, m, 400, ep0) : { slab: karman(r, m, 400, ep0), rollRadius: r.rollRadius };
-    if (red) {
-      const twoK = guess.slab.twoK;
-      this.gap = r.h0 * (1 - r.reduction) * (1 - ((1 - m.nu * m.nu) * twoK[twoK.length - 1]) / m.E);
-    }
-    this.ctlForce0 = flat ? guess.slab.force : 0;
-    this.ctlRRef = guess.rollRadius;
-    this.setRolls(guess.rollRadius, false);
   }
 
   /** the rolls at radius R and the gap now; `moving`: the contact sees the surface move there over this step */
@@ -2174,9 +2162,11 @@ export class Sim {
   }
 
   /**
-   * Thickness and mean speed of the sheet at the exit probe, or at x (null until material is there). With rolls
-   * that follow the pass the band is the gauge's (a whole period of the point columns on the grid: a band of h
-   * reads 0.5 % thin once a period), so that the thickness reported is the one the gap is held on.
+   * Thickness and mean speed of the sheet at the exit probe, or at x (null until material is there): the points'
+   * outer edges, top − bottom, in a band of h. With rolls that follow the pass the thickness is by area
+   * (areaThickness, the band its window): the edges read 0.1 to 0.4 % over the area (more on a coarse lattice, and
+   * with the sheet's waviness), and the next stand's entry thickness is by area (thicknessOut) — the gap is held
+   * on the thickness the tandem hands on.
    */
   exitMeasure(x = this.xExitProbe, band = this.rollsAdjusted ? this.gaugeBand : this.h): { thickness: number; speed: number } | null {
     const { n, active, px, py, vx } = this;
@@ -2195,7 +2185,30 @@ export class Sim {
       c++;
     }
     if (c < this.NJ) return null;
+    if (this.rollsAdjusted) {
+      const area = this.areaThickness(x, band);
+      return area === null ? null : { thickness: area, speed: sv / c };
+    }
     return { thickness: top - bot, speed: sv / c };
+  }
+
+  /**
+   * Thickness of the sheet about x by area [m]: the points' current area (vol0 J) under a Hann window of
+   * half-width w, over the window's length. What thicknessOut() (src/mpm/tandem.ts) reads over a stretch of sheet,
+   * here at a place: no edge of a point comes into it, so it does not read the sheet's waviness or its rise off
+   * the pass line as thickness (the edges' top − bottom in a band does). Null until the sheet fills the window.
+   */
+  areaThickness(x: number, w: number): number | null {
+    const { n, active, px, vol0, f00, f01, f10, f11 } = this;
+    if (!(this.headX() >= x + w) || !(this.tailX() <= x - w)) return null;
+    let sum = 0;
+    for (let p = 0; p < n; p++) {
+      if (!active[p]) continue;
+      const u = (px[p] - x) / w;
+      if (u <= -1 || u >= 1) continue;
+      sum += 0.5 * (1 + Math.cos(Math.PI * u)) * vol0[p] * (f00[p] * f11[p] - f01[p] * f10[p]);
+    }
+    return sum / w;
   }
 
   /**
@@ -2456,4 +2469,23 @@ export class Sim {
       out[p] = v;
     }
   }
+}
+
+/**
+ * Where rolls that follow the pass start: the slab method's answer with the strain the sheet brings in
+ * (rolling.entryStrain, a tandem's later stands), so that the pass has only the difference to find (R' within 2 %
+ * on the standard pass). Flattened: karmanFlattened's R' and force. Constant reduction: the gap less the sheet's
+ * elastic recovery, h (1 − ν²) 2k / E with 2k the slab method's at the exit.
+ */
+function presetRolls(r: RollingParams, m: MaterialParams): { rollRadius: number; gap: number; force: number } {
+  const flat = r.flattening === 'hitchcock';
+  const ep0 = r.entryStrain ?? 0;
+  // the MPM's force is 1.07 to 1.14 times the slab method's on thin sheet (docs/validation.md): Hitchcock's radius
+  // for PRESET_FORCE_RATIO times the method's force, solved together (a softer roll by that ratio is the same thing)
+  const soft = { ...r, rollE: (r.rollE ?? ROLL_E) / PRESET_FORCE_RATIO };
+  const guess = flat ? karmanFlattened(soft, m, 400, ep0) : { slab: karman(r, m, 400, ep0), rollRadius: r.rollRadius };
+  const target = r.h0 * (1 - r.reduction);
+  const twoK = guess.slab.twoK;
+  const gap = r.gapControl === 'reduction' ? target * (1 - ((1 - m.nu * m.nu) * twoK[twoK.length - 1]) / m.E) : target;
+  return { rollRadius: guess.rollRadius, gap, force: flat ? PRESET_FORCE_RATIO * guess.slab.force : 0 };
 }
