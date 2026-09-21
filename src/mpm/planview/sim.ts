@@ -24,7 +24,7 @@
 //   the slip, sliding at the full capacity otherwise. No regularisation, no dependence on Δt.
 // - Pusher, tensions, mass scaling and the mill-speed scaling of the strain rate mean the
 //   same as in the section model and use the same parameters.
-import { biteGeometry, type DamageModel, type Defect, type SimParams } from '../params.ts';
+import { START_GAP, biteGeometry, type DamageModel, type Defect, type SimParams } from '../params.ts';
 import { elasticConstants, flowStress, hmFractureStrain, homologousTemperature, jcFractureStrain, plasticIncrement, type Elastic } from '../material.ts';
 
 /**
@@ -241,7 +241,8 @@ export class PlanSim {
     const dp = h / num.ppc;
     this.dp = dp;
     const Lc = geo.contactLength;
-    this.xHead0 = -Lc - Math.max(2 * r.h0, 4 * h);
+    // just short of the rolls (params.ts START_GAP)
+    this.xHead0 = -Lc - START_GAP * h;
     const xTail0 = this.xHead0 - r.sheetLength;
     const elongated = r.sheetLength / (1 - r.reduction);
     const xEnd = 2 * r.h0 + 2 * h + elongated * 1.1 + 8 * h;

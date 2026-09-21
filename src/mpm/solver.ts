@@ -18,7 +18,7 @@
 //
 // World frame: x along rolling (the exit plane of the rigid rolls is x = 0),
 // y through the thickness (mid-plane y = 0). Everything per unit width.
-import { ROLL_E, biteGeometry, cloneParams, hitchcockRadius, type DamageModel, type MaterialParams, type RollingParams, type SimParams } from './params.ts';
+import { ROLL_E, START_GAP, biteGeometry, cloneParams, hitchcockRadius, type DamageModel, type MaterialParams, type RollingParams, type SimParams } from './params.ts';
 import { druckerWork, localization } from './bifurcation.ts';
 import { karmanFlattened, karman } from './slab.ts';
 import {
@@ -424,9 +424,9 @@ export class Sim {
     const dp = h / num.ppc;
     this.dp = dp;
 
-    // Sheet starts with its head a little before the entry of the bite.
+    // The sheet starts with its head just short of the rolls: START_GAP cells before the entry of the bite.
     const Lc = this.contactLength;
-    this.xHead0 = -Lc - Math.max(2 * r.h0, 4 * h);
+    this.xHead0 = -Lc - START_GAP * h;
     const xTail0 = this.xHead0 - r.sheetLength;
     // Enough room for the whole sheet to come out on the exit side.
     const elongated = r.sheetLength / (1 - r.reduction);

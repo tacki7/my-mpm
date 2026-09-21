@@ -22,7 +22,7 @@
 //   No tensions, no crack faces: a failed
 //   point carries no deviator and no tension (it is counted, and the first one is recorded). A tandem
 //   is a Sim3 per stand (tandem3.ts).
-import { biteGeometry, cloneParams, hitchcockRadius, type DamageModel, type SimParams } from '../params.ts';
+import { START_GAP, biteGeometry, cloneParams, hitchcockRadius, type DamageModel, type SimParams } from '../params.ts';
 import { CTL_EVERY, CTL_TOL_H, CTL_TOL_R, presetRolls } from '../solver.ts';
 import { adiabaticRise, elasticConstants, hmFractureStrain, homologousTemperature, jcFractureStrain, plasticIncrement, staticStrength, strengthFactor, type Elastic } from '../material.ts';
 
@@ -234,7 +234,8 @@ export class Sim3 {
     this.halfWidth0 = hw;
 
     const Lc = this.contactLength;
-    this.xHead0 = -Lc - Math.max(2 * r.h0, 4 * h);
+    // just short of the rolls (params.ts START_GAP)
+    this.xHead0 = -Lc - START_GAP * h;
     const xTail0 = this.xHead0 - r.sheetLength;
     const elongated = r.sheetLength / (1 - r.reduction);
     const xEnd = 2 * r.h0 + 2 * h + elongated * 1.1 + 8 * h;

@@ -20,7 +20,7 @@ const base = () => {
 };
 
 /** a 3D pass up to its third steady look: the steady means and the sim */
-function pass3(solid) {
+function pass3(solid, enough = 3) {
   const sim = new Sim3(solidParams(base(), solid));
   const sampler = new SolidSampler();
   let looks = 0;
@@ -28,7 +28,7 @@ function pass3(solid) {
     for (let k = 0; k < READ_STEPS; k++) sim.advance();
     const look = sampler.look(sim);
     if (look.phase === 'steady') looks++;
-    if (looks >= 3 || look.phase === 'done' || look.phase === 'stalled') break;
+    if (looks >= enough || look.phase === 'done' || look.phase === 'stalled') break;
   }
   return { sim, st: sampler.means(sim) };
 }
@@ -61,7 +61,9 @@ ok(nF > 0 && nH > 0, 'the 2D section has steady readings to compare with', `${(f
 // ── the width held: the section's problem
 {
   const W = 1e-3;
-  const { st } = pass3({ width: W, planeStrain: true });
+  // every steady look: the gauge at the exit probe swings ±1 % with a period of three looks (0.7377 to 0.7516 mm), and
+  // the first three alone gave 0.7456 or 0.7423 mm with where the pass starts
+  const { st } = pass3({ width: W, planeStrain: true }, Infinity);
   ok(st && st.looks >= 3, 'plane strain: steady looks');
   near(st.force / W, force2, 0.04, 'plane strain: the roll force per width is the 2D section\'s');
   // the two gauges differ (the section's: by area over a band; here: the outer surface of the points' columns)
