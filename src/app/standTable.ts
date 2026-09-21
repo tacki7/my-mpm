@@ -15,6 +15,9 @@ const ROWS: [string, (r: StandResult) => string, string][] = [
   ['圧延荷重', (r) => (r.steadyForce != null ? (r.steadyForce * 1e-6).toFixed(2) : '—'), 'kN/mm'],
   // 2k = (2/√3) σy along the contact length, at the points' own εp and temperature (Sim.biteFlowStress)
   ['平均変形抵抗', (r) => (r.meanFlowStress != null ? (r.meanFlowStress * 1e-6).toFixed(0) : '—'), 'MPa'],
+  // the rolls as they ended: R' of a flattened roll, the gap of a constant reduction (the params' otherwise)
+  ["ロール半径 R'", (r) => (r.rollRadius * 1e3).toFixed(1), 'mm'],
+  ['ロールギャップ', (r) => (r.gap * 1e3).toFixed(4), 'mm'],
   ['先進率', (r) => (r.forwardSlip != null ? (r.forwardSlip * 100).toFixed(2) : '—'), '%'],
   ['最大損傷', (r) => r.maxDamage.toFixed(3), ''],
   ['亀裂の点', (r) => String(r.nFailed), '個'],

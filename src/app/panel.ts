@@ -1,6 +1,6 @@
 // The conditions panel: numeric inputs bound to SimParams (shown in mm / MPa).
 // The fields the URL can also set take their ranges from it (query.ts LIMITS).
-import { MATERIALS, hasBite, type SimParams } from '../mpm/params.ts';
+import { MATERIALS, ROLL_E, hasBite, type SimParams } from '../mpm/params.ts';
 import { buildDefectEditor } from './defectEditor.ts';
 import { checkRange } from './fieldCheck.ts';
 import { buildMaterialEditor } from './materialEditor.ts';
@@ -39,6 +39,22 @@ const RAW: Group[] = [
       { key: 'h0', label: '入側板厚', unit: 'mm', step: 0.1, min: 0.1, max: 20, get: (p) => p.rolling.h0 / mm, set: (p, v) => (p.rolling.h0 = v * mm) },
       { key: 'r', label: '圧下率', unit: '%', step: 1, min: 1, max: 60, get: (p) => p.rolling.reduction * 100, set: (p, v) => (p.rolling.reduction = v / 100) },
       { key: 'R', label: 'ロール半径', unit: 'mm', step: 5, min: 5, max: 1000, get: (p) => p.rolling.rollRadius / mm, set: (p, v) => (p.rolling.rollRadius = v * mm) },
+      {
+        key: 'rollE',
+        label: 'ロールのヤング率',
+        unit: 'GPa',
+        step: 1,
+        min: 50,
+        max: 700,
+        get: (p) => (p.rolling.rollE ?? ROLL_E) * 1e-9,
+        // the steel roll is written as no rollE at all (as the presets have it), so that it is not a difference
+        set: (p, v) => {
+          if (v * 1e9 === ROLL_E) delete p.rolling.rollE;
+          else p.rolling.rollE = v * 1e9;
+        },
+        hint: 'ロール偏平（Hitchcock）にだけ効く。鋼 206、超硬 500〜600',
+        sectionOnly: true,
+      },
       { key: 'L', label: '板の長さ', unit: 'mm', step: 1, min: 2, max: 200, get: (p) => p.rolling.sheetLength / mm, set: (p, v) => (p.rolling.sheetLength = v * mm) },
       {
         key: 'stands',
@@ -193,6 +209,22 @@ export function buildPanel(root: HTMLElement, onEdit: () => void): Panel {
   handoff.title =
     'タンデムで、次のスタンドへ移るとき。「定常になったらすぐ」は、出側の定常に圧延された部分を繰り返して次のスタンドの板を作る（板の残りは圧延しない。頭端・尾端の非定常な部分は引き継がない）';
 
+  // under the reduction and the roll radius they act on
+  const control = select('control', '圧下率の取り方', [
+    ['gap', 'ギャップ一定（ギャップ = 入側板厚 ×（1 − 圧下率））'],
+    ['reduction', '圧下率一定（出側板厚が合うようにギャップを調整）'],
+  ]);
+  control.classList.add('section-only');
+  control.title =
+    '「ギャップ一定」では板の弾性回復とロール偏平のぶん、出てくる板が少し厚い（実際の圧下率は入力より小さい）。「圧下率一定」は出側の板厚を測ってロールギャップを詰め、実際の圧下率を入力した値にする。調整が済むまでは「ロールを調整中」で、定常の平均はそのあとから取る';
+  const flatten = select('flatten', 'ロール偏平', [
+    ['none', 'なし（剛体ロール）'],
+    ['hitchcock', 'Hitchcock（計算した荷重と連立）'],
+  ]);
+  flatten.classList.add('section-only');
+  flatten.title =
+    "Hitchcock の式 R' = R (1 + C P / Δh)、C = 16 (1 − ν²) / (π E)。P は MPM で計算した圧延荷重で、圧延しながらロールの半径を R' に合わせていく（荷重と R' が釣り合うまで「ロールを調整中」）";
+
   for (const g of GROUPS) {
     // a folded group is a <details> (its summary is the title); the others a <fieldset>
     let fs: HTMLElement;
@@ -226,6 +258,8 @@ export function buildPanel(root: HTMLElement, onEdit: () => void): Panel {
       fs.append(row);
       inputs.set(f.key, inp);
       if (f.key === 'stands') fs.append(handoff);
+      if (f.key === 'r') fs.append(control);
+      if (f.key === 'R') fs.append(flatten);
     }
     root.append(fs);
     if (g.title === '潤滑と張力') root.append(matGroup, materialEditor.root, defectEditor.root);
@@ -257,6 +291,8 @@ export function buildPanel(root: HTMLElement, onEdit: () => void): Panel {
       selects.get('failure')!.value = p.damage.failure;
       selects.get('crack')!.value = p.numerics.crackFields ?? 'none';
       selects.get('handoff')!.value = p.rolling.handoff ?? 'done';
+      selects.get('control')!.value = p.rolling.gapControl ?? 'gap';
+      selects.get('flatten')!.value = p.rolling.flattening ?? 'none';
     },
     read(base) {
       const p: SimParams = structuredClone(base);
@@ -270,6 +306,10 @@ export function buildPanel(root: HTMLElement, onEdit: () => void): Panel {
       // 'done' is written as no handoff at all (as the presets have it), so that it is not a difference
       if (selects.get('handoff')!.value === 'steady') p.rolling.handoff = 'steady';
       else delete p.rolling.handoff;
+      if (selects.get('control')!.value === 'reduction') p.rolling.gapControl = 'reduction';
+      else delete p.rolling.gapControl;
+      if (selects.get('flatten')!.value === 'hitchcock') p.rolling.flattening = 'hitchcock';
+      else delete p.rolling.flattening;
       for (const g of GROUPS) {
         for (const f of g.fields) {
           const input = inputs.get(f.key)!;

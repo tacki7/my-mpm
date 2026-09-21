@@ -109,6 +109,7 @@ Math.exp・log の最後の 1 ビットが違うのでビット一致はしな�
 `&view=plan&W=20&wcells=10&notch=0&pfield=sxx|szz|seq|eta|damage|spread`（平面図。板幅 mm・半幅のセル数・端の切り欠きの半径 mm）
 `&escatter=0&ewidth=1&elen=1&eseed=1`（端の延性のばらつき。大きさ %・帯の幅 mm・相関長 mm・種。`escatter=0`（既定）で無し）
 `&stands=1..5`（タンデムのスタンド数。どのスタンドも同じ条件で、圧下率は各スタンドの入側板厚に対して。断面の画面だけ）
+`&flatten=none|hitchcock&rollE=206&control=gap|reduction`（ロール偏平を計算した荷重と連立・ロールのヤング率 GPa・圧下率一定 = 出側板厚が h0(1−r) になるようロールギャップを調整。既定は剛体・ギャップ一定。落ち着くまで `diag.phase === 'adjusting'`、`diag.rollRadius`・`diag.gap`・`diag.rollsSettled`）
 `&handoff=done|steady`（タンデムの引き継ぎ。既定は `done` = 板が抜けてから。`steady` = 定常になったらすぐ次のスタンドへ、定常の部分を繰り返した板で。数倍速い）
 `&crack=none|dfg`（亀裂の面。既定は `dfg` = 亀裂の近くの節点で点を両側の 2 つの速度場に分け、面が開く。`none` は 1 つの速度場で、T74 より前の既定）
 `&cond=<base64url JSON>`（「条件の URL をコピー」が書く。読みやすいキーに無い条件を、プリセットとの差分で。範囲外・型の合わないもの・知らないキーは無視）

@@ -62,6 +62,11 @@ export interface StandResult {
   /** mean deformation resistance in the bite, 2k = (2/√3) σy along the contact length [Pa] (Sim.biteFlowStress) */
   meanFlowStress: number | null;
   /** thickness of the sheet that came out (area over length of its middle half; the next stand's h0) */
+  /** the rolls at the stand's end: the radius in the contact (Hitchcock's R' with flattening 'hitchcock'), the gap
+   *  (adjusted with gapControl 'reduction') [m], and whether they had settled (true with rolls that are not adjusted) */
+  rollRadius: number;
+  gap: number;
+  rollsSettled: boolean;
   thicknessOut: number;
   /** the fraction of the stand's mass on points that left the grid (0 normally) */
   massLost: number;
@@ -280,6 +285,9 @@ export class TandemSim {
       exitThickness: m.exitThickness,
       forwardSlip: m.forwardSlip,
       meanFlowStress: m.meanFlowStress,
+      rollRadius: sim.rolls[0].R,
+      gap: sim.gap,
+      rollsSettled: sim.rollsSettled,
       thicknessOut: thicknessOut(sim, sample),
       massLost: lost / mass,
       separated: separated(sim),
@@ -339,7 +347,9 @@ export function thicknessOut(sim: Sim, sample: [number, number] | null = null): 
 export function steadySample(sim: Sim): [number, number] | null {
   const { NI, NJ, lattice, px, active } = sim;
   const x0 = sim.params.rolling.h0;
-  const x1 = sim.headX() - sim.contactLength;
+  // with rolls that follow the pass (flattening, constant reduction): only what went through the settled rolls
+  const x1 = Math.min(sim.headX() - sim.contactLength, sim.settledLength());
+  if (Number.isNaN(x1)) return null;
   let first = -1;
   let last = -1;
   let xFirst = 0;
@@ -511,7 +521,10 @@ export function steadyLength(P: SimParams, every: number): number {
   const r = P.rolling;
   const read = every * probe.dt * probe.vIn;
   const out = Math.max((3 * r.h0 + probe.contactLength) * (1 - r.reduction), probe.xExitProbe * (1 - r.reduction) + STEADY_READS * read);
-  return probe.contactLength + out + read + r.h0;
+  // rolls that follow the pass settle 1.5 transit times after the head is out (docs/validation.md「ロール偏平と圧下率一定」),
+  // and the stretch is the sheet rolled after that
+  const settle = probe.rollsAdjusted ? 2 * probe.contactLength + 3 * r.h0 * (1 - r.reduction) : 0;
+  return probe.contactLength + out + settle + read + r.h0;
 }
 
 /** per crack id, the mass of the failed points in it (every point, on the grid or not) */

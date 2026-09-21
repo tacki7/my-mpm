@@ -376,13 +376,13 @@ try {
     const worst = await c.evaluate(`(async () => {
       const { StandTable } = await import('/src/app/standTable.ts');
       const t = new StandTable(document.getElementById('stand-results-section'), document.getElementById('stand-results'));
-      const res = [1e-3, 0.748e-3, 0.561e-3, 0.42e-3, 0.315e-3].map((h, k) => ({ stand: k, h0: h, sheetLength: 0, particles: 0, steps: 0, t: 0, phase: 'done', steadyForce: 13.72e6, steadyTorque: 0, exitThickness: h * 0.75, forwardSlip: 0.1044, thicknessOut: h * 0.75, massLost: 0.0123, separated: false, maxDamage: 0.9123, nFailed: 12345, cracks: 0, cracksBorn: 123, crackGrowth: 12.345e-6 }));
+      const res = [1e-3, 0.748e-3, 0.561e-3, 0.42e-3, 0.315e-3].map((h, k) => ({ stand: k, h0: h, sheetLength: 0, particles: 0, steps: 0, t: 0, phase: 'done', steadyForce: 13.72e6, steadyTorque: 0, exitThickness: h * 0.75, forwardSlip: 0.1044, meanFlowStress: 1234.5e6, rollRadius: 1234.5e-3, gap: h * 0.7484, rollsSettled: true, thicknessOut: h * 0.75, massLost: 0.0123, separated: false, maxDamage: 0.9123, nFailed: 12345, cracks: 0, cracksBorn: 123, crackGrowth: 12.345e-6 }));
       t.update(5, res, 4, true, null, 'lost');
       await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
       const rec = document.querySelector('.record'), wrap = document.querySelector('.stand-results .table-scroll');
       return { recOver: rec.scrollWidth - rec.clientWidth, wrapOver: wrap.scrollWidth - wrap.clientWidth, rows: document.querySelectorAll('#stand-results tr.name').length };
     })()`);
-    ok(worst.recOver <= 0 && worst.wrapOver <= 0 && worst.rows === 10, `five stands' table at ${w} px, every value at its widest and the lost-mass line: no sideways scroll`, `overflow record ${worst.recOver} / table ${worst.wrapOver} px, ${worst.rows} quantities`);
+    ok(worst.recOver <= 0 && worst.wrapOver <= 0 && worst.rows === 13, `five stands' table at ${w} px, every value at its widest and the lost-mass line: no sideways scroll`, `overflow record ${worst.recOver} / table ${worst.wrapOver} px, ${worst.rows} quantities`);
   }
   await c.setViewport(1600, 1000);
 

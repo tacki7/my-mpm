@@ -3,11 +3,13 @@
 // and so are h0, r and R together when the rolls could not bite with them.
 //   ?preset=<id>&h0=1&r=25&R=100&L=16&mu=0.08&tb=0&tf=0&mat=spcc&damage=johnson-cook
 //   &yield=gtn&f0=0.005&fc=0.05&nucleation=tension&crack=none|dfg&handoff=done|steady
+//   &flatten=none|hitchcock&rollE=206 (GPa)&control=gap|reduction
 //   &cells=10&ms=10000&field=eta&autorun=1&stopafter=<steps>
 //   &cond=<base64url JSON>: every other condition, as the leaves that differ from the
 //   preset (conditionsQuery writes it, so a shared URL starts exactly the same run)
 import {
   MATERIALS,
+  ROLL_E,
   cloneParams,
   hasBite,
   type DamageModel,
@@ -25,6 +27,7 @@ export const LIMITS: Record<string, [number, number]> = {
   R: [5, 2000],
   L: [1, 500],
   stands: [1, MAX_STANDS],
+  rollE: [50, 700],
   mu: [0, 1],
   tb: [0, 5000],
   tf: [0, 5000],
@@ -79,6 +82,17 @@ export function applyQuery(base: SimParams, q: URLSearchParams): SimParams {
   const handoff = q.get('handoff');
   if (handoff === 'steady') p.rolling.handoff = 'steady';
   else if (handoff === 'done') delete p.rolling.handoff;
+  // rigid rolls and a fixed gap are written as no key at all, as the presets have them (and so is the steel roll's E)
+  const flatten = q.get('flatten');
+  if (flatten === 'hitchcock') p.rolling.flattening = 'hitchcock';
+  else if (flatten === 'none') delete p.rolling.flattening;
+  const control = q.get('control');
+  if (control === 'reduction') p.rolling.gapControl = 'reduction';
+  else if (control === 'gap') delete p.rolling.gapControl;
+  num('rollE', (v) => {
+    if (v * 1e9 === ROLL_E) delete p.rolling.rollE;
+    else p.rolling.rollE = v * 1e9;
+  });
   const cond = q.get('cond');
   if (cond) {
     const rolling = { ...p.rolling };
@@ -150,6 +164,10 @@ const RULES: Record<string, Rule> = {
   'rolling.sheetLength': r(1e-3, 0.5),
   'rolling.stands': { range: [1, MAX_STANDS], int: true },
   'rolling.handoff': { oneOf: ['done', 'steady'] },
+  'rolling.flattening': { oneOf: ['none', 'hitchcock'] },
+  'rolling.gapControl': { oneOf: ['gap', 'reduction'] },
+  'rolling.rollE': r(50e9, 700e9),
+  'rolling.rollNu': r(0, 0.49),
   'rolling.rollSpeed': r(0.05, 20),
   'rolling.millSpeed': r(0.1, 60),
   'rolling.mu': r(0, 1),
@@ -286,6 +304,9 @@ export function conditionsQuery(presetId: string, preset: SimParams, params: Sim
   put('L', r.sheetLength * 1e3, b.sheetLength * 1e3);
   put('stands', r.stands ?? 1, b.stands ?? 1);
   if ((r.handoff ?? 'done') !== (b.handoff ?? 'done')) q.set('handoff', r.handoff ?? 'done');
+  if ((r.flattening ?? 'none') !== (b.flattening ?? 'none')) q.set('flatten', r.flattening ?? 'none');
+  put('rollE', (r.rollE ?? ROLL_E) * 1e-9, (b.rollE ?? ROLL_E) * 1e-9);
+  if ((r.gapControl ?? 'gap') !== (b.gapControl ?? 'gap')) q.set('control', r.gapControl ?? 'gap');
   put('mu', r.mu, b.mu);
   put('tb', r.backTension * 1e-6, b.backTension * 1e-6);
   put('tf', r.frontTension * 1e-6, b.frontTension * 1e-6);

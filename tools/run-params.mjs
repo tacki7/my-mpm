@@ -42,5 +42,15 @@ export function runParams(args) {
     if (v !== 'none' && v !== 'dfg') throw new Error(`--crack ${v}: none or dfg`);
     P.numerics.crackFields = v;
   });
+  // the rolls adjusted while the pass runs (docs/model.md「ロール偏平と圧下率一定」)
+  text('flatten', (v) => {
+    if (v !== 'none' && v !== 'hitchcock') throw new Error(`--flatten ${v}: none or hitchcock`);
+    r.flattening = v;
+  });
+  num('rollE', (v) => (r.rollE = v * 1e9)); // GPa
+  text('control', (v) => {
+    if (v !== 'gap' && v !== 'reduction') throw new Error(`--control ${v}: gap or reduction`);
+    r.gapControl = v;
+  });
   return P;
 }

@@ -7,7 +7,7 @@ import type { SteadyMeans } from '../mpm/tandem.ts';
 
 export interface Readout {
   /** for checks: data-key of the row */
-  key: 'force' | 'torque' | 'exit' | 'slip';
+  key: 'force' | 'torque' | 'exit' | 'slip' | 'reduction' | 'radius' | 'gap';
   label: string;
   /** in the unit shown (null: none) */
   value: number | null;
@@ -25,7 +25,12 @@ export function readoutKind(d: Diagnostics, s: SteadyMeans | null): ReadoutKind 
   return d.phase === 'tail-out' || d.phase === 'done' || d.phase === 'stalled' ? 'none' : 'moment';
 }
 
-export function passReadout(d: Diagnostics, s: SteadyMeans | null): Readout[] {
+/** rolls that follow the pass (flattening, constant reduction): the stand's entry thickness, for the reduction it got */
+export interface AdjustedRolls {
+  h0: number;
+}
+
+export function passReadout(d: Diagnostics, s: SteadyMeans | null, rolls: AdjustedRolls | null = null): Readout[] {
   const kind = readoutKind(d, s);
   const pick = (steady: number | null | undefined, moment: number | null | undefined) =>
     kind === 'steady' ? (steady ?? null) : kind === 'moment' ? (moment ?? null) : null;
@@ -38,6 +43,18 @@ export function passReadout(d: Diagnostics, s: SteadyMeans | null): Readout[] {
     row('torque', '圧延トルク', pick(s?.torque, d.rollTorque), 1e-3, 3, 'kN·m/m'),
     row('exit', '出側板厚', pick(s?.exitThickness, d.exitThickness), 1e3, 4, 'mm'),
     row('slip', '先進率', pick(s?.forwardSlip, d.forwardSlip), 100, 2, '%'),
+    ...(rolls ? adjusted(d, pick(s?.exitThickness, d.exitThickness), rolls, kind === 'steady') : []),
+  ];
+}
+
+/** the reduction the sheet got, and the rolls now (the moment's: they are held once settled) */
+function adjusted(d: Diagnostics, exit: number | null, rolls: AdjustedRolls, steady: boolean): Readout[] {
+  const red = exit != null ? (1 - exit / rolls.h0) * 100 : null;
+  const now = d.rollsSettled ? '' : '（調整中）';
+  return [
+    { key: 'reduction', label: steady ? '実際の圧下率（定常）' : '実際の圧下率', value: red, text: red != null ? red.toFixed(2) : '—', unit: '%', steady },
+    { key: 'radius', label: `ロール半径 R'${now}`, value: d.rollRadius * 1e3, text: (d.rollRadius * 1e3).toFixed(2), unit: 'mm', steady: false },
+    { key: 'gap', label: `ロールギャップ${now}`, value: d.gap * 1e3, text: (d.gap * 1e3).toFixed(4), unit: 'mm', steady: false },
   ];
 }
 

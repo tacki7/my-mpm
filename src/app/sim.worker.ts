@@ -201,7 +201,8 @@ function pictureFrame(pic: Picture): [Frame, Transferable[]] {
  */
 function wantsPicture(s: Sim): boolean {
   const ph = s.phase();
-  if (ph === 'approach' || ph === 'bite') return false;
+  // 'adjusting': the rolls still move (flattening, constant reduction); the steady phase comes after it
+  if (ph === 'approach' || ph === 'bite' || ph === 'adjusting') return false;
   if (ph !== 'steady') return true;
   const w = windowWidth(scale!);
   return s.tailX() >= windowCentre(s.contactLength, w) - w / 2;

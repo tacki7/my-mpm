@@ -114,6 +114,20 @@ ok(fine.numerics.cellsThrough === 80, 'the largest the URL keys allow at the def
   const odd = applyQuery(base, new URLSearchParams({ handoff: 'soon' }));
   ok(!('handoff' in dn.rolling) && !('handoff' in odd.rolling) && !conditionsQuery('standard', base, dn).has('handoff'), "handoff=done and an unknown value are the preset's: no handoff key");
 }
+// rolls that follow the pass: ?flatten=hitchcock&control=reduction&rollE=550 set them and come back as the readable
+// keys; rigid rolls, a fixed gap and the steel roll's E are no keys at all
+{
+  const fl = applyQuery(base, new URLSearchParams({ flatten: 'hitchcock', control: 'reduction', rollE: '550' }));
+  const q = conditionsQuery('standard', base, fl);
+  ok(fl.rolling.flattening === 'hitchcock' && fl.rolling.gapControl === 'reduction' && fl.rolling.rollE === 550e9, '?flatten=hitchcock&control=reduction&rollE=550 set rolling.flattening, gapControl and rollE (Pa)');
+  ok(q.get('flatten') === 'hitchcock' && q.get('control') === 'reduction' && q.get('rollE') === '550' && !q.has('cond') && same(applyQuery(base, q), fl), 'and go back into the URL as the same keys, no cond', q.toString());
+  const off = applyQuery(base, new URLSearchParams({ flatten: 'none', control: 'gap', rollE: '206' }));
+  const odd = applyQuery(base, new URLSearchParams({ flatten: 'hertz', control: 'force', rollE: '5' }));
+  const bare = (p) => !('flattening' in p.rolling) && !('gapControl' in p.rolling) && !('rollE' in p.rolling);
+  ok(bare(off) && bare(odd) && conditionsQuery('standard', base, off).toString() === 'preset=standard', "flatten=none, control=gap, rollE=206 and values out of range are the preset's: no keys");
+  const viaCond = applyQuery(base, new URLSearchParams({ cond: enc({ rolling: { flattening: 'hitchcock', gapControl: 'reduction', rollNu: 0.25 } }) }));
+  ok(viaCond.rolling.flattening === 'hitchcock' && viaCond.rolling.gapControl === 'reduction' && viaCond.rolling.rollNu === 0.25, "cond carries them too (and the roll's ν, which has no readable key)");
+}
 const noBite = applyQuery(base, new URLSearchParams({ cond: enc({ rolling: { h0: 0.05, reduction: 0.7, rollRadius: 0.005 } }) }));
 ok(same(noBite.rolling, cloneParams(base).rolling), 'h0, r and R that cannot bite are ignored together, as with the readable keys');
 done();
