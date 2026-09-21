@@ -56,7 +56,7 @@ interface NumberField {
 const NUMBERS: NumberField[] = [
   { key: 'width', query: 'W3', label: '板幅', unit: 'mm', step: 1, min: 2, max: 40, scale: mm, hint: '解くのは 1/4（板幅と板厚の中央で鏡映）。広いほど点が増えて遅い' },
   { key: 'length', query: 'L3', label: '板の長さ', unit: 'mm', step: 1, min: 6, max: 40, scale: mm, hint: '定常の読みには 12 mm ほど要る' },
-  { key: 'cells', query: 'cells3', label: '板厚方向のセル数', unit: '', step: 2, min: 4, max: 8, scale: 1, hint: '偶数。4 で約 2〜3 分、6 で 10 分以上' },
+  { key: 'cells', query: 'cells3', label: '板厚方向のセル数', unit: '', step: 2, min: 4, max: 8, scale: 1, hint: '偶数。4 で約 2〜3 分、6 で約 14 分' },
 ];
 
 const DEFAULTS: SolidPageSettings = { width: 8 * mm, length: 12 * mm, cells: 4, planeStrain: false };
