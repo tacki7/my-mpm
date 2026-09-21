@@ -17,7 +17,8 @@ export interface SolidFieldInfo {
 }
 
 export const SOLID_FIELDS: SolidFieldInfo[] = [
-  { id: 'seq', label: '相当応力 σeq', unit: 'MPa', scale: 'sequential' },
+  // a fixed bar, the same from run to run
+  { id: 'seq', label: '相当応力 σeq', unit: 'MPa', scale: 'sequential', range: [0, 600] },
   { id: 'ep', label: '塑性ひずみ εp', unit: '', scale: 'sequential' },
   { id: 'pres', label: '静水圧 p（圧縮が正）', tab: '静水圧 p', unit: 'MPa', scale: 'diverging' },
   { id: 'eta', label: '応力三軸度 η', unit: '', scale: 'diverging', range: [-1.5, 1.5] },
@@ -41,6 +42,8 @@ const PRESETS: Record<ViewPreset, [number, number]> = {
 };
 
 const INK = '#1d2a3a';
+/** the most cells along a side of a face that are drawn one by one */
+const MAX_CELLS = 160;
 const SHEET = '244,245,243';
 
 export class SolidView {
@@ -242,12 +245,18 @@ export class SolidView {
         sy2[v] = pr[1];
         sd[v] = pr[2];
       }
-      for (let r = 0; r < rows - 1; r++) {
-        for (let c = 0; c < cols - 1; c++) {
+      // a wide strip has more cells than the picture has pixels for: at most MAX_CELLS a side are drawn (every
+      // n-th vertex; the last cell of a side is the shorter one)
+      const dr = Math.ceil((rows - 1) / MAX_CELLS);
+      const dc = Math.ceil((cols - 1) / MAX_CELLS);
+      for (let r = 0; r < rows - 1; r += dr) {
+        const r1 = Math.min(rows - 1, r + dr);
+        for (let c = 0; c < cols - 1; c += dc) {
+          const c1 = Math.min(cols - 1, c + dc);
           const a = r * cols + c;
-          const b = a + 1;
-          const d = a + cols;
-          const e = d + 1;
+          const b = r * cols + c1;
+          const d = r1 * cols + c;
+          const e = r1 * cols + c1;
           if (Number.isNaN(sx2[a]) || Number.isNaN(sx2[b]) || Number.isNaN(sx2[d]) || Number.isNaN(sx2[e])) continue;
           const o = 8 * q;
           xy[o] = sx2[a];
@@ -297,7 +306,7 @@ export class SolidView {
     const { rows, cols, pos } = face;
     const pr = new Float64Array(3);
     const line = (index: (k: number) => number, count: number) => {
-      // a line on a plane of symmetry is the seam between the quarter and its mirror image, not an edge of the strip
+      // a line on a plane of symmetry is the seam between the quarter and its mirror image, not an edge of the strip:
       // (the mid-width plane is one once the strip is cut open there)
       let onY = true;
       let onZ = true;
@@ -307,7 +316,9 @@ export class SolidView {
         if (Math.abs(pos[3 * v + 1]) > 1e-12) onY = false;
         if (Math.abs(pos[3 * v + 2]) > 1e-12) onZ = false;
       }
-      if (onY || (onZ && !this.cut)) return;
+      // drawn dotted: where the solved quarter meets its mirror image
+      const seam = onY || (onZ && !this.cut);
+      ctx.setLineDash(seam ? [2, 3] : []);
       let pen = false;
       ctx.beginPath();
       for (let k = 0; k < count; k++) {
@@ -322,6 +333,7 @@ export class SolidView {
         pen = true;
       }
       ctx.stroke();
+      ctx.setLineDash([]);
     };
     line((k) => k, cols);
     line((k) => (rows - 1) * cols + k, cols);

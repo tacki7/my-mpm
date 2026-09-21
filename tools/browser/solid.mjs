@@ -97,7 +97,7 @@ try {
   for (let k = 1; k <= 5; k++) await mouse('mouseMoved', at.x + 20 * k, at.y + 8 * k, { buttons: 1 });
   await mouse('mouseReleased', at.x + 100, at.y + 40);
   const v1 = await c.evaluate('__mpm.solid.view');
-  ok(v1.yaw > v0.yaw + 0.3 && v1.pitch > v0.pitch + 0.1, 'a drag turns the drawing', `yaw ${v0.yaw.toFixed(2)} → ${v1.yaw.toFixed(2)}, pitch ${v0.pitch.toFixed(2)} → ${v1.pitch.toFixed(2)}`);
+  ok(v1.yaw < v0.yaw - 0.3 && v1.pitch > v0.pitch + 0.1, 'a drag to the right turns the drawing with the hand (yaw falls)', `yaw ${v0.yaw.toFixed(2)} → ${v1.yaw.toFixed(2)}, pitch ${v0.pitch.toFixed(2)} → ${v1.pitch.toFixed(2)}`);
   ok(await c.evaluate(`document.querySelectorAll('.look-from button[aria-checked="true"]').length === 0`), 'and no named direction is the current one then');
   await c.send('Input.dispatchMouseEvent', { type: 'mouseWheel', x: at.x, y: at.y, deltaX: 0, deltaY: -400 });
   await painted();
