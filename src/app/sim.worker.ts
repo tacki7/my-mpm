@@ -314,7 +314,7 @@ self.onmessage = (e: MessageEvent<ToWorker>) => {
         selected = null;
         // headless checks read the simulation itself through the worker target (tools/browser/explorer.mjs)
         (self as unknown as { __sim: Sim }).__sim = sim;
-        post({ type: 'ready', geometry: geometryOf(sim) });
+        post({ type: 'ready', geometry: geometryOf(sim), sheetLength: sim.params.rolling.sheetLength });
         frame();
         break;
       }

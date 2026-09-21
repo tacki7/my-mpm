@@ -144,8 +144,8 @@ export class TandemSim {
     this.stands = stands;
     this.every = every;
     this.handoff = handoff;
-    this.base = cloneParams(params);
-    this.sim = new Sim(params);
+    this.base = withSteadyLength(params, every);
+    this.sim = new Sim(this.base);
   }
 
   /**
@@ -536,6 +536,17 @@ export function steadyLength(P: SimParams, every: number): number {
   // and the stretch is the sheet rolled after that
   const settle = probe.rollsAdjusted ? 2 * probe.contactLength + 3 * r.h0 * (1 - r.reduction) : 0;
   return probe.contactLength + out + settle + read + r.h0;
+}
+
+/**
+ * The params with lengthMode 'steady' carried out (a copy; sheetLength = steadyLength up to 0.1 mm, which does not depend on the
+ * length given, so doing it twice changes nothing). Defects keep their x, so one past the new tail is outside the sheet
+ */
+export function withSteadyLength(params: SimParams, every = READ_STEPS): SimParams {
+  const P = cloneParams(params);
+  // up to a whole 0.1 mm (it is shown as a condition)
+  if (P.rolling.lengthMode === 'steady') P.rolling.sheetLength = Math.ceil(steadyLength(P, every) * 1e4 - 1e-9) / 1e4;
+  return P;
 }
 
 /** per crack id, the mass of the failed points in it (every point, on the grid or not) */

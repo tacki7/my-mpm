@@ -128,6 +128,15 @@ ok(fine.numerics.cellsThrough === 80, 'the largest the URL keys allow at the def
   const viaCond = applyQuery(base, new URLSearchParams({ cond: enc({ rolling: { flattening: 'hitchcock', gapControl: 'reduction', rollNu: 0.25 } }) }));
   ok(viaCond.rolling.flattening === 'hitchcock' && viaCond.rolling.gapControl === 'reduction' && viaCond.rolling.rollNu === 0.25, "cond carries them too (and the roll's ν, which has no readable key)");
 }
+// the sheet's length worked out: ?length=steady sets rolling.lengthMode and comes back as the same key
+{
+  const st = applyQuery(base, new URLSearchParams({ length: 'steady' }));
+  const q = conditionsQuery('standard', base, st);
+  ok(st.rolling.lengthMode === 'steady' && q.get('length') === 'steady' && !q.has('cond') && same(applyQuery(base, q), st), '?length=steady sets rolling.lengthMode and goes back into the URL, no cond', q.toString());
+  const off = applyQuery(base, new URLSearchParams({ length: 'fixed' }));
+  const odd = applyQuery(base, new URLSearchParams({ length: 'long' }));
+  ok(!('lengthMode' in off.rolling) && !('lengthMode' in odd.rolling), "length=fixed and an unknown value are the preset's: no key");
+}
 const noBite = applyQuery(base, new URLSearchParams({ cond: enc({ rolling: { h0: 0.05, reduction: 0.7, rollRadius: 0.005 } }) }));
 ok(same(noBite.rolling, cloneParams(base).rolling), 'h0, r and R that cannot bite are ignored together, as with the readable keys');
 done();

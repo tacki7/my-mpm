@@ -3,7 +3,7 @@
 // and so are h0, r and R together when the rolls could not bite with them.
 //   ?preset=<id>&h0=1&r=25&R=100&L=16&mu=0.08&tb=0&tf=0&mat=spcc&damage=johnson-cook
 //   &yield=gtn&f0=0.005&fc=0.05&nucleation=tension&crack=none|dfg&handoff=done|steady
-//   &flatten=none|hitchcock&rollE=206 (GPa)&control=gap|reduction
+//   &flatten=none|hitchcock&rollE=206 (GPa)&control=gap|reduction&length=fixed|steady
 //   &cells=10&ms=10000&field=eta&autorun=1&stopafter=<steps>
 //   &cond=<base64url JSON>: every other condition, as the leaves that differ from the
 //   preset (conditionsQuery writes it, so a shared URL starts exactly the same run)
@@ -60,6 +60,10 @@ export function applyQuery(base: SimParams, q: URLSearchParams): SimParams {
     p.rolling.rollRadius = base.rolling.rollRadius;
   }
   num('L', (v) => (p.rolling.sheetLength = v * 1e-3));
+  // a given length is written as no key at all, as the presets have it
+  const length = q.get('length');
+  if (length === 'steady') p.rolling.lengthMode = 'steady';
+  else if (length === 'fixed') delete p.rolling.lengthMode;
   num('stands', (v) => Number.isInteger(v) && (p.rolling.stands = v));
   num('mu', (v) => (p.rolling.mu = v));
   num('tb', (v) => (p.rolling.backTension = v * 1e6));
@@ -166,6 +170,7 @@ const RULES: Record<string, Rule> = {
   'rolling.handoff': { oneOf: ['done', 'steady'] },
   'rolling.flattening': { oneOf: ['none', 'hitchcock'] },
   'rolling.gapControl': { oneOf: ['gap', 'reduction'] },
+  'rolling.lengthMode': { oneOf: ['fixed', 'steady'] },
   'rolling.rollE': r(50e9, 700e9),
   'rolling.rollNu': r(0, 0.49),
   'rolling.rollSpeed': r(0.05, 20),
@@ -302,6 +307,7 @@ export function conditionsQuery(presetId: string, preset: SimParams, params: Sim
   put('r', r.reduction * 100, b.reduction * 100);
   put('R', r.rollRadius * 1e3, b.rollRadius * 1e3);
   put('L', r.sheetLength * 1e3, b.sheetLength * 1e3);
+  if ((r.lengthMode ?? 'fixed') !== (b.lengthMode ?? 'fixed')) q.set('length', r.lengthMode ?? 'fixed');
   put('stands', r.stands ?? 1, b.stands ?? 1);
   if ((r.handoff ?? 'done') !== (b.handoff ?? 'done')) q.set('handoff', r.handoff ?? 'done');
   if ((r.flattening ?? 'none') !== (b.flattening ?? 'none')) q.set('flatten', r.flattening ?? 'none');

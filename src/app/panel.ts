@@ -217,6 +217,15 @@ export function buildPanel(root: HTMLElement, onEdit: () => void): Panel {
   control.classList.add('section-only');
   control.title =
     '「ギャップ一定」では板の弾性回復とロール偏平のぶん、出てくる板が少し厚い（実際の圧下率は入力より小さい）。「圧下率一定」は出側の板厚を測ってロールギャップを詰め、実際の圧下率を入力した値にする。調整が済むまでは「ロールを調整中」で、定常の平均はそのあとから取る';
+  // over the sheet's length it replaces
+  const length = select('length', '板の長さの取り方', [
+    ['fixed', '入力した長さ'],
+    ['steady', '定常状態になるまで（長さは自動）'],
+  ]);
+  length.classList.add('section-only');
+  length.addEventListener('change', () => (inputs.get('L')!.disabled = selects.get('length')!.value === 'steady'));
+  length.title =
+    '「定常状態になるまで」は、1 スタンド目の板の長さを、定常になって定常の読みが揃うのに要る長さに自動で決める（ロール偏平・圧下率一定ではロールの調整が落ち着くぶん長い）。決めた長さは、圧延を始めると「板の長さ」に出る。タンデムの 2 スタンド目以降は引き継ぎ方で決まる';
   const flatten = select('flatten', 'ロール偏平', [
     ['none', 'なし（剛体ロール）'],
     ['hitchcock', 'Hitchcock（計算した荷重と連立）'],
@@ -259,6 +268,7 @@ export function buildPanel(root: HTMLElement, onEdit: () => void): Panel {
       inputs.set(f.key, inp);
       if (f.key === 'stands') fs.append(handoff);
       if (f.key === 'r') fs.append(control);
+      if (f.key === 'L') fs.append(length);
       if (f.key === 'R') fs.append(flatten);
     }
     root.append(fs);
@@ -292,6 +302,8 @@ export function buildPanel(root: HTMLElement, onEdit: () => void): Panel {
       selects.get('crack')!.value = p.numerics.crackFields ?? 'none';
       selects.get('handoff')!.value = p.rolling.handoff ?? 'done';
       selects.get('control')!.value = p.rolling.gapControl ?? 'gap';
+      selects.get('length')!.value = p.rolling.lengthMode ?? 'fixed';
+      inputs.get('L')!.disabled = p.rolling.lengthMode === 'steady';
       selects.get('flatten')!.value = p.rolling.flattening ?? 'none';
     },
     read(base) {
@@ -308,6 +320,8 @@ export function buildPanel(root: HTMLElement, onEdit: () => void): Panel {
       else delete p.rolling.handoff;
       if (selects.get('control')!.value === 'reduction') p.rolling.gapControl = 'reduction';
       else delete p.rolling.gapControl;
+      if (selects.get('length')!.value === 'steady') p.rolling.lengthMode = 'steady';
+      else delete p.rolling.lengthMode;
       if (selects.get('flatten')!.value === 'hitchcock') p.rolling.flattening = 'hitchcock';
       else delete p.rolling.flattening;
       for (const g of GROUPS) {

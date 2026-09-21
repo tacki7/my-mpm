@@ -138,7 +138,8 @@ export interface StandMessage {
 }
 
 export type FromWorker =
-  | { type: 'ready'; geometry: Geometry }
+  /** sheetLength: the first stand's sheet [m] (the params', or worked out with lengthMode 'steady') */
+  | { type: 'ready'; geometry: Geometry; sheetLength: number }
   | Frame
   | StandMessage
   | { type: 'error'; message: string };

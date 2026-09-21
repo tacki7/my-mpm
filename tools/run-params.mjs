@@ -5,6 +5,7 @@
 // Lengths in mm, tensions in MPa, the reduction as a fraction.
 import { defaultParams, MATERIALS } from '../src/mpm/params.ts';
 import { presetById } from '../src/mpm/presets.ts';
+import { withSteadyLength } from '../src/mpm/tandem.ts';
 
 export function runParams(args) {
   const has = (name) => args.includes(`--${name}`);
@@ -52,5 +53,10 @@ export function runParams(args) {
     if (v !== 'gap' && v !== 'reduction') throw new Error(`--control ${v}: gap or reduction`);
     r.gapControl = v;
   });
-  return P;
+  // --length steady: the sheet as long as the (first) stand needs to get to the steady state (--L is then not used)
+  text('length', (v) => {
+    if (v !== 'fixed' && v !== 'steady') throw new Error(`--length ${v}: fixed or steady`);
+    r.lengthMode = v;
+  });
+  return withSteadyLength(P);
 }

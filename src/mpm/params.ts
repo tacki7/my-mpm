@@ -99,6 +99,12 @@ export interface RollingParams {
   reduction: number; // (h0 − gap)/h0, rigid rolls
   rollRadius: number; // [m]
   sheetLength: number; // [m]
+  /**
+   * 'steady': the first stand's sheet is as long as the stand needs to get to the steady state with its readings
+   * (src/mpm/tandem.ts steadyLength, withSteadyLength: longer with rolls that follow the pass), and sheetLength is
+   * replaced by that. 'fixed' or absent: sheetLength as given
+   */
+  lengthMode?: 'fixed' | 'steady';
   rollSpeed: number; // simulated roll surface speed [m/s]
   /** real mill speed [m/s]; strain rates are scaled by millSpeed/rollSpeed before entering rate-dependent laws */
   millSpeed: number;

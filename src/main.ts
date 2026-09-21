@@ -207,6 +207,12 @@ function startWorker() {
       // new conditions, new picture: back to the default window
       if (!geometry || geometry.h0 !== m.geometry.h0 || geometry.contactLength !== m.geometry.contactLength) view.resetView();
       geometry = m.geometry;
+      // 「定常状態になるまで」: the length the tandem worked out, into the conditions and the panel
+      if (params.rolling.lengthMode === 'steady' && params.rolling.sheetLength !== m.sheetLength) {
+        params.rolling.sheetLength = m.sheetLength;
+        if (!edited) panel.show(params);
+        noteConditions();
+      }
       view.geometry = geometry;
       standGeometries = [geometry];
       standViews.setup(runStands, geometry);
