@@ -17,7 +17,7 @@
 // tension); the neutral point is where the two pressures meet, and the pressure
 // is the lower of the two (the friction hill).
 import { flowStress } from './material.ts';
-import { biteGeometry, type MaterialParams, type RollingParams } from './params.ts';
+import { biteGeometry, hitchcockRadius, type MaterialParams, type RollingParams } from './params.ts';
 
 export interface SlabResult {
   /** positions from the entry (−L) to the exit (0) [m] */
@@ -201,6 +201,26 @@ export function karman(r: RollingParams, m: MaterialParams, n = 2000, ep0 = 0): 
     };
   }
   return out!;
+}
+
+/**
+ * The slab method with Hitchcock's flattened rolls: R' = R (1 + C P / Δh) and karman() at R' solved together
+ * by fixed-point iteration from the rigid roll (the force goes about as √R', so an iteration takes off nine
+ * tenths of the error; 1e-9 in R' within ten). The reference for the solver's flattening 'hitchcock'.
+ */
+export function karmanFlattened(r: RollingParams, m: MaterialParams, n = 2000, ep0 = 0): { slab: SlabResult; rollRadius: number; iterations: number } {
+  const dh = r.h0 * r.reduction;
+  let R = r.rollRadius;
+  let slab = karman(r, m, n, ep0);
+  let iterations = 0;
+  for (; iterations < 50; iterations++) {
+    const next = hitchcockRadius(r, slab.force, dh);
+    const moved = Math.abs(next - R) / R;
+    R = next;
+    slab = karman({ ...r, rollRadius: R }, m, n, ep0);
+    if (moved < 1e-9) break;
+  }
+  return { slab, rollRadius: R, iterations };
 }
 
 /**

@@ -9,11 +9,13 @@
 // - the second stand's steady force is the whole-sheet handoff's (3.664 kN/mm, docs/validation.md「タンデム」)
 // - a stand's mean deformation resistance (StandResult.meanFlowStress) is the slab method's 2k mean, within −1 to +3 %
 // - a sheet too short to get there is carried whole, bit for bit as with handoff 'done'
+// - lengthMode 'steady': the first sheet is steadyLength long whatever length is given, and a single pass on it
+//   has STEADY_READS steady readings
 // @check
 import { ok, between, near, done } from './lib.mjs';
 import { defaultParams } from '../../src/mpm/params.ts';
 import { karman } from '../../src/mpm/slab.ts';
-import { READ_STEPS, STEADY_READS, TandemSim, steadyLength, steadySample } from '../../src/mpm/tandem.ts';
+import { READ_STEPS, STEADY_READS, TandemSim, steadyLength, steadySample, withSteadyLength } from '../../src/mpm/tandem.ts';
 
 const params = (L) => {
   const P = defaultParams();
@@ -116,6 +118,20 @@ const params = (L) => {
   const d = run('done');
   const same = ['px', 'py', 'ep', 'pres', 'sxx', 'dJC', 'mass'].every((k) => s.next[k].length === d.next[k].length && s.next[k].every((v, i) => v === d.next[k][i]));
   ok(s.result.phase === 'done' && same, "a 6 mm sheet never gets there: the whole sheet is carried, bit for bit as with 'done'", `${s.result.phase}, ${s.next.n} points`);
+}
+
+// ── lengthMode 'steady': the length is worked out, and it is enough
+{
+  const P = params(3e-3); // far too short as given
+  P.rolling.lengthMode = 'steady';
+  const t = new TandemSim(P, 1);
+  const L = steadyLength(P, READ_STEPS);
+  const got = t.sim.params.rolling.sheetLength;
+  ok(got >= L && got < L + 1.0001e-4 && L > 3e-3 && P.rolling.sheetLength === 3e-3, "lengthMode 'steady': the sheet is steadyLength long, up to 0.1 mm (the params given are not touched)", `${(L * 1e3).toFixed(2)} → ${(got * 1e3).toFixed(4)} mm`);
+  ok(withSteadyLength(t.sim.params).rolling.sheetLength === got, 'working it out twice changes nothing');
+  ok(withSteadyLength(params(3e-3)).rolling.sheetLength === 3e-3, "without the mode the length is the params'");
+  while (!t.done) t.advance();
+  ok(t.steadyMeans().readings >= STEADY_READS && t.results[0].steadyForce > 0, 'a single pass on it gets to the steady state with its readings', `${t.steadyMeans().readings} steady readings`);
 }
 
 done();

@@ -15,6 +15,9 @@ const ROWS: [string, (r: StandResult) => string, string][] = [
   ['圧延荷重', (r) => (r.steadyForce != null ? (r.steadyForce * 1e-6).toFixed(2) : '—'), 'kN/mm'],
   // 2k = (2/√3) σy along the contact length, at the points' own εp and temperature (Sim.biteFlowStress)
   ['平均変形抵抗', (r) => (r.meanFlowStress != null ? (r.meanFlowStress * 1e-6).toFixed(0) : '—'), 'MPa'],
+  // the rolls as they ended: R' of a flattened roll, the gap of a constant reduction (the params' otherwise)
+  ["ロール半径 R'", (r) => (r.rollRadius * 1e3).toFixed(1), 'mm'],
+  ['ロールギャップ', (r) => (r.gap * 1e3).toFixed(4), 'mm'],
   ['先進率', (r) => (r.forwardSlip != null ? (r.forwardSlip * 100).toFixed(2) : '—'), '%'],
   ['最大損傷', (r) => r.maxDamage.toFixed(3), ''],
   ['亀裂の点', (r) => String(r.nFailed), '個'],
@@ -116,8 +119,14 @@ export class StandTable {
     const notes: string[] = [];
     const k = results.length; // the stand it stopped at (1 = the first)
     if (stopped) notes.push(`${STOP_TEXT[stopped](k, results[k - 1])}。その先のスタンドは計算していない`);
-    const unsteady = results.filter((r) => r.steadyForce == null).map((r) => `#${r.stand + 1}`);
-    if (unsteady.length) notes.push(`${unsteady.join('・')} は定常の読みが無い（板が短く、頭端が出口の先に届く前に尾端がバイトに入る）ので、荷重・出側板厚・先進率は —`);
+    // rolls that follow the pass (flattening, constant reduction) are 'steady' only once they settled, a transit
+    // time or so after the head is out: a sheet long enough for rigid rolls can be too short for them
+    const names = (rs: StandResult[]) => rs.map((r) => `#${r.stand + 1}`).join('・');
+    const unsteady = results.filter((r) => r.steadyForce == null);
+    const short = unsteady.filter((r) => r.rollsSettled);
+    const unsettled = unsteady.filter((r) => !r.rollsSettled);
+    if (short.length) notes.push(`${names(short)} は定常の読みが無い（板が短く、頭端が出口の先に届く前に尾端がバイトに入る）ので、荷重・出側板厚・先進率は —`);
+    if (unsettled.length) notes.push(`${names(unsettled)} は定常の読みが無い（板が短く、ロールの調整（偏平・ギャップ）が落ち着く前に尾端がバイトに入る。板の長さを延ばす）ので、荷重・出側板厚・先進率は —。ロール半径 R'・ギャップは調整の途中の値`);
     const caption = document.createElement('caption');
     caption.className = 'table-note';
     caption.textContent = notes.join('。');

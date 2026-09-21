@@ -207,6 +207,12 @@ function startWorker() {
       // new conditions, new picture: back to the default window
       if (!geometry || geometry.h0 !== m.geometry.h0 || geometry.contactLength !== m.geometry.contactLength) view.resetView();
       geometry = m.geometry;
+      // 「定常状態になるまで」: the length the tandem worked out, into the conditions and the panel
+      if (params.rolling.lengthMode === 'steady' && params.rolling.sheetLength !== m.sheetLength) {
+        params.rolling.sheetLength = m.sheetLength;
+        if (!edited) panel.show(params);
+        noteConditions();
+      }
       view.geometry = geometry;
       standGeometries = [geometry];
       standViews.setup(runStands, geometry);
@@ -321,11 +327,23 @@ function updateButtons() {
 }
 
 // ── frames ──────────────────────────────────────────────────────────────────
+/** rolls that follow the pass (flattening, constant reduction): the picture's rolls are the solver's now (Sim.setRolls) */
+function followRolls(d: Diagnostics) {
+  const g = geometry;
+  if (!g || (g.rolls[0].R === d.rollRadius && g.gap === d.gap)) return;
+  const dh = g.h0 - d.gap;
+  const rolls = g.rolls.map((r) => ({ ...r, R: d.rollRadius, cy: Math.sign(r.cy) * (d.rollRadius + d.gap / 2), omega: Math.sign(r.omega) * (g.rollSpeed / d.rollRadius) }));
+  geometry = { ...g, gap: d.gap, rolls, contactLength: Math.sqrt(d.rollRadius * dh - (dh * dh) / 4) };
+  if (view.geometry === g) view.geometry = geometry;
+  if (standGeometries[standGeometries.length - 1] === g) standGeometries[standGeometries.length - 1] = geometry;
+}
+
 function onFrame(f: Frame) {
   last = f;
   if (runStands > 1 && geometry && standStarts.length <= f.stand) standStarts.push(standStart(f.tOffset * 1e3, geometry.h0));
   frames++;
   running = f.running;
+  followRolls(f.diag);
   view.frame = standViews.liveFrame(f);
   const d = f.diag;
   const tPass = (f.tOffset + d.t) * 1e3;
@@ -383,6 +401,7 @@ function refreshReadouts(rebuildCracks = false): void {
 const phaseText: Record<Diagnostics['phase'], string> = {
   approach: 'ロールに向かっている',
   bite: '噛み込み中',
+  adjusting: 'ロールを調整中（偏平・ギャップ）',
   steady: '定常圧延',
   'tail-out': '尾端が抜けるところ',
   done: '圧延が終わった',
@@ -391,10 +410,11 @@ const phaseText: Record<Diagnostics['phase'], string> = {
 
 function updateResults(d: Diagnostics, f: Frame, steady: SteadyMeans | null = f.steady, midEta: number | null = f.midEta) {
   // the load, torque, exit thickness and slip: the steady means once there are any (they stay after the pass)
-  const pass = passReadout(d, steady);
-  $('results-note').textContent = readoutNote(readoutKind(d, steady)) + torqueNote(pass.find((r) => r.key === 'torque')?.value);
+  const P = standStarts[f.stand]?.P ?? params;
+  const pass = passReadout(d, steady, P.rolling.flattening === 'hitchcock' || P.rolling.gapControl === 'reduction' ? { h0: P.rolling.h0 } : null);
+  $('results-note').textContent = readoutNote(readoutKind(d, steady), d.rollsSettled) + torqueNote(pass.find((r) => r.key === 'torque')?.value);
   // the shape against the central-burst map (the stand on show's entry thickness), and the mid-plane η measured
-  burstHint.update(standStarts[f.stand]?.P ?? params, midEta);
+  burstHint.update(P, midEta);
   const rows: [string, string, string][] = [
     ...pass.map((r): [string, string, string] => [r.label, r.text, r.unit]),
     [params.damage.model === 'none' ? '最大損傷（3 指標の最大）' : '最大損傷', d.maxDamage.toFixed(3), ''],
@@ -617,6 +637,7 @@ window.__mpm = {
       outside: s.outside,
       points: s.p.length,
       delta: s.delta,
+      rollRadius: s.rollRadius,
       steadyForce: steadyForce.mean,
       ratio: slabRatio(s, steadyForce.mean),
     };

@@ -45,7 +45,7 @@ npm run sim -- --cells 6 --L 8 --every 2000   # 粗い圧延を 1 回（約 6 �
 ```
 
 CI（`.github/workflows/check.yml`）が push のたびに `npm ci` → `npm run check` → `npm run build` を回す（ubuntu・Node 24、
-1 回約 2.5 分: 関門のスクリプトの合計 134 s のうち tandem.mjs 25 s・tension.mjs 18 s・presets-tension 11 s・planview 9 s・stall 9 s、2026-09-20。上限 10 分）。
+1 回約 6 分: 関門のスクリプトの合計 339 s のうち roll-flattening.mjs 63 s・planview-total-load 32 s・tandem.mjs 25 s・planview-edge-scatter 23 s・tension.mjs 20 s、2026-09-21。上限 10 分）。
 PR にはその枝の push の結果が付く。
 
 node は 22.18 以降（型の除去が既定で有効）。`src/` は**消去できる構文だけ**（enum・namespace・
@@ -109,6 +109,8 @@ Math.exp・log の最後の 1 ビットが違うのでビット一致はしな�
 `&view=plan&W=20&wcells=10&notch=0&pfield=sxx|szz|seq|eta|damage|spread`（平面図。板幅 mm・半幅のセル数・端の切り欠きの半径 mm）
 `&escatter=0&ewidth=1&elen=1&eseed=1`（端の延性のばらつき。大きさ %・帯の幅 mm・相関長 mm・種。`escatter=0`（既定）で無し）
 `&stands=1..5`（タンデムのスタンド数。どのスタンドも同じ条件で、圧下率は各スタンドの入側板厚に対して。断面の画面だけ）
+`&length=fixed|steady`（板の長さの取り方。`steady` = 1 スタンド目の板を、定常の読みが揃うのに要る長さに自動で（`L` は使わない。決めた長さは `__mpm.params.rolling.sheetLength`）。ツールは `--length steady`）
+`&flatten=none|hitchcock&rollE=206&control=gap|reduction`（ロール偏平を計算した荷重と連立・ロールのヤング率 GPa・圧下率一定 = 出側板厚が h0(1−r) になるようロールギャップを調整。既定は剛体・ギャップ一定。落ち着くまで `diag.phase === 'adjusting'`、`diag.rollRadius`・`diag.gap`・`diag.rollsSettled`）
 `&handoff=done|steady`（タンデムの引き継ぎ。既定は `done` = 板が抜けてから。`steady` = 定常になったらすぐ次のスタンドへ、定常の部分を繰り返した板で。数倍速い）
 `&crack=none|dfg`（亀裂の面。既定は `dfg` = 亀裂の近くの節点で点を両側の 2 つの速度場に分け、面が開く。`none` は 1 つの速度場で、T74 より前の既定）
 `&cond=<base64url JSON>`（「条件の URL をコピー」が書く。読みやすいキーに無い条件を、プリセットとの差分で。範囲外・型の合わないもの・知らないキーは無視）

@@ -18,6 +18,11 @@ export function summarize(sim, P, hist, d, secs) {
     neutralStates: Object.fromEntries(['found', 'sticking', 'backward', 'forward'].map((k) => [k, steady.filter((h) => h.neutralState === k).length])),
     inertiaRatio: d.inertiaRatio,
     kineticRatio: mean(steady.filter((h) => h.kineticRatio != null).map((h) => h.kineticRatio)),
+    // the rolls adjusted while the pass ran (flattening 'hitchcock', gapControl 'reduction'): where they ended, the
+    // reduction the sheet really took, and whether they settled (the steady reads are the ones after that)
+    ...(sim.rollsAdjusted
+      ? { rollRadius_mm: d.rollRadius * 1e3, gap_mm: d.gap * 1e3, rollsSettled: d.rollsSettled, reduction: ((h) => (h ? 1 - h / P.rolling.h0 : null))(mean(steady.filter((h) => h.exitThickness).map((h) => h.exitThickness))) }
+      : {}),
     maxDamage: d.maxDamage,
     failed: d.nFailed,
     ...porosity(sim),

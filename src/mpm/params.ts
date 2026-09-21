@@ -99,6 +99,12 @@ export interface RollingParams {
   reduction: number; // (h0 − gap)/h0, rigid rolls
   rollRadius: number; // [m]
   sheetLength: number; // [m]
+  /**
+   * 'steady': the first stand's sheet is as long as the stand needs to get to the steady state with its readings
+   * (src/mpm/tandem.ts steadyLength, withSteadyLength: longer with rolls that follow the pass), and sheetLength is
+   * replaced by that. 'fixed' or absent: sheetLength as given
+   */
+  lengthMode?: 'fixed' | 'steady';
   rollSpeed: number; // simulated roll surface speed [m/s]
   /** real mill speed [m/s]; strain rates are scaled by millSpeed/rollSpeed before entering rate-dependent laws */
   millSpeed: number;
@@ -109,6 +115,24 @@ export interface RollingParams {
   frontTension: number;
   /** ramp time of both tensions [s]; 0 or absent: ten passes of the elastic wave along the sheet */
   tensionRamp?: number;
+  /**
+   * Elastic flattening of the rolls (docs/model.md「ロール偏平と圧下率一定」). 'hitchcock': the rolls' radius in the
+   * contact follows the computed roll force P [N/m], R' = R (1 + C P / Δh), C = 16 (1 − ν²) / (π E) with the
+   * rolls' E and ν, Δh = h0 − gap (Hitchcock), solved together with the pass while it runs. 'none' or absent: rigid rolls
+   */
+  flattening?: 'none' | 'hitchcock';
+  /** the rolls' Young's modulus [Pa] (absent: ROLL_E, steel) and Poisson's ratio (absent: ROLL_NU) for the flattening */
+  rollE?: number;
+  rollNu?: number;
+  /**
+   * What `reduction` sets. 'gap' or absent: the roll gap, h0 (1 − r); the sheet comes out a little thicker (its
+   * elastic recovery). 'reduction': the sheet that comes out, (h0 − h_exit) / h0 = r: the gap is adjusted while
+   * the pass runs until the thickness measured just past the rolls is h0 (1 − r)
+   */
+  gapControl?: 'gap' | 'reduction';
+  /** mean equivalent plastic strain the sheet brings in (a tandem's later stands; remap sets it): only where rolls
+   *  that follow the pass start from (Sim presetRolls). Default 0 */
+  entryStrain?: number;
   /** stands of a tandem, each rolling the one before's exit strip by the same reduction (1 or absent: one stand). Sim does not read it */
   stands?: number;
   /**
@@ -347,6 +371,21 @@ export function cloneParams(p: SimParams): SimParams {
     numerics: { ...p.numerics },
     defects: p.defects.map((d) => ({ ...d })),
   };
+}
+
+/** steel rolls, for the flattening */
+export const ROLL_E = 206e9;
+export const ROLL_NU = 0.3;
+
+/** Hitchcock's constant C = 16 (1 − ν²) / (π E) of the rolls [1/Pa] (steel: 2.25e-11) */
+export function hitchcockC(r: RollingParams): number {
+  const nu = r.rollNu ?? ROLL_NU;
+  return (16 * (1 - nu * nu)) / (Math.PI * (r.rollE ?? ROLL_E));
+}
+
+/** Hitchcock's flattened roll radius under the roll force P [N/m] with the draft dh [m] */
+export function hitchcockRadius(r: RollingParams, force: number, dh: number): number {
+  return r.rollRadius * (1 + (hitchcockC(r) * Math.max(0, force)) / dh);
 }
 
 /** Derived geometry of the roll bite (rigid rolls). */

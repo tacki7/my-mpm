@@ -62,6 +62,11 @@ export interface StandResult {
   /** mean deformation resistance in the bite, 2k = (2/√3) σy along the contact length [Pa] (Sim.biteFlowStress) */
   meanFlowStress: number | null;
   /** thickness of the sheet that came out (area over length of its middle half; the next stand's h0) */
+  /** the rolls at the stand's end: the radius in the contact (Hitchcock's R' with flattening 'hitchcock'), the gap
+   *  (adjusted with gapControl 'reduction') [m], and whether they had settled (true with rolls that are not adjusted) */
+  rollRadius: number;
+  gap: number;
+  rollsSettled: boolean;
   thicknessOut: number;
   /** the fraction of the stand's mass on points that left the grid (0 normally) */
   massLost: number;
@@ -139,8 +144,8 @@ export class TandemSim {
     this.stands = stands;
     this.every = every;
     this.handoff = handoff;
-    this.base = cloneParams(params);
-    this.sim = new Sim(params);
+    this.base = withSteadyLength(params, every);
+    this.sim = new Sim(this.base);
   }
 
   /**
@@ -280,6 +285,9 @@ export class TandemSim {
       exitThickness: m.exitThickness,
       forwardSlip: m.forwardSlip,
       meanFlowStress: m.meanFlowStress,
+      rollRadius: sim.rolls[0].R,
+      gap: sim.gap,
+      rollsSettled: sim.rollsSettled,
       thicknessOut: thicknessOut(sim, sample),
       massLost: lost / mass,
       separated: separated(sim),
@@ -339,7 +347,9 @@ export function thicknessOut(sim: Sim, sample: [number, number] | null = null): 
 export function steadySample(sim: Sim): [number, number] | null {
   const { NI, NJ, lattice, px, active } = sim;
   const x0 = sim.params.rolling.h0;
-  const x1 = sim.headX() - sim.contactLength;
+  // with rolls that follow the pass (flattening, constant reduction): only what went through the settled rolls
+  const x1 = Math.min(sim.headX() - sim.contactLength, sim.settledLength());
+  if (Number.isNaN(x1)) return null;
   let first = -1;
   let last = -1;
   let xFirst = 0;
@@ -414,6 +424,17 @@ export function remap(old: Sim, base: SimParams, h1: number, sample: [number, nu
   const rho = P.material.rho * P.numerics.massScale;
   P.rolling.h0 = h1;
   P.defects = [];
+  // the strain the sheet brings in: where rolls that follow the pass start from (and the sheet before them)
+  if (P.rolling.flattening === 'hitchcock' || P.rolling.gapControl === 'reduction') {
+    let ep = 0;
+    let c = 0;
+    for (let p = 0; p < old.n; p++) {
+      if (!old.active[p] || (sample && (old.li[p] < sample[0] || old.li[p] > sample[1]))) continue;
+      ep += old.ep[p];
+      c++;
+    }
+    P.rolling.entryStrain = c ? ep / c : 0;
+  }
   let M = 0;
   if (sample) {
     P.rolling.sheetLength = steadyLength(P, every);
@@ -511,7 +532,21 @@ export function steadyLength(P: SimParams, every: number): number {
   const r = P.rolling;
   const read = every * probe.dt * probe.vIn;
   const out = Math.max((3 * r.h0 + probe.contactLength) * (1 - r.reduction), probe.xExitProbe * (1 - r.reduction) + STEADY_READS * read);
-  return probe.contactLength + out + read + r.h0;
+  // rolls that follow the pass settle 1.5 transit times after the head is out (docs/validation.md「ロール偏平と圧下率一定」),
+  // and the stretch is the sheet rolled after that
+  const settle = probe.rollsAdjusted ? 2 * probe.contactLength + 3 * r.h0 * (1 - r.reduction) : 0;
+  return probe.contactLength + out + settle + read + r.h0;
+}
+
+/**
+ * The params with lengthMode 'steady' carried out (a copy; sheetLength = steadyLength up to 0.1 mm, which does not depend on the
+ * length given, so doing it twice changes nothing). Defects keep their x, so one past the new tail is outside the sheet
+ */
+export function withSteadyLength(params: SimParams, every = READ_STEPS): SimParams {
+  const P = cloneParams(params);
+  // up to a whole 0.1 mm (it is shown as a condition)
+  if (P.rolling.lengthMode === 'steady') P.rolling.sheetLength = Math.ceil(steadyLength(P, every) * 1e4 - 1e-9) / 1e4;
+  return P;
 }
 
 /** per crack id, the mass of the failed points in it (every point, on the grid or not) */

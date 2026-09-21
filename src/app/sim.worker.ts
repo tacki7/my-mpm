@@ -201,7 +201,8 @@ function pictureFrame(pic: Picture): [Frame, Transferable[]] {
  */
 function wantsPicture(s: Sim): boolean {
   const ph = s.phase();
-  if (ph === 'approach' || ph === 'bite') return false;
+  // 'adjusting': the rolls still move (flattening, constant reduction); the steady phase comes after it
+  if (ph === 'approach' || ph === 'bite' || ph === 'adjusting') return false;
   if (ph !== 'steady') return true;
   const w = windowWidth(scale!);
   return s.tailX() >= windowCentre(s.contactLength, w) - w / 2;
@@ -313,7 +314,7 @@ self.onmessage = (e: MessageEvent<ToWorker>) => {
         selected = null;
         // headless checks read the simulation itself through the worker target (tools/browser/explorer.mjs)
         (self as unknown as { __sim: Sim }).__sim = sim;
-        post({ type: 'ready', geometry: geometryOf(sim) });
+        post({ type: 'ready', geometry: geometryOf(sim), sheetLength: sim.params.rolling.sheetLength });
         frame();
         break;
       }

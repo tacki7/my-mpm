@@ -2,7 +2,7 @@
 // roll force and the friction hill, and a moving average of the roll force — each chart
 // point is one frame's mean, so the grid-crossing ripple of the MPM (period 2h/v_in,
 // docs/validation.md "準静的と荷重の振動") shows in it and hides the steady value.
-import { karman } from '../mpm/slab.ts';
+import { karman, karmanFlattened } from '../mpm/slab.ts';
 import { biteGeometry, type RollingParams, type SimParams } from '../mpm/params.ts';
 import { drawChart, type Series } from './charts.ts';
 import type { Diagnostics } from '../mpm/solver.ts';
@@ -30,6 +30,8 @@ export interface SlabReference {
   outside: string | null;
   /** Δ = mean thickness / contact length (thicknessRatio) */
   delta: number;
+  /** the roll radius the method was solved at: Hitchcock's R' with flattening 'hitchcock', else the rolls' [m] */
+  rollRadius: number;
 }
 
 /**
@@ -55,7 +57,10 @@ export function slabReference(P: SimParams, ep0 = 0): SlabReference {
   const key = JSON.stringify([P.rolling, P.material, ep0]);
   const kept = cache.get(key);
   if (kept) return kept;
-  const s = karman(P.rolling, P.material, undefined, ep0);
+  // flattened rolls: the method with Hitchcock's R' solved together with its own force (what the MPM's R' is compared to)
+  const flat = P.rolling.flattening === 'hitchcock' ? karmanFlattened(P.rolling, P.material, undefined, ep0) : null;
+  const s = flat ? flat.slab : karman(P.rolling, P.material, undefined, ep0);
+  const rollRadius = flat ? flat.rollRadius : P.rolling.rollRadius;
   // the first reason that breaks the method: a tension at 2k makes the pressure negative at that
   // end (the branches then need not cross either), sticking breaks Coulomb friction, and without
   // a neutral point friction cannot draw the strip in
@@ -82,7 +87,8 @@ export function slabReference(P: SimParams, ep0 = 0): SlabReference {
     p: s.p,
     tau: s.tau,
     outside,
-    delta: thicknessRatio(P.rolling),
+    delta: thicknessRatio({ ...P.rolling, rollRadius }),
+    rollRadius,
   };
   if (cache.size >= CACHE_SIZE) cache.delete(cache.keys().next().value!);
   cache.set(key, ref);
