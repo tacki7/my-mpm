@@ -96,7 +96,10 @@ Math.exp・log の最後の 1 ビットが違うのでビット一致はしな�
 （約 5.5 分、CPU ロックを取って回す。3 スタンドを実クリックで最後まで回して `node tools/tandem.mjs` と比べる（#1 は相対 1e-5、#2 以降は h0 を 1e-7 ずらしたときの揺れの 2 倍まで）、
 枠・表・CSV・PNG・実マウス・5 スタンドの表の幅・700 px・板の破断で止まる・1 スタンドに戻す。`tandem*.png` を自分で見る）。
 
-ポートは必ず渡す（既定値は無い）。`window.__mpm` は `frames` `running` `ready` `done` `diag` `cracks`
+残り時間の表示（時計の上の「残り 約 …」、`src/app/eta.ts`・`src/mpm/progress.ts`・ワーカーの `progress`）を触ったら `CDP_PORT=<cdp> node tools/browser/eta.mjs http://localhost:<dev>/ <作業用ディレクトリ>/eta`
+（約 5 分。表示した残り時間を、実際に掛かった残り時間と比べる: 断面・一時停止・タンデム 2 スタンド（`handoff` 2 通り）・平面図・3 次元。`eta-section.png` を自分で見る）。
+
+ポートは必ず渡す（既定値は無い）。`window.__mpm` は `frames` `eta`（表示中の残り時間 [s]。速さが読めるまでは null。`plan.eta`・`solid.eta` も）`running` `ready` `done` `diag` `cracks`
 `geometry` `params` `history` `slab`（スラブ法の荷重・中立点・方法の外の理由、`delta` = 平均板厚 / 接触長、`steadyForce` = 定常の荷重をステップ数で重み付けした平均 [N/m]、`ratio` = MPM / スラブ法。定常の前と方法の外では null）`forceChart`（荷重のグラフに描いた生の値と移動平均）`explorer`（表示中の点）`tracks`（追っている点と経路）`view`（拡大率・パン・倍率・主応力の向き）
 `plan`（平面図: `active` `ready` `running` `done` `diag`（`steady` が定常の平均、SI）`cracks` `settings` `url` `setMode()` `setField()` `drawMs()`）
 `solid`（3 次元のタブ: `active` `ready` `running` `frames` `done` `diag`（`steady` が定常の平均、SI）`geometry`（今のスタンドの。`stand` `stands` `sheetLength` も）`stand` `stands` `standResults`（済んだスタンドの `Stand3Result`）`stopped` `settings` `params` `field` `range` `url` `view`（向き・拡大・切る・ロール）`setDim('2'|'3')` `setField()` `run()` `drawMs()`）

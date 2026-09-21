@@ -117,6 +117,8 @@ export interface Frame {
   results: StandResult[];
   /** the whole pass is over (one stand: its phase is done or stalled; a tandem: the last stand is closed) */
   passDone: boolean;
+  /** how far the running stand is through its pass, 0..1 (src/mpm/progress.ts; 1 for a finished stand's kept picture) */
+  progress: number;
   /** a tandem stopped before its last stand, and why (null while it runs and after a normal end) */
   stopped: TandemStop | null;
   /** the stand on show's steady means so far (TandemSim's readings; null for a kept picture) */

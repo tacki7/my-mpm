@@ -31,6 +31,8 @@ export interface PlanDiag {
   t: number;
   step: number;
   phase: PlanPhase;
+  /** how far the strip is through its pass, 0..1 (src/mpm/progress.ts) */
+  progress: number;
   /** at the last look: roll force per roll on the half width since the look before [N], force per unit width
    *  of the middle band [N/m], half width at the exit probe over the initial one − 1, mid thickness there [m] */
   now: { forceHalfWidth: number; forceMid: number; spread: number; centreThick: number } | null;

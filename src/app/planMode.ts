@@ -15,6 +15,7 @@ import { PLAN_FIELDS, PlanView, planFieldInfo } from './planView.ts';
 import { conditionsQuery } from './query.ts';
 import { radioGroup } from './radioGroup.ts';
 import { say } from './liveText.ts';
+import { Eta, etaText } from './eta.ts';
 
 export type ViewMode = 'section' | 'plan';
 
@@ -60,6 +61,8 @@ export class PlanMode {
   private field: PlanFieldName;
   private running = false;
   private frames = 0;
+  /** the time the run still needs, beside the clock (src/app/eta.ts) */
+  private eta = new Eta();
   private dirty = false;
   private crackSeen = 0;
   private awaitingReady = false;
@@ -304,6 +307,7 @@ export class PlanMode {
     this.settings = checkedSettings(readPanel ? this.readSettings(params) : this.settings, params.rolling.sheetLength, params.numerics.ppc);
     this.showSettings(this.settings);
     this.params = cloneParams(params);
+    this.eta.reset();
     this.last = null;
     this.view.frame = null;
     this.running = false;
@@ -361,6 +365,7 @@ export class PlanMode {
     if (!this.active) return;
     const d = this.last?.diag;
     this.$('clock').textContent = `t = ${((d?.t ?? 0) * 1e3).toFixed(2)} ms　${(d?.step ?? 0).toLocaleString()} step`;
+    this.$('eta').textContent = etaText(this.eta.seconds, this.frames > 1, this.finished);
   }
 
   private showError(msg: string): void {
@@ -372,6 +377,7 @@ export class PlanMode {
   // ── frames ─────────────────────────────────────────────────────────────────
   private onFrame(f: PlanFrame): void {
     this.last = f;
+    this.eta.update(performance.now(), f.running, f.diag.progress, 0, 1, 1);
     this.frames++;
     this.running = f.running;
     this.view.frame = f;
@@ -523,6 +529,9 @@ export class PlanMode {
       },
       get frames() {
         return self.frames;
+      },
+      get eta() {
+        return self.eta.seconds;
       },
       get done() {
         return self.finished || (self.stopAfter !== null && (self.last?.diag.step ?? 0) >= self.stopAfter && !self.running);

@@ -13,6 +13,7 @@ import { css, split, temper } from './colormap.ts';
 import { checkRange } from './fieldCheck.ts';
 import { uiFont } from './font.ts';
 import { say } from './liveText.ts';
+import { Eta, etaText, standGrowth } from './eta.ts';
 import { edited, showNumber } from './numberInput.ts';
 import { conditionsQuery } from './query.ts';
 import { radioGroup } from './radioGroup.ts';
@@ -124,6 +125,8 @@ export class SolidMode {
   private field: SolidFieldName;
   private running = false;
   private frames = 0;
+  /** the time the run still needs, beside the clock (src/app/eta.ts) */
+  private eta = new Eta();
   private dirty = false;
   private chartsDirty = false;
   private awaitingReady = false;
@@ -531,6 +534,7 @@ export class SolidMode {
     P.rolling.backTension = 0;
     P.rolling.frontTension = 0;
     this.params = P;
+    this.eta.reset();
     this.geometries = [];
     this.standResults = [];
     this.last = null;
@@ -589,6 +593,7 @@ export class SolidMode {
     if (!this.active) return;
     const d = this.last?.diag;
     this.$('clock').textContent = `t = ${((d?.t ?? 0) * 1e3).toFixed(2)} ms　${(d?.step ?? 0).toLocaleString()} step`;
+    this.$('eta').textContent = etaText(this.eta.seconds, this.frames > 1, this.finished);
   }
 
   private showError(msg: string): void {
@@ -609,6 +614,8 @@ export class SolidMode {
 
   private onFrame(f: SolidFrame): void {
     this.last = f;
+    const roll = this.params?.rolling;
+    this.eta.update(performance.now(), f.running, f.diag.progress, f.diag.stand, roll?.stands ?? 1, standGrowth(roll?.reduction ?? 0, roll?.handoff ?? 'done', true));
     this.frames++;
     this.running = f.running;
     this.view.frame = f;
@@ -928,6 +935,9 @@ export class SolidMode {
       },
       get frames() {
         return self.frames;
+      },
+      get eta() {
+        return self.eta.seconds;
       },
       get done() {
         return self.finished || (self.stopAfter !== null && (self.last?.diag.step ?? 0) >= self.stopAfter && !self.running);

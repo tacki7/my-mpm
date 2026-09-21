@@ -6,7 +6,8 @@
 import type { SimParams } from '../mpm/params.ts';
 import type { Sim, FieldName, Diagnostics } from '../mpm/solver.ts';
 import type { FromWorker, ToWorker, Frame, Geometry } from './protocol.ts';
-import { READ_STEPS, TandemSim, type StandDone } from '../mpm/tandem.ts';
+import { READ_STEPS, TandemSim, steadyLength, type StandDone } from '../mpm/tandem.ts';
+import { standEndTail, standProgress } from '../mpm/progress.ts';
 import { Tracker } from './tracker.ts';
 import { FIELDS } from './fields.ts';
 import { windowCentre, windowWidth } from './biteWindow.ts';
@@ -110,6 +111,25 @@ function dirsOf(s: Sim): Float32Array {
   return dirs;
 }
 
+/** where each stand's tail began and where it is when the stand ends (src/mpm/progress.ts), found at the stand's first frame */
+const tailSpan = new WeakMap<Sim, [number, number]>();
+
+/** how far the running stand is through its pass, 0..1 (for the page's estimate of the time left) */
+function progressOf(s: Sim, t: TandemSim): number {
+  let span = tailSpan.get(s);
+  if (!span) {
+    const tail0 = s.tailX();
+    const length = s.headX() - tail0;
+    // a stand with another after it hands on once it is steady: the first stand's strip may be longer than that
+    // reading needs, the later ones are made that long
+    const handsOn = t.handoff === 'steady' && t.stand < t.stands - 1;
+    const need = !handsOn ? null : t.stand === 0 ? steadyLength(s.params, EVERY) : length;
+    span = [tail0, standEndTail(s.params.rolling.h0, s.contactLength, length, need)];
+    tailSpan.set(s, span);
+  }
+  return standProgress(s.tailX(), span[0], span[1], s.contactLength, s.params.rolling.reduction);
+}
+
 /** the rest of a frame of sim s with its tracker; keep: without reading the display's means (a picture) */
 function restOf(s: Sim, tr: Tracker | null, keep = false): Picture['rest'] {
   let diag: Diagnostics;
@@ -153,6 +173,7 @@ function restOf(s: Sim, tr: Tracker | null, keep = false): Picture['rest'] {
     stepOffset: t.stepOffset,
     results: t.results.map((r) => ({ ...r })),
     passDone: s === sim && finished(),
+    progress: s === sim ? progressOf(s, t) : 1,
     stopped: t.stopped,
     steady: s === sim ? t.steadyMeans() : null,
     midEta: s === sim && midPlane?.sim === s ? midPlane.eta.middle : null,

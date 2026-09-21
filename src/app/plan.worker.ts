@@ -5,6 +5,7 @@
 import { planCondition } from '../mpm/planview/condition.ts';
 import { PlanSim } from '../mpm/planview/sim.ts';
 import { SAMPLE_STEPS, SteadySampler, snapshot } from '../mpm/planview/steady.ts';
+import { standEndTail, standProgress } from '../mpm/progress.ts';
 import type { FromPlanWorker, PlanCrackView, PlanDiag, PlanFieldName, PlanFrame, ToPlanWorker } from './planProtocol.ts';
 
 let sim: PlanSim | null = null;
@@ -16,6 +17,8 @@ let finished = false;
 let stopAfter: number | null = null;
 let timer: ReturnType<typeof setTimeout> | null = null;
 let msPerStep = 0;
+/** where the strip's tail began: the way it has come is the run's progress (src/mpm/progress.ts) */
+let tail0: number | null = null;
 
 const FRAME_MS = 33;
 
@@ -49,7 +52,9 @@ function diag(s: PlanSim): PlanDiag {
     if (s.failed[p]) nFailed++;
     else maxDamage = Math.max(maxDamage, s.governingDamage(p));
   }
-  return { t: s.t, step: s.step, phase: s.phase(), now, steady: sampler!.means(s.halfWidth0), nFailed, maxDamage };
+  tail0 ??= s.tailX();
+  const progress = standProgress(s.tailX(), tail0, standEndTail(s.params.rolling.h0, s.contactLength, 0, null), s.contactLength, s.params.rolling.reduction);
+  return { t: s.t, step: s.step, phase: s.phase(), progress, now, steady: sampler!.means(s.halfWidth0), nFailed, maxDamage };
 }
 
 function frame(): void {
@@ -148,6 +153,7 @@ self.onmessage = (e: MessageEvent<ToPlanWorker>) => {
         field = m.field;
         stopAfter = m.stopAfter;
         sim = new PlanSim(planCondition(m.params, m.plan));
+        tail0 = null;
         sampler = new SteadySampler();
         // headless checks can read the simulation through the worker target
         (self as unknown as { __plan: PlanSim }).__plan = sim;
