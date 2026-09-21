@@ -47,6 +47,11 @@ export class SolidSampler {
   private gauges = 0;
   last: SolidLook | null = null;
 
+  /** steady looks so far */
+  get count(): number {
+    return this.looks;
+  }
+
   /** call when sim.step is a multiple of READ_STEPS */
   look(sim: Sim3): SolidLook {
     const phase = sim.phase();

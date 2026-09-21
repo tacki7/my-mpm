@@ -54,7 +54,7 @@ try {
   await click('#dim-tab-3');
   await c.waitFor('__mpm.solid.active && __mpm.solid.ready', 60000);
   ok((await visible('#solid-canvas')) && !(await visible('#bite')) && !(await visible('#plan-canvas')) && !(await visible('.view-switch')), 'a click on 3 次元 shows the 3D picture; the section, the plan view and their switch are gone');
-  ok((await visible('[name="solid-width"]')) && !(await visible('[name="tb"]')) && !(await visible('[name="stands"]')) && (await visible('[name="mu"]')), 'the panel has the 3D strip and the shared conditions, not the tensions or the stands');
+  ok((await visible('[name="solid-width"]')) && !(await visible('[name="tb"]')) && !(await visible('[name="L"]')) && (await visible('[name="stands"]')) && (await visible('[name="flatten"]')) && (await visible('[name="control"]')) && (await visible('[name="length"]')) && (await visible('[name="mu"]')), 'the panel has the 3D strip and the shared conditions (the stands, the rolls that follow the pass, the length steady), not the tensions or the section\'s length');
   ok(await c.evaluate(`document.getElementById('dim-tab-3').getAttribute('aria-selected') === 'true' && document.getElementById('dim-panel').getAttribute('aria-labelledby') === 'dim-tab-3'`), 'the 3 次元 tab is selected and names the panel');
 
   // ── roll a 4 mm strip to the end; the tool, same condition
@@ -145,6 +145,43 @@ try {
   await click('#dim-tab-2');
   await c.waitFor('!__mpm.solid.active', 5000);
   ok(await c.evaluate(`document.getElementById('run').textContent === '続ける'`), 'back on 2 次元 the button continues the section');
+
+  // ── a tandem, the length steady, rolls that follow the pass: set in the panel, run to the end, against the tool
+  await c.setViewport(1600, 1000);
+  await c.navigate(page('?dim=3&W3=2'));
+  await c.waitFor('__mpm.solid.active && __mpm.solid.ready', 60000);
+  const choose = (name, value) => c.evaluate(`(() => { const e = document.querySelector('[name="${name}"]'); e.value = '${value}'; e.dispatchEvent(new Event('input', { bubbles: true })); e.dispatchEvent(new Event('change', { bubbles: true })); })()`);
+  await choose('stands', '2');
+  await choose('handoff', 'steady');
+  await choose('length', 'steady');
+  await choose('flatten', 'hitchcock');
+  await choose('control', 'reduction');
+  ok(await c.evaluate(`document.querySelector('[name="solid-length"]').disabled`), 'the length steady: the 3D length is not an input');
+  await click('#reset');
+  await c.waitFor('__mpm.solid.ready && __mpm.solid.stands === 2', 60000);
+  const autoL = await c.evaluate(`({ shown: parseFloat(document.querySelector('[name="solid-length"]').value), L: __mpm.solid.geometry.sheetLength * 1e3, p: __mpm.solid.params.rolling })`);
+  ok(Math.abs(autoL.shown - autoL.L) < 0.051 && autoL.L > 20 && autoL.p.flattening === 'hitchcock' && autoL.p.gapControl === 'reduction', 'the field shows the length worked out (longer for the rolls to settle)', `${autoL.shown} mm`);
+  await click('#run');
+  await c.waitFor('__mpm.solid.stand === 1 && __mpm.solid.diag.phase === "bite"', 600000);
+  await painted();
+  await shot('tandem-mid');
+  ok(await c.evaluate(`!document.getElementById('solid-stand-section').hidden && document.querySelectorAll('#solid-stand-results thead th').length === 2 && document.querySelector('#solid-stand-results thead th.current').textContent === '#2'`), 'the stands\' table: two columns, #2 the running one');
+  await c.waitFor('__mpm.solid.done', 900000);
+  await painted();
+  await shot('tandem-end');
+  const res = await c.evaluate('__mpm.solid.standResults');
+  const tandemTool = JSON.parse(execFileSync('node', ['tools/solid.mjs', '--W', '2', '--cells', '4', '--length', 'steady', '--stands', '2', '--handoff', 'steady', '--flatten', 'hitchcock', '--control', 'reduction', '--json'], { encoding: 'utf8' }));
+  const rel = (a, b) => Math.abs(a - b) / Math.abs(b);
+  const t1 = tandemTool.stands[0];
+  ok(res.length === 2 && res[0].phase === 'steady' && res[0].rollsSettled && res[1].rollsSettled, 'both stands ran, #1 handed on while steady, the rolls settled');
+  ok(rel(res[0].steady.force * 1e-3, t1.steady.force_kN) < 1e-5 && rel(res[0].rollRadius * 1e3, t1.rollRadius_mm) < 1e-5 && rel(res[0].thicknessOut * 1e3, t1.thicknessOut_mm) < 1e-5, "page = tool, #1: force, R', the strip that came out (1e-5)", `${(res[0].steady.force * 1e-3).toFixed(4)} kN, R' ${(res[0].rollRadius * 1e3).toFixed(2)} mm`);
+  // #2 starts from #1's strip, where the last bit of exp and log (Chrome's V8 against Node's) has grown
+  const t2 = tandemTool.stands[1];
+  ok(rel(res[1].steady.force * 1e-3, t2.steady.force_kN) < 0.01 && rel(res[1].thicknessOut * 1e3, t2.thicknessOut_mm) < 1e-3, 'page = tool, #2: force within 1 %, the strip within 0.1 %', `${(res[1].steady.force * 1e-3).toFixed(4)} against ${t2.steady.force_kN.toFixed(4)} kN`);
+  const target2 = res[1].h0 * 0.75;
+  ok(rel(res[0].thicknessOut, 0.75e-3) < 2e-3 && rel(res[1].thicknessOut, target2) < 2e-3, 'a constant reduction: each stand\'s strip comes out at 75 % of what came in', `${(res[0].thicknessOut * 1e3).toFixed(4)}, ${(res[1].thicknessOut * 1e3).toFixed(4)} mm`);
+  const tUrl = await c.evaluate('__mpm.solid.url');
+  ok(/stands=2/.test(tUrl) && /handoff=steady/.test(tUrl) && /length=steady/.test(tUrl) && /flatten=hitchcock/.test(tUrl) && /control=reduction/.test(tUrl) && /dim=3/.test(tUrl), 'the conditions URL carries the tandem and the rolls', tUrl);
 
   // ── a narrow screen
   await c.setViewport(700, 1000);

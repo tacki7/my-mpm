@@ -1174,8 +1174,10 @@ details.group > summary {
 }
 
 /* ── section / plan view ──────────────────────────────────────────────── */
+/* .solid-too: a section-only condition the 3 次元 tab has as well (stands, handoff, flattening, constant reduction) */
 body:not([data-view='plan']) .plan-only,
-body[data-view='plan'] .section-only {
+body[data-view='plan'] .section-only:not(.solid-too),
+body[data-view='plan']:not([data-dim='3']) .solid-too {
   display: none !important;
 }
 
@@ -1231,7 +1233,7 @@ body[data-view='plan'] .section-only {
 
 /* ── 2 次元 / 3 次元 (src/app/solidMode.ts) ─────────────────────────────── */
 /* everything the 2 次元 tab owns (the section and the plan view) goes when the 3 次元 tab is shown */
-body[data-dim='3'] .section-only,
+body[data-dim='3'] .section-only:not(.solid-too),
 body[data-dim='3'] .plan-only,
 body[data-dim='3'] .dim2-only,
 body[data-dim='3'] .view-switch,

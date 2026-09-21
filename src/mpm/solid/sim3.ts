@@ -17,9 +17,13 @@
 //   surface loses its normal velocity relative to it, and its tangential velocity (along the arc and
 //   along z) is limited by Coulomb friction. The friction along z is what holds the spread back.
 // - Pusher, mass scaling, the mill-speed scaling of the strain rate and the damage indicators mean the
-//   same as in the section model. No tensions, no tandem, no roll flattening, no crack faces: a failed
-//   point carries no deviator and no tension (it is counted, and the first one is recorded).
-import { biteGeometry, cloneParams, type DamageModel, type SimParams } from '../params.ts';
+//   same as in the section model, and so are rolls that follow the pass (Hitchcock's flattening with the
+//   roll force per unit width, a constant reduction on the strip's mean thickness: adjustRolls).
+//   No tensions, no crack faces: a failed
+//   point carries no deviator and no tension (it is counted, and the first one is recorded). A tandem
+//   is a Sim3 per stand (tandem3.ts).
+import { biteGeometry, cloneParams, hitchcockRadius, type DamageModel, type SimParams } from '../params.ts';
+import { CTL_EVERY, CTL_TOL_H, CTL_TOL_R, presetRolls } from '../solver.ts';
 import { adiabaticRise, elasticConstants, hmFractureStrain, homologousTemperature, jcFractureStrain, plasticIncrement, staticStrength, strengthFactor, type Elastic } from '../material.ts';
 
 export interface SolidSettings {
@@ -33,7 +37,8 @@ export interface Solid3Params extends SimParams {
   solid: SolidSettings;
 }
 
-export type SolidPhase = 'approach' | 'bite' | 'steady' | 'tail-out' | 'done' | 'stalled';
+/** 'adjusting': where 'steady' would be, while the rolls' radius (flattening) or the gap (constant reduction) still change */
+export type SolidPhase = 'approach' | 'bite' | 'adjusting' | 'steady' | 'tail-out' | 'done' | 'stalled';
 
 export interface SolidCrack {
   t: number;
@@ -57,10 +62,40 @@ export function solidParams(base: SimParams, solid: SolidSettings): Solid3Params
   return { ...cloneParams(base), solid: { ...solid } };
 }
 
+/**
+ * What a pass's grid and clock come to without building it (Sim3's own values: tools/checks/solid3-tandem.mjs compares):
+ * cell size, time step, contact length, the exit probe's x and the entry speed.
+ */
+/** the rolls a pass starts with: the params', or (rolls that follow the pass) the slab method's answer (solver.ts presetRolls) */
+function startRolls(P: SimParams): { adjusted: boolean; gap: number; R: number; contactLength: number; force: number } {
+  const r = P.rolling;
+  const adjusted = r.flattening === 'hitchcock' || r.gapControl === 'reduction';
+  if (!adjusted) {
+    const geo = biteGeometry(r);
+    return { adjusted, gap: geo.gap, R: r.rollRadius, contactLength: geo.contactLength, force: 0 };
+  }
+  const start = presetRolls(r, P.material);
+  const dh = r.h0 - start.gap;
+  return { adjusted, gap: start.gap, R: start.rollRadius, contactLength: Math.sqrt(start.rollRadius * dh - (dh * dh) / 4), force: start.force };
+}
+
+export function solidScales(P: SimParams): { h: number; dt: number; contactLength: number; xExitProbe: number; vIn: number; rollsAdjusted: boolean } {
+  const r = P.rolling;
+  const num = P.numerics;
+  const el = elasticConstants(P.material);
+  const start = startRolls(P);
+  const Lc = start.contactLength;
+  const h = r.h0 / num.cellsThrough;
+  const rho = P.material.rho * num.massScale;
+  const c = Math.sqrt((el.K + (4 / 3) * el.G) / rho);
+  return { h, dt: (num.cfl * h) / (c + 1.5 * r.rollSpeed), contactLength: Lc, xExitProbe: Math.max(6 * h, Math.min(3 * r.h0, 2 * Lc)), vIn: r.rollSpeed * (1 - r.reduction), rollsAdjusted: start.adjusted };
+}
+
 export class Sim3 {
   readonly params: Solid3Params;
   readonly el: Elastic;
-  readonly gap: number;
+  /** the roll gap now (it changes while the rolls are adjusted) and the contact length the pass started with */
+  gap: number;
   readonly contactLength: number;
   readonly h: number;
   readonly dp: number;
@@ -71,7 +106,31 @@ export class Sim3 {
   readonly halfWidth0: number;
   readonly inertiaRatio: number;
   /** the top roll: a cylinder along z through (0, cy) */
-  readonly roll: { cy: number; R: number; omega: number };
+  readonly roll: { cy: number; R: number; omega: number; vR: number; vcy: number };
+  /** the rolls follow the pass (flattening 'hitchcock' or gapControl 'reduction'), and whether they have settled (true with rolls that do not) */
+  readonly rollsAdjusted: boolean;
+  rollsSettled: boolean;
+  /** when the rolls settled [s] (−∞ with rolls that are not adjusted, NaN until then) */
+  settledT = NaN;
+  /** where the gap control measures the strip: one entry thickness past the roll centres, in a Hann window of half-width gaugeBand */
+  readonly xGauge: number;
+  readonly gaugeBand: number;
+  private readonly ctlTauF: number;
+  private readonly ctlTauH: number;
+  private readonly ctlTauG: number;
+  private readonly ctlWindow: number;
+  private readonly ctlTransit: number;
+  /** the roll force per unit width, low-passed [N/m], and its floor while the head comes through (the slab method's) */
+  private ctlForce = 0;
+  private readonly ctlForce0: number;
+  /** the width the force is spread over: the mean of the entry width and the width at the gauge [m] */
+  private ctlWidth: number;
+  private ctlThick = NaN;
+  private ctlThickRef = NaN;
+  private ctlGapRef = NaN;
+  private ctlRRef: number;
+  private ctlRSince = 0;
+  private ctlHSince = Infinity;
   // grid: node (ix, iy, iz) at (ox + ix h, (iy − 1) h, (iz − 1) h), index (ix nyN + iy) nzN + iz
   readonly ox: number;
   readonly nxN: number;
@@ -164,9 +223,9 @@ export class Sim3 {
     const num = P.numerics;
     if (num.cellsThrough % 2 !== 0) throw new Error('cellsThrough must be even (the mid-thickness plane lies on a row of nodes)');
     this.el = elasticConstants(P.material);
-    const geo = biteGeometry(r);
-    this.gap = geo.gap;
-    this.contactLength = geo.contactLength;
+    const start = startRolls(P);
+    this.gap = start.gap;
+    this.contactLength = start.contactLength;
     const h = r.h0 / num.cellsThrough;
     this.h = h;
     const dp = h / num.ppc;
@@ -203,9 +262,25 @@ export class Sim3 {
     this.gMv = new Float64Array(NN);
     this.ixPrevHi = this.nxN;
 
-    const R = r.rollRadius;
-    this.roll = { cy: R + this.gap / 2, R, omega: r.rollSpeed / R };
+    const R = start.R;
+    this.roll = { cy: R + this.gap / 2, R, omega: r.rollSpeed / R, vR: 0, vcy: 0 };
     this.xExitProbe = Math.max(6 * h, Math.min(3 * r.h0, 2 * Lc));
+    // the control's pace, as the section model's (solver.ts)
+    this.rollsAdjusted = start.adjusted;
+    this.rollsSettled = !start.adjusted;
+    if (this.rollsSettled) this.settledT = -Infinity;
+    this.ctlForce0 = start.force;
+    this.ctlWidth = P.solid.width;
+    this.xGauge = r.h0;
+    const transit = Lc / r.rollSpeed;
+    const delay = this.xGauge / r.rollSpeed;
+    this.ctlTauF = transit / 4;
+    this.ctlTauH = delay / 2;
+    this.ctlTauG = 2 * delay;
+    this.ctlWindow = transit / 2;
+    this.ctlTransit = transit;
+    this.gaugeBand = Math.min((4 * dp) / (1 - r.reduction), 0.8 * r.h0);
+    this.ctlRRef = R;
 
     const NI = Math.round(r.sheetLength / dp);
     const NJ = Math.round(r.h0 / 2 / dp);
@@ -315,6 +390,101 @@ export class Sim3 {
     this.ixPrevHi = this.ixHi;
     this.t += this.dt;
     this.step++;
+    if (!this.rollsSettled) this.adjustRolls();
+  }
+
+  /**
+   * The rolls follow the pass, every step until they have settled (solver.ts adjustRolls, the same control):
+   * - flattening 'hitchcock': R' = R (1 + C P / Δh) with P the roll force per unit width — the whole force over the
+   *   mean of the entry width and the width at the gauge — low-passed over a quarter of the bite's transit time.
+   *   One radius for the whole width: the roll stays a cylinder
+   * - gapControl 'reduction': the gap is integrated on the error of the strip's mean thickness at the gauge (by
+   *   volume, over the width there: gauge()) against h0 (1 − r)
+   * Settled, and held from then on, as in the section model.
+   */
+  private adjustRolls(): void {
+    const r = this.params.rolling;
+    const flat = r.flattening === 'hitchcock';
+    const red = r.gapControl === 'reduction';
+    const target = r.h0 * (1 - r.reduction);
+    const t = this.t;
+    const building = this.headX() < this.xExitProbe;
+    if (!building && this.step % CTL_EVERY === 0) {
+      const m = this.gauge();
+      if (m) this.ctlWidth = this.halfWidth0 + m.halfWidth;
+      if (red) {
+        if (m) {
+          const k = Math.min(1, (CTL_EVERY * this.dt) / this.ctlTauH);
+          this.ctlThick = Number.isNaN(this.ctlThick) ? m.thickness : this.ctlThick + (m.thickness - this.ctlThick) * k;
+          this.gap -= (this.ctlThick - target) * Math.min(1, (CTL_EVERY * this.dt) / this.ctlTauG);
+          const km = Math.min(1, (2 * CTL_EVERY * this.dt) / this.ctlTransit);
+          this.ctlThickRef = Number.isNaN(this.ctlThickRef) ? this.ctlThick : this.ctlThickRef + (this.ctlThick - this.ctlThickRef) * km;
+          this.ctlGapRef = Number.isNaN(this.ctlGapRef) ? this.gap : this.ctlGapRef + (this.gap - this.ctlGapRef) * km;
+        }
+        const on = Math.abs(this.ctlThickRef - target) <= CTL_TOL_H * target && Math.abs(this.ctlThick - target) <= 4 * CTL_TOL_H * target;
+        if (!on) this.ctlHSince = Infinity;
+        else if (this.ctlHSince === Infinity) this.ctlHSince = t;
+      }
+    }
+    const force = building ? Math.max(this.ctlForce, this.ctlForce0) : this.ctlForce;
+    const goal = flat ? hitchcockRadius(r, force, r.h0 - this.gap) : r.rollRadius;
+    const R = this.roll.R + (goal - this.roll.R) * Math.min(1, this.dt / this.ctlTauF);
+    this.setRoll(R);
+    this.ctlRRef += (R - this.ctlRRef) * Math.min(1, (2 * this.dt) / this.ctlTransit);
+    if (building || Math.abs(R - this.ctlRRef) > CTL_TOL_R * R || Math.abs(R - goal) > CTL_TOL_R * R) this.ctlRSince = t;
+    if (building) {
+      this.ctlHSince = Infinity;
+      return;
+    }
+    if ((!flat || t - this.ctlRSince >= this.ctlWindow) && (!red || t - this.ctlHSince >= this.ctlWindow)) {
+      this.rollsSettled = true;
+      this.settledT = t;
+      if (red) this.gap = this.ctlGapRef;
+      this.setRoll(R, false);
+    }
+  }
+
+  /** the roll at radius R and the gap now; `moving`: the contact sees the surface move there over this step */
+  private setRoll(R: number, moving = true): void {
+    const roll = this.roll;
+    const cy = R + this.gap / 2;
+    roll.vR = moving ? (R - roll.R) / this.dt : 0;
+    roll.vcy = moving ? (cy - roll.cy) / this.dt : 0;
+    roll.R = R;
+    roll.cy = cy;
+    roll.omega = this.params.rolling.rollSpeed / R;
+  }
+
+  /** how far past the roll centres the strip has gone through the settled rolls [m] (∞ with rolls that are not adjusted, NaN until they have settled) */
+  settledLength(): number {
+    return (this.t - this.settledT) * this.params.rolling.rollSpeed;
+  }
+
+  /**
+   * The strip about x (the gauge) under a Hann window of half-width w: the half width (the edge points' outer
+   * faces) and the mean thickness over the width, by volume (Σ vol0 J over the window's length and that half
+   * width, doubled: what tandem3.ts stripOut reads over a stretch). Null until the strip fills the window.
+   */
+  gauge(x = this.xGauge, w = this.gaugeBand): { thickness: number; halfWidth: number } | null {
+    if (!(this.headX() >= x + w) || !(this.tailX() <= x - w)) return null;
+    const { n, active, px, pz, vol0, F, NK, dz } = this;
+    let vol = 0;
+    let hw = 0;
+    let wsum = 0;
+    for (let p = 0; p < n; p++) {
+      if (!active[p]) continue;
+      const u = (px[p] - x) / w;
+      if (u <= -1 || u >= 1) continue;
+      const g = 0.5 * (1 + Math.cos(Math.PI * u));
+      vol += g * vol0[p] * det3(F, 9 * p);
+      if (p % NK === NK - 1) {
+        hw += g * (pz[p] + 0.5 * dz * F[9 * p + 8]);
+        wsum += g;
+      }
+    }
+    if (!(wsum > 0)) return null;
+    hw /= wsum;
+    return { thickness: (2 * vol) / (w * hw), halfWidth: hw };
   }
 
   private p2g(): void {
@@ -471,6 +641,9 @@ export class Sim3 {
     const vPush = this.vIn;
     const invDt = 1 / dt;
     const { cy, R, omega } = this.roll;
+    // the surface of a roll that is being adjusted moves along its normal by vcy n_y + vR besides turning (solver.ts Roll)
+    const un0 = this.roll.vR;
+    const vcy = this.roll.vcy;
     const mMin = 1e-12 * this.mass[0];
     let fyAcc = 0;
     let tqAcc = 0;
@@ -501,8 +674,8 @@ export class Sim3 {
             const nx = rx / d;
             const ny = ry / d;
             // the roll's surface velocity at the foot of the node (the top roll turns so that its lowest point moves +x)
-            const ux = -omega * R * ny;
-            const uy = omega * R * nx;
+            const ux = -omega * R * ny + un0 * nx + vcy * ny * nx;
+            const uy = omega * R * nx + un0 * ny + vcy * ny * ny;
             const relx = vx - ux;
             const rely = vy - uy;
             const vn = relx * nx + rely * ny;
@@ -563,6 +736,7 @@ export class Sim3 {
     // the sheet pushes the roll up: the force on the roll is minus the force on the sheet
     this.accFy += -fyAcc;
     this.accTq += tqAcc;
+    if (!this.rollsSettled) this.ctlForce += ((-2 * fyAcc) / this.ctlWidth - this.ctlForce) * Math.min(1, this.dt / this.ctlTauF);
     this.accSteps++;
   }
 
@@ -611,8 +785,9 @@ export class Sim3 {
       const d = Math.hypot(rx, ry);
       const nx = rx / d;
       const ny = ry / d;
-      const ux = -omega * R * ny;
-      const uy = omega * R * nx;
+      const un = this.roll.vcy * ny + this.roll.vR;
+      const ux = -omega * R * ny + un * nx;
+      const uy = omega * R * nx + un * ny;
       let e = 0;
       let W = 0;
       let dnn = 0;
@@ -1084,7 +1259,7 @@ export class Sim3 {
     if (head < -this.contactLength) return 'approach';
     if (head < this.xExitProbe) return 'bite';
     if (tail > -this.contactLength) return 'tail-out';
-    return 'steady';
+    return this.rollsSettled ? 'steady' : 'adjusting';
   }
 
   /** the sheet no longer moves though it is between the rolls (the rolls cannot draw it in) */

@@ -1,10 +1,14 @@
 // One pass of the three-dimensional model (src/mpm/solid/sim3.ts), headless.
 //   node tools/solid.mjs [--W 8] [--L 12] [--cells 4] [--r 0.25] [--R 100] [--h0 1] [--mu 0.08] [--mat spcc]
 //                        [--plane-strain] [--max 200000] [--json]
+//                        [--length steady] [--stands 3] [--handoff done|steady]
+//                        [--flatten hitchcock] [--rollE 206] [--control reduction]
+// --length steady: the strip as long as the steady looks need (--L is not used). --stands: a tandem, every stand
+// the same condition, the strip carried from stand to stand (src/mpm/solid/tandem3.ts).
 // Lengths in mm, the reduction as a fraction. The steady values are read as the page reads them (steady.ts).
 import { defaultParams, MATERIALS } from '../src/mpm/params.ts';
-import { Sim3, solidParams } from '../src/mpm/solid/sim3.ts';
-import { READ_STEPS, SolidSampler } from '../src/mpm/solid/steady.ts';
+import { solidParams } from '../src/mpm/solid/sim3.ts';
+import { Tandem3 } from '../src/mpm/solid/tandem3.ts';
 import { karman } from '../src/mpm/slab.ts';
 
 const args = process.argv.slice(2);
@@ -17,6 +21,10 @@ r.reduction = +opt('r', 0.25);
 r.rollRadius = +opt('R', 100) * 1e-3;
 r.sheetLength = +opt('L', 12) * 1e-3;
 r.mu = +opt('mu', 0.08);
+if (opt('length', 'fixed') === 'steady') r.lengthMode = 'steady';
+if (opt('flatten', 'none') === 'hitchcock') r.flattening = 'hitchcock';
+if (has('rollE')) r.rollE = +opt('rollE') * 1e9;
+if (opt('control', 'gap') === 'reduction') r.gapControl = 'reduction';
 if (has('mat')) base.material = { ...MATERIALS[opt('mat')] };
 if (has('damage')) base.damage.model = opt('damage');
 base.numerics.cellsThrough = +opt('cells', 4);
@@ -26,41 +34,75 @@ const json = has('json');
 const maxSteps = +opt('max', 400000);
 
 const t0 = performance.now();
-const sim = new Sim3(P);
+const tandem = new Tandem3(P, +opt('stands', 1), opt('handoff', 'done'));
 const say = (s) => { if (!json) console.log(s); };
-say(`points ${sim.n} (${sim.NI} × ${sim.NJ} × ${sim.NK}), grid ${sim.nxN} × ${sim.nyN} × ${sim.nzN}, h ${(sim.h * 1e3).toFixed(4)} mm, dt ${sim.dt.toExponential(3)} s, gap ${(sim.gap * 1e3).toFixed(4)} mm, Lc ${(sim.contactLength * 1e3).toFixed(3)} mm`);
-const sampler = new SolidSampler();
+const intro = (sim, k) => say(`${tandem.stands > 1 ? `#${k + 1}: h0 ${(sim.params.rolling.h0 * 1e3).toFixed(4)} mm, W ${(sim.params.solid.width * 1e3).toFixed(4)} mm, L ${(sim.params.rolling.sheetLength * 1e3).toFixed(2)} mm, ` : ''}points ${sim.n} (${sim.NI} × ${sim.NJ} × ${sim.NK}), grid ${sim.nxN} × ${sim.nyN} × ${sim.nzN}, h ${(sim.h * 1e3).toFixed(4)} mm, dt ${sim.dt.toExponential(3)} s, gap ${(sim.gap * 1e3).toFixed(4)} mm, Lc ${(sim.contactLength * 1e3).toFixed(3)} mm`);
+intro(tandem.sim, 0);
+tandem.onStandDone = (e) => { if (e.next) intro(e.next, e.stand + 1); };
 const every = +opt('every', 2000);
-while (sim.step < maxSteps) {
-  for (let k = 0; k < READ_STEPS; k++) sim.advance();
-  const look = sampler.look(sim);
-  if (sim.step % every === 0) say(`step ${sim.step} t ${(sim.t * 1e3).toFixed(2)} ms ${look.phase} F ${(look.force * 1e-3).toFixed(3)} kN, half width ${look.halfWidth ? (look.halfWidth * 1e3).toFixed(4) : '—'} mm, centre thickness ${look.centreHalfThickness ? (2 * look.centreHalfThickness * 1e3).toFixed(4) : '—'} mm`);
-  if (look.phase === 'done' || look.phase === 'stalled') break;
+let steps = 0;
+let sim = tandem.sim;
+while (steps < maxSteps && !tandem.done) {
+  sim = tandem.sim;
+  const look = tandem.advance();
+  steps++;
+  if (look && sim.step % every === 0) say(`step ${sim.step} t ${(sim.t * 1e3).toFixed(2)} ms ${look.phase} F ${(look.force * 1e-3).toFixed(3)} kN, half width ${look.halfWidth ? (look.halfWidth * 1e3).toFixed(4) : '—'} mm, centre thickness ${look.centreHalfThickness ? (2 * look.centreHalfThickness * 1e3).toFixed(4) : '—'} mm`);
 }
-const st = sampler.means(sim);
 const secs = (performance.now() - t0) / 1e3;
 const slab = karman(P.rolling, P.material);
+const steadyOut = (st, width) => st && {
+  looks: st.looks,
+  force_kN: st.force * 1e-3,
+  forcePerWidth_kN_per_mm: (st.force / (2 * st.halfWidth)) * 1e-6,
+  forcePerEntryWidth_kN_per_mm: (st.force / width) * 1e-6,
+  slabPlaneStrain_kN_per_mm: slab.force * 1e-6,
+  torque_Nm: st.torque,
+  width_mm: 2 * st.halfWidth * 1e3,
+  spread_percent: st.spread * 100,
+  centreThickness_mm: 2 * st.halfThickness[0] * 1e3,
+  edgeThickness_mm: 2 * st.halfThickness[st.halfThickness.length - 1] * 1e3,
+  forwardSlip: st.forwardSlip,
+  forceByZ_kN_per_mm: st.forceByZ.map((v) => +(v * 1e-6).toFixed(4)),
+};
+// a single pass that ran out of steps has no result yet: its sampler's means
+const st = tandem.results[0]?.steady ?? (tandem.stands === 1 ? tandem.sampler.means(sim) : null);
 const out = {
-  points: sim.n,
-  steps: sim.step,
+  points: tandem.results[0]?.particles ?? sim.n,
+  steps,
   secs,
-  msPerStep: (secs * 1e3) / sim.step,
+  msPerStep: (secs * 1e3) / steps,
   phase: sim.phase(),
-  steady: st && {
-    looks: st.looks,
-    force_kN: st.force * 1e-3,
-    forcePerWidth_kN_per_mm: (st.force / (2 * st.halfWidth)) * 1e-6,
-    forcePerEntryWidth_kN_per_mm: (st.force / P.solid.width) * 1e-6,
-    slabPlaneStrain_kN_per_mm: slab.force * 1e-6,
-    torque_Nm: st.torque,
-    width_mm: 2 * st.halfWidth * 1e3,
-    spread_percent: st.spread * 100,
-    centreThickness_mm: 2 * st.halfThickness[0] * 1e3,
-    edgeThickness_mm: 2 * st.halfThickness[st.halfThickness.length - 1] * 1e3,
-    forwardSlip: st.forwardSlip,
-    forceByZ_kN_per_mm: st.forceByZ.map((v) => +(v * 1e-6).toFixed(4)),
-  },
+  rollRadius_mm: sim.roll.R * 1e3,
+  gap_mm: sim.gap * 1e3,
+  rollsSettled: sim.rollsSettled,
+  gauge: sim.gauge(sim.xExitProbe),
+  sheetLength_mm: tandem.base.rolling.sheetLength * 1e3,
+  steady: steadyOut(st, P.solid.width),
   maxDamage: sim.maxDamage(),
   failed: sim.nFailed,
 };
+if (tandem.stands > 1) {
+  delete out.steady;
+  out.stopped = tandem.stopped;
+  out.stands = tandem.results.map((s) => ({
+    stand: s.stand + 1,
+    h0_mm: s.h0 * 1e3,
+    width_mm: s.width * 1e3,
+    sheetLength_mm: s.sheetLength * 1e3,
+    points: s.particles,
+    steps: s.steps,
+    phase: s.phase,
+    rollRadius_mm: s.rollRadius * 1e3,
+    gap_mm: s.gap * 1e3,
+    rollsSettled: s.rollsSettled,
+    thicknessOut_mm: s.thicknessOut * 1e3,
+    widthOut_mm: s.widthOut * 1e3,
+    massLost: s.massLost,
+    separated: s.separated,
+    maxDamage: s.maxDamage,
+    failed: s.nFailed,
+    steady: steadyOut(s.steady, s.width),
+  }));
+}
 console.log(json ? JSON.stringify(out) : out);
+if (!json && tandem.stands > 1) for (const s of out.stands) console.log(`#${s.stand}`, s.steady && { ...s.steady, forceByZ_kN_per_mm: undefined });

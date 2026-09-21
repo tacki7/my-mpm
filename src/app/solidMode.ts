@@ -1,10 +1,13 @@
 // The 「2 次元」「3 次元」 tabs and the three-dimensional page: the strip's width, length and grid in the
-// conditions panel, the 3D worker, its picture (solidView.ts), the results table, the three graphs (roll force,
+// conditions panel (stands, handoff, roll flattening, constant reduction and the length 'steady' are the shared
+// panel's, as in the 2 次元 tab), the 3D worker, its picture (solidView.ts), the results table, the three graphs (roll force,
 // the load across the width, the contact pressure over the bite) and the conditions URL with the 3D keys.
 // Everything the page had before is the 2 次元 tab, left as it is; main.ts routes the shared buttons here while
 // the 3 次元 tab is shown.
 import { cloneParams, type SimParams } from '../mpm/params.ts';
 import type { SolidPhase, SolidSettings } from '../mpm/solid/sim3.ts';
+import type { SolidSteady } from '../mpm/solid/steady.ts';
+import type { Stand3Result } from '../mpm/solid/tandem3.ts';
 import { drawChart } from './charts.ts';
 import { css, split, temper } from './colormap.ts';
 import { checkRange } from './fieldCheck.ts';
@@ -14,6 +17,9 @@ import { edited, showNumber } from './numberInput.ts';
 import { conditionsQuery } from './query.ts';
 import { radioGroup } from './radioGroup.ts';
 import type { FromSolidWorker, SolidFieldName, SolidFrame, SolidGeometry, ToSolidWorker } from './solidProtocol.ts';
+import { SolidStandTable } from './solidStandTable.ts';
+import { stopPhrase } from './standTable.ts';
+import { standColor } from './explorer.ts';
 import { SOLID_FIELDS, SolidView, solidFieldInfo, type ViewPreset } from './solidView.ts';
 
 export type Dim = '2' | '3';
@@ -25,6 +31,7 @@ const STEEL = '#5f6b75';
 const phaseText: Record<SolidPhase, string> = {
   approach: 'ロールに向かっている',
   bite: '噛み込み中',
+  adjusting: 'ロールを調整中（偏平・ギャップ）',
   steady: '定常圧延',
   'tail-out': '尾端が抜けるところ',
   done: '圧延が終わった',
@@ -55,7 +62,7 @@ interface NumberField {
 
 const NUMBERS: NumberField[] = [
   { key: 'width', query: 'W3', label: '板幅', unit: 'mm', step: 1, min: 2, max: 200, scale: mm, hint: '解くのは 1/4（板幅と板厚の中央で鏡映）。時間は板幅に比例: 8 mm で約 2.5 分、40 mm で約 14 分、200 mm は 1 時間以上' },
-  { key: 'length', query: 'L3', label: '板の長さ', unit: 'mm', step: 1, min: 6, max: 40, scale: mm, hint: '定常の読みには 12 mm ほど要る' },
+  { key: 'length', query: 'L3', label: '板の長さ', unit: 'mm', step: 1, min: 6, max: 40, scale: mm, hint: '定常の読みには 12 mm ほど要る。「板の長さの取り方」が「定常状態になるまで」なら自動' },
   { key: 'cells', query: 'cells3', label: '板厚方向のセル数', unit: '', step: 2, min: 4, max: 8, scale: 1, hint: '偶数。4 で約 2〜3 分、6 で約 14 分' },
 ];
 
@@ -78,6 +85,8 @@ function settingsOf(q: URLSearchParams): SolidPageSettings {
 }
 
 /** the conditions of the panel the 3D model does not have: their rows are hidden in the 3 次元 tab */
+/** the section-only conditions the 3D model has as well: their rows stay in the 3 次元 tab */
+const ALSO_IN_3D = ['stands', 'handoff', 'control', 'flatten', 'rollE', 'length'];
 const NOT_IN_3D = ['L', 'tb', 'tf', 'cells', 'yield', 'nucleation', 'f0', 'fc', 'failure', 'crack'];
 
 export interface SolidModeOptions {
@@ -105,7 +114,11 @@ export class SolidMode {
   private readonly o: SolidModeOptions;
   private readonly view: SolidView;
   private worker: Worker | null = null;
+  /** the stand running now (a tandem sends one per stand) and every stand's so far */
   private geometry: SolidGeometry | null = null;
+  private geometries: SolidGeometry[] = [];
+  private standResults: Stand3Result[] = [];
+  private standTable!: SolidStandTable;
   private last: SolidFrame | null = null;
   private params: SimParams | null = null;
   private field: SolidFieldName;
@@ -137,6 +150,7 @@ export class SolidMode {
     this.buildTools();
     this.buildPointer();
     this.buildUrl();
+    this.standTable = new SolidStandTable(this.$('solid-stand-section'), this.$('solid-stand-results'));
     for (const id of ['solid-chart-force', 'solid-chart-width', 'solid-chart-map']) {
       const p = el('p', 'sr-only solid-chart-summary');
       this.$(id).parentElement!.append(p);
@@ -221,7 +235,7 @@ export class SolidMode {
     ps.append(this.planeStrainBox, el('span', undefined, '板幅方向を止めて解く（平面ひずみ）'));
     ps.title = '板幅方向の速度を 0 にする。2 次元の断面と同じ問題になるので、3 次元の計算の確かめに使う';
     fs.append(ps);
-    fs.append(el('p', 'hint', '張力・タンデム・ロール偏平・圧下率一定・GTN・亀裂の面は 3 次元には無い（2 次元のタブで）。亀裂になった点は応力を失うだけで、面は開かない'));
+    fs.append(el('p', 'hint', 'スタンド数（タンデム）・ロール偏平・圧下率一定・板の長さの取り方は「板とロール」の欄で、2 次元と共通。張力・GTN・亀裂の面は 3 次元には無い（亀裂になった点は応力を失うだけで、面は開かない）'));
     const note = this.o.panelRoot.querySelector('.note-more') ?? this.o.panelRoot.querySelector('.preset-note');
     if (note) note.after(fs);
     else this.o.panelRoot.prepend(fs);
@@ -230,14 +244,31 @@ export class SolidMode {
       const c = this.o.panelRoot.querySelector(`[name="${name}"]`);
       c?.closest('label')?.classList.add('dim2-only');
     }
+    for (const name of ALSO_IN_3D) this.o.panelRoot.querySelector(`[name="${name}"]`)?.closest('label')?.classList.add('solid-too');
+    // the length 'steady': the 3D length is then not an input either
+    this.lengthSelect?.addEventListener('change', () => this.lockLength());
     this.o.panelRoot.querySelector('[name="f0"]')?.closest('details')?.classList.add('dim2-only');
     this.showSettings(this.settings);
+  }
+
+  private get lengthSelect(): HTMLSelectElement | null {
+    return this.o.panelRoot.querySelector<HTMLSelectElement>('select[name="length"]');
+  }
+
+  /** with the length 'steady' the field is off, and shows the length worked out once the run is ready */
+  private lockLength(): void {
+    const auto = this.lengthSelect?.value === 'steady';
+    const L = this.inputs.get('length')!;
+    L.disabled = auto;
+    L.title = auto ? '「定常状態になるまで」では自動で決まる（用意ができると、決まった長さが出る）' : '';
+    if (!auto && this.shown) showNumber(L, this.shown.length / mm);
   }
 
   private showSettings(s: SolidPageSettings): void {
     this.shown = { ...s };
     for (const f of NUMBERS) showNumber(this.inputs.get(f.key)!, s[f.key] / f.scale);
     this.planeStrainBox.checked = s.planeStrain;
+    this.lockLength();
     for (const c of this.checks) c();
   }
 
@@ -427,7 +458,7 @@ export class SolidMode {
   /** the conditions URL: the shared keys, and the tab and the 3D settings */
   query(): URLSearchParams {
     const q = conditionsQuery(this.o.presetId(), this.o.preset(), this.params3d ?? this.o.conditions());
-    for (const k of ['stands', 'L', 'cells', 'length']) q.delete(k);
+    for (const k of ['L', 'cells']) q.delete(k);
     q.set('dim', '3');
     for (const f of NUMBERS) q.set(f.query, String(+(this.settings[f.key] / f.scale).toFixed(3)));
     if (this.settings.planeStrain) q.set('ps3', '1');
@@ -468,12 +499,18 @@ export class SolidMode {
     this.worker.onmessage = (e: MessageEvent<FromSolidWorker>) => {
       const m = e.data;
       if (m.type === 'ready') {
-        this.awaitingReady = false;
         this.geometry = m.geometry;
+        this.geometries[m.geometry.stand] = m.geometry;
         this.view.geometry = m.geometry;
         this.dirty = this.chartsDirty = true;
+        // a tandem's next stand: the run goes on
+        if (m.geometry.stand > 0) return;
+        this.awaitingReady = false;
+        if (this.params?.rolling.lengthMode === 'steady') showNumber(this.inputs.get('length')!, m.geometry.sheetLength / mm);
         this.updateIdle();
         if (this.o.query.get('autorun') === '1' && this.frames === 0 && this.active) this.run();
+      } else if (m.type === 'stand') {
+        if (!this.awaitingReady) this.standResults[m.result.stand] = m.result;
       } else if (m.type === 'frame') {
         if (!this.awaitingReady) this.onFrame(m);
       } else if (m.type === 'error') this.showError(m.message);
@@ -493,15 +530,17 @@ export class SolidMode {
     P.numerics.cellsThrough = this.settings.cells;
     P.rolling.backTension = 0;
     P.rolling.frontTension = 0;
-    delete P.rolling.lengthMode;
     this.params = P;
+    this.geometries = [];
+    this.standResults = [];
     this.last = null;
     this.view.frame = null;
     this.running = false;
     this.frames = 0;
     this.awaitingReady = true;
     const solid: SolidSettings = { width: this.settings.width, planeStrain: this.settings.planeStrain };
-    this.send({ type: 'init', params: P, solid, field: this.field, stopAfter: this.stopAfter });
+    this.send({ type: 'init', params: P, solid, stands: P.rolling.stands ?? 1, handoff: P.rolling.handoff ?? 'done', field: this.field, stopAfter: this.stopAfter });
+    this.standTable.update(1, [], 0, false, null, null);
     this.updateButtons();
     this.$('solid-results').replaceChildren();
     this.summaryMoment = '';
@@ -536,8 +575,7 @@ export class SolidMode {
   }
 
   private get finished(): boolean {
-    const ph = this.last?.diag.phase;
-    return ph === 'done' || ph === 'stalled';
+    return this.last?.diag.finished === true;
   }
 
   updateButtons(): void {
@@ -565,7 +603,7 @@ export class SolidMode {
   private updateIdle(): void {
     const g = this.geometry!;
     this.updateButtons();
-    say(this.$('solid-phase'), `用意ができた（${g.n.toLocaleString()} 点）。「圧延を始める」で計算する`);
+    say(this.$('solid-phase'), `用意ができた（${g.stands > 1 ? `${g.stands} スタンドの #1、` : ''}${g.n.toLocaleString()} 点）。「圧延を始める」で計算する`);
     this.$('solid-results-note').textContent = NOTE;
   }
 
@@ -574,6 +612,9 @@ export class SolidMode {
     this.frames++;
     this.running = f.running;
     this.view.frame = f;
+    // rolls that follow the pass: the picture's rolls are the ones now
+    const g0 = this.geometry;
+    if (g0 && (g0.gap !== f.diag.gap || g0.rollRadius !== f.diag.rollRadius)) this.view.geometry = { ...g0, gap: f.diag.gap, rollRadius: f.diag.rollRadius };
     this.dirty = this.chartsDirty = true;
     this.updateButtons();
     this.updateResults(f);
@@ -584,7 +625,8 @@ export class SolidMode {
     const d = f.diag;
     const st = d.steady;
     const steady = !!st && st.looks > 0;
-    const none = !steady && (d.phase === 'done' || d.phase === 'stalled');
+    const none = !steady && (d.finished || d.phase === 'done' || d.phase === 'stalled');
+    const adjusted = this.params?.rolling.flattening === 'hitchcock' || this.params?.rolling.gapControl === 'reduction';
     const W0 = 2 * g.halfWidth0;
     const force = steady ? st.force : none ? undefined : d.now?.force;
     const halfW = steady ? st.halfWidth : none ? undefined : (d.now?.halfWidth ?? undefined);
@@ -594,9 +636,11 @@ export class SolidMode {
     const num = (v: number | undefined | null, k: number, digits: number) => (v != null && Number.isFinite(v) ? (v * k).toFixed(digits) : '—');
     const c0 = d.firstCrack;
     const rows: [string, string, string, boolean][] = [
+      ...(g.stands > 1 ? ([['スタンド', `#${d.stand + 1} / ${g.stands}`, '', false]] as [string, string, string, boolean][]) : []),
       ['圧延荷重（全幅）', num(force, 1e-3, 2), 'kN', !steady],
       ['板幅あたりの荷重', num(perWidth, 1e-6, 3), 'kN/mm', !steady],
       ['スラブ法（平面ひずみ）', num(g.slabForce, 1e-6, 3), 'kN/mm', false],
+      ...(g.stands > 1 ? ([['入側板厚', num(g.h0, 1e3, 3), 'mm', false]] as [string, string, string, boolean][]) : []),
       ['入側の板幅', num(W0, 1e3, 3), 'mm', false],
       ['出側の板幅', num(halfW != null ? 2 * halfW : undefined, 1e3, 3), 'mm', !steady],
       ['幅広がり W1 − W0', num(halfW != null ? 2 * halfW - W0 : undefined, 1e3, 3), 'mm', !steady],
@@ -604,6 +648,13 @@ export class SolidMode {
       ['出側板厚（板幅の中央）', num(centre, 1e3, 4), 'mm', !steady],
       ['出側板厚（端）', num(edge, 1e3, 4), 'mm', false],
       ['先進率', num(steady ? st.forwardSlip : undefined, 100, 2), '%', false],
+      ...(adjusted
+        ? ([
+            ["ロール半径 R'", num(d.rollRadius, 1e3, 1), 'mm', !d.rollsSettled],
+            ['ロールギャップ', num(d.gap, 1e3, 4), 'mm', !d.rollsSettled],
+          ] as [string, string, string, boolean][])
+        : []),
+      ['板の長さ', num(g.sheetLength, 1e3, 1), 'mm', false],
       ['定常の読み', String(st?.looks ?? 0), '回', false],
       ['最大損傷', d.maxDamage.toFixed(3), '', false],
       ['亀裂になった点', String(d.nFailed), '個', false],
@@ -625,7 +676,9 @@ export class SolidMode {
     this.$('solid-results-note').textContent =
       NOTE + (steady ? '' : none ? `定常の読みが無かった。板の長さ（${+(this.settings.length / mm).toFixed(1)} mm）を延ばす。` : 'まだ定常の読みが無いので、薄い字は直前の読み。');
     this.showClock();
-    say(this.$('solid-phase'), phaseText[d.phase]);
+    const where = g.stands > 1 ? `#${d.stand + 1} / ${g.stands}　` : '';
+    say(this.$('solid-phase'), d.stopped ? stopPhrase(d.stopped, this.standResults.length) : d.finished && g.stands > 1 ? `${g.stands} スタンドの圧延が終わった` : where + phaseText[d.phase]);
+    this.standTable.update(g.stands, this.standResults, d.stand, d.finished, { h0: g.h0, width: W0 }, d.stopped);
     this.summarize(steady ? st : null);
   }
 
@@ -672,7 +725,6 @@ export class SolidMode {
     const g = this.geometry;
     if (!g) return;
     const f = this.last;
-    const st = f?.diag.steady && f.diag.steady.looks > 0 ? f.diag.steady : null;
     const W0 = 2 * g.halfWidth0;
     // roll force over time, with the plane-strain slab method × the entry width for scale
     const t = (f?.history.t ?? []).map((v) => v * 1e3);
@@ -682,9 +734,30 @@ export class SolidMode {
       xLabel: '時間 [ms]',
       yLabel: '荷重 [kN]',
       series: [{ x: t, y: F, color: INK, label: '3 次元 MPM' }],
-      hmarks: [{ y: slabTotal, label: 'スラブ法 × 入側の板幅' }],
+      hmarks: [{ y: slabTotal, label: g.stands > 1 ? `スラブ法 × 入側の板幅（#${g.stand + 1}）` : 'スラブ法 × 入側の板幅' }],
+      // where a tandem's next stand starts
+      marks: (f?.history.stand ?? []).flatMap((k, i, a) => (i > 0 && k !== a[i - 1] ? [{ x: t[i - 1], label: `#${k + 1}`, color: standColor(k) }] : [])),
       yRange: [0, Math.max(slabTotal * 1.35, ...F) || 1],
     });
+    this.drawWidthCharts();
+  }
+
+  /** the steady means the width graphs show: the running stand's, or until it has any the last stand's that had */
+  private shownSteady(): { st: SolidSteady; g: SolidGeometry } | null {
+    const now = this.last?.diag.steady;
+    if (now && now.looks > 0 && this.geometry) return { st: now, g: this.geometry };
+    for (let k = this.standResults.length - 1; k >= 0; k--) {
+      const st = this.standResults[k]?.steady;
+      if (st && this.geometries[k]) return { st, g: this.geometries[k] };
+    }
+    return null;
+  }
+
+  private drawWidthCharts(): void {
+    const shown = this.shownSteady();
+    const st = shown?.st ?? null;
+    const g = shown?.g ?? this.geometry!;
+    const tag = g.stands > 1 && st ? `#${g.stand + 1}` : '';
     // the load across the width (steady mean), mirrored to the whole width
     const z: number[] = [];
     const q: number[] = [];
@@ -703,7 +776,7 @@ export class SolidMode {
     drawChart(this.$<HTMLCanvasElement>('solid-chart-width'), {
       xLabel: '板幅方向の位置 z [mm]',
       yLabel: '荷重 [kN/mm]',
-      series: [{ x: z, y: q, color: INK, label: '定常の平均' }],
+      series: [{ x: z, y: q, color: INK, label: tag ? `定常の平均（${tag}）` : '定常の平均' }],
       hmarks: [{ y: g.slabForce * 1e-6, label: 'スラブ法（平面ひずみ）' }],
       marks: st
         ? [
@@ -715,7 +788,7 @@ export class SolidMode {
       yRange: [0, Math.max(g.slabForce * 1e-6 * 1.5, ...q) || 1],
     });
     if (!st) this.emptyNote(this.$<HTMLCanvasElement>('solid-chart-width'));
-    this.drawPressureMap(st);
+    this.drawPressureMap(st, g, tag);
   }
 
   /** a graph of steady means, before there are any: say when it comes (or that it did not) */
@@ -731,9 +804,8 @@ export class SolidMode {
   }
 
   /** the contact pressure over the bite, seen from above: x along the rolling direction, z across the width */
-  private drawPressureMap(st: SolidFrame['diag']['steady']): void {
+  private drawPressureMap(st: SolidSteady | null, g: SolidGeometry, tag: string): void {
     const canvas = this.$<HTMLCanvasElement>('solid-chart-map');
-    const g = this.geometry!;
     const dpr = window.devicePixelRatio || 1;
     const r = canvas.getBoundingClientRect();
     const W = Math.max(1, Math.round(r.width));
@@ -813,7 +885,7 @@ export class SolidMode {
     ctx.fillText(`${(st.halfWidth / mm).toFixed(1)}`, L - 4, Z(st.halfWidth) + 4);
     ctx.fillText('0', L - 4, Z(0) + 4);
     ctx.fillText(`−${(st.halfWidth / mm).toFixed(1)}`, L - 4, Z(-st.halfWidth) + 4);
-    cap.textContent = `0 〜 ${(max * 1e-6).toFixed(0)} MPa${stretched ? `（圧延方向を ${(sx / sz).toFixed(0)} 倍に拡大）` : ''}`;
+    cap.textContent = `${tag ? `${tag}　` : ''}0 〜 ${(max * 1e-6).toFixed(0)} MPa${stretched ? `（圧延方向を ${(sx / sz).toFixed(0)} 倍に拡大）` : ''}`;
     canvas.title = stretched ? '定常の平均' : '定常の平均。縦と横は同じ縮尺';
   }
 
@@ -877,6 +949,18 @@ export class SolidMode {
       },
       get range() {
         return [...self.view.range];
+      },
+      get stand() {
+        return self.last?.diag.stand ?? 0;
+      },
+      get stands() {
+        return self.geometry?.stands ?? 1;
+      },
+      get standResults() {
+        return self.standResults.slice();
+      },
+      get stopped() {
+        return self.last?.diag.stopped ?? null;
       },
       get url() {
         return self.query().toString();
