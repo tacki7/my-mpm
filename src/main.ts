@@ -12,6 +12,7 @@ import type { CrackView, Frame, FromWorker, Geometry, ToWorker } from './app/pro
 import { applyQuery, stopAfterOf } from './app/query.ts';
 import { Overview } from './app/overview.ts';
 import { PlanMode } from './app/planMode.ts';
+import { SolidMode } from './app/solidMode.ts';
 import { BiteView } from './app/view.ts';
 import { StandViews } from './app/standViews.ts';
 import { StandTable, stopPhrase } from './app/standTable.ts';
@@ -165,6 +166,37 @@ const plan = new PlanMode(
   stopAfter,
 );
 
+// the 3 次元 tab (src/app/solidMode.ts): its own worker and page. What was here before is the 2 次元 tab; the
+// shared buttons and the clock go to the tab shown, and leaving a tab pauses its run.
+const solid = new SolidMode(
+  {
+    query,
+    panelRoot: $('panel'),
+    conditions: () => params,
+    presetId: () => presetId,
+    preset: () => presetById(presetId)!.build(),
+    onEdit: () => {
+      edited = true;
+      $('reset').classList.add('pending');
+    },
+    onDim: (dim) => {
+      if (dim === '3') {
+        if (running) {
+          running = false;
+          send({ type: 'pause' });
+        }
+        if (plan.active) plan.pause();
+      } else if (plan.active) {
+        plan.showClock();
+        plan.updateButtons();
+      } else showClock();
+      updateButtons();
+      dirty = true;
+    },
+  },
+  stopAfter,
+);
+
 presetSel.addEventListener('change', () => {
   presetId = presetSel.value;
   params = presetById(presetId)!.build();
@@ -172,6 +204,7 @@ presetSel.addEventListener('change', () => {
   showNote();
   restart();
   plan.applyConditions(params);
+  solid.applyConditions(params);
 });
 
 // ── field tabs ──────────────────────────────────────────────────────────────
@@ -216,7 +249,7 @@ function startWorker() {
       view.geometry = geometry;
       standGeometries = [geometry];
       standViews.setup(runStands, geometry);
-      if (query.get('autorun') === '1' && frames === 0 && !plan.active) run();
+      if (query.get('autorun') === '1' && frames === 0 && !plan.active && !solid.active) run();
     } else if (m.type === 'frame') {
       if (!awaitingReady) onFrame(m);
     } else if (m.type === 'stand') {
@@ -305,20 +338,23 @@ function run() {
   updateButtons();
 }
 
-$('run').addEventListener('click', () => (plan.active ? plan.run() : run()));
+$('run').addEventListener('click', () => (solid.active ? solid.run() : plan.active ? plan.run() : run()));
 $('pause').addEventListener('click', () => {
+  if (solid.active) return solid.pause();
   if (plan.active) return plan.pause();
   running = false;
   send({ type: 'pause' });
   updateButtons();
 });
 $('reset').addEventListener('click', () => {
-  // the new conditions go to both views; only the one shown runs
+  // the new conditions go to every view; only the one shown runs
   restart();
   plan.applyConditions(params);
+  solid.applyConditions(params);
 });
 
 function updateButtons() {
+  if (solid.active) return solid.updateButtons();
   if (plan.active) return plan.updateButtons();
   const done = !!last?.passDone;
   ($('run') as HTMLButtonElement).disabled = running || done;
@@ -462,7 +498,7 @@ function updateStandTable() {
 
 /** the shared clock, from the section model's last frame, while the section view is shown */
 function showClock() {
-  if (plan.active) return;
+  if (solid.active || plan.active) return;
   const d = last?.diag;
   const t = (last?.tOffset ?? 0) + (d?.t ?? 0);
   const step = (last?.stepOffset ?? 0) + (d?.step ?? 0);
@@ -727,6 +763,8 @@ window.__mpm = {
   setField,
   /** the plan view (板幅方向; tools/browser/planview.mjs) */
   plan: plan.hook(),
+  /** the 3 次元 tab (tools/browser/solid.mjs) */
+  solid: solid.hook(),
 };
 
 startWorker();
@@ -734,3 +772,4 @@ setField(field);
 restart();
 requestAnimationFrame(frameLoop);
 if (query.get('view') === 'plan') plan.setMode('plan');
+if (query.get('dim') === '3') solid.setDim('3');

@@ -221,7 +221,7 @@ try {
   // each chart has a few words for a screen reader, from the page's own numbers, written when the steady reading
   // came and at the end of the pass only
   const sum = await c.evaluate(`(() => {
-    const t = [...document.querySelectorAll('.charts figure')].map((f) => f.querySelector('.chart-summary')?.textContent ?? null);
+    const t = [...document.querySelectorAll('.stage .charts figure')].map((f) => f.querySelector('.chart-summary')?.textContent ?? null);
     const s = __mpm.slab, h = __mpm.hill.steady, e = __mpm.explorer;
     const pt = __mpm.tracks.find((k) => k.role === e.role);
     return { t, writes: (window.__summary || []).map((r) => r.writes), load: (s.steadyForce * 1e-6).toFixed(2) + ' kN/mm', ratio: s.ratio?.toFixed(2), peak: h ? (Math.max(...h.p) * 1e-6).toFixed(0) + ' MPa' : null, eta: pt ? pt.state.eta.toFixed(3) : null };
