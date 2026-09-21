@@ -225,6 +225,8 @@ ok(fr.sumWorst < 1e-9, "the points' friction adds up to the nodes'", `worst ${fr
     for (let p = 0; p < t.n; p++) if (t.inGrip(p)) protectedEarly++;
     advance(t);
   }
+  const rampNow = t.frontNow;
+  const early = t.tensionsOn();
   while (t.headX() < t.xExitProbe + 3e-3 && t.step < 20000) advance(t);
   const load = t.endLoad(2);
   near(load, t.frontNow * t.endSection(2), 1e-3, 'front grip load = σf × the head column cross-section (scale from the start of the step)');
@@ -238,6 +240,9 @@ ok(fr.sumWorst < 1e-9, "the points' friction adds up to the nodes'", `worst ${fr
   }
   near(f / a / 1e6, t.frontNow / 1e6, 0.1, 'the exit strip carries the front tension [MPa]');
   ok(protectedEarly === 0 && t.frontNow > 0, 'the head grip is an ordinary point until the front tension is on', `${protectedEarly} protected looks before`);
+  // the steady means leave out the looks of the ramp (steady.ts asks tensionsOn): one of five was under 83 MPa
+  while (!t.tensionsOn() && t.step < 40000) advance(t);
+  ok(!early && rampNow < 100e6 && t.frontNow === 100e6, 'tensionsOn() is false while the front tension ramps up, true under the whole of it', `${(rampNow / 1e6).toFixed(0)} MPa then ${(t.frontNow / 1e6).toFixed(0)} MPa`);
 }
 
 // ── the edge: brittle → it fails from the edge (the tensile band); less brittle → nothing

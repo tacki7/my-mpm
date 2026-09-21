@@ -88,7 +88,7 @@ export interface Crack {
   areaByStand?: number[];
 }
 
-/** 'adjusting': where 'steady' would be, while the rolls' radius (flattening) or the gap (constant reduction) still change */
+/** 'adjusting': where 'steady' would be, while the rolls' radius (flattening) or the gap (constant reduction) still change, or a tension still ramps up */
 export type Phase = 'approach' | 'bite' | 'adjusting' | 'steady' | 'tail-out' | 'done' | 'stalled';
 
 export type NeutralState = 'found' | 'sticking' | 'backward' | 'forward' | 'none';
@@ -2066,7 +2066,18 @@ export class Sim {
     if (head < -this.contactLength) return 'approach';
     if (head < this.xExitProbe) return 'bite';
     if (tail > -this.contactLength) return 'tail-out';
-    return this.rollsSettled ? 'steady' : 'adjusting';
+    return this.rollsSettled && this.tensionsOn() ? 'steady' : 'adjusting';
+  }
+
+  /**
+   * The tensions asked for are fully on. The front tension ramps up from the moment the head passes the exit probe,
+   * which is where 'steady' would begin: the readings of the ramp (a third of them on a 16 mm sheet) had the roll
+   * force 1.6 % and the torque 20 % over the ones under the whole tension (docs/validation.md「条件を振った検証」).
+   */
+  private tensionsOn(): boolean {
+    const r = this.params.rolling;
+    if (r.frontTension !== 0 && (this.frontOnAt < 0 || this.t - this.frontOnAt < this.tensionRamp)) return false;
+    return r.backTension === 0 || this.t >= this.tensionRamp;
   }
 
   /**

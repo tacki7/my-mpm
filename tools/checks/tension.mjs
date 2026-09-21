@@ -93,4 +93,27 @@ function sectionStress(sim, x0, x1) {
   ok(afterExit > 0 && slowTail === 0, 'the tail keeps its speed after leaving the rolls (no back tension left)', `${slowTail} of ${afterExit} samples below 0.8 V`);
   ok(d.phase === 'done' && Number.isFinite(d.tailX) && d.tailX < 1e3, 'the rolled sheet leaves on the exit side (not dragged back off the grid)', `phase ${d.phase}, tail ${d.tailX}`);
 }
+
+// ── 'steady' waits for the front tension: it ramps up from where 'steady' would begin, and the readings of the ramp
+// (3 of 11 on a 16 mm sheet) had the roll force 1.6 % and the torque 20 % over the ones under the whole tension
+{
+  const P = coarse();
+  P.rolling.sheetLength = 16e-3;
+  P.rolling.frontTension = 100 * MPa;
+  const sim = new Sim(P);
+  let steady = 0;
+  let short = 0;
+  let waited = 0;
+  let d;
+  do {
+    for (let k = 0; k < 500; k++) sim.advance();
+    d = sim.diagnostics();
+    if (d.phase === 'steady') {
+      steady++;
+      if (d.frontTension !== P.rolling.frontTension) short++;
+    } else if (d.phase === 'adjusting') waited++;
+  } while (d.phase !== 'done' && d.phase !== 'stalled' && sim.step < 100000);
+  ok(steady >= 8 && short === 0, "every 'steady' reading is under the whole front tension", `${short} of ${steady} under less`);
+  ok(waited >= 2, "the ramp reads 'adjusting'", `${waited} readings`);
+}
 done();

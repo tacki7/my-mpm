@@ -1466,6 +1466,17 @@ export class PlanSim {
     return 'steady';
   }
 
+  /**
+   * The tensions asked for are fully on. The front tension ramps up from the moment the head passes the exit probe, and
+   * the first look inside the steady window fell in the ramp (83 of 100 MPa at W 20 mm, L 28 mm): the steady means
+   * leave such looks out (steady.ts), as the section model's 'steady' waits for the ramp.
+   */
+  tensionsOn(): boolean {
+    const r = this.params.rolling;
+    if (r.frontTension !== 0 && (this.frontOnAt < 0 || this.t - this.frontOnAt < this.tensionRamp)) return false;
+    return r.backTension === 0 || this.t >= this.tensionRamp;
+  }
+
   /** Tensions as in the section model: back tension ramps up and is released once the tail reaches the entry; front tension from when the head passes the exit probe. The load goes in through the grips (gripScale). */
   private updateTension(): void {
     const r = this.params.rolling;

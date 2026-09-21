@@ -535,7 +535,12 @@ export function steadyLength(P: SimParams, every: number): number {
   // rolls that follow the pass settle 1.5 transit times after the head is out (docs/validation.md「ロール偏平と圧下率一定」),
   // and the stretch is the sheet rolled after that
   const settle = probe.rollsAdjusted ? 2 * probe.contactLength + 3 * r.h0 * (1 - r.reduction) : 0;
-  return probe.contactLength + out + settle + read + r.h0;
+  const base = probe.contactLength + out + settle + read + r.h0;
+  // a front tension ramps up after the head is out, and 'steady' waits for it: the sheet that goes in meanwhile.
+  // The default ramp grows with the length (10 L / c), so the length is the one that holds its own ramp
+  if (r.frontTension === 0) return base;
+  if (r.tensionRamp && r.tensionRamp > 0) return base + r.tensionRamp * probe.vIn;
+  return base / (1 - (probe.tensionRamp / r.sheetLength) * probe.vIn);
 }
 
 /**
