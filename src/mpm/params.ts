@@ -388,6 +388,14 @@ export function hitchcockRadius(r: RollingParams, force: number, dh: number): nu
   return r.rollRadius * (1 + (hitchcockC(r) * Math.max(0, force)) / dh);
 }
 
+/**
+ * Where a run starts: the head this many grid cells short of the bite's entry (x = −Lc, where the head's corner
+ * meets the roll). A node takes mass from points up to 1.5 cells away, so two cells is the nearest start with no
+ * node in the roll at step 0; the way up to the rolls is not computed (it was 2 h0 before). The section
+ * model, the plan view and the 3D model.
+ */
+export const START_GAP = 2;
+
 /** Derived geometry of the roll bite (rigid rolls). */
 export function biteGeometry(r: RollingParams) {
   const gap = r.h0 * (1 - r.reduction);

@@ -123,7 +123,8 @@ function cut(mode, tf, watch) {
   }
   s.cracks.push({ id: 0, t: 0, step: 0, x: 0, y: 0, sheetX: 0, sheetY: 0, eta: 0, s1: 0, seq: 0, ep: 0, criterion: 'none', count: 2 * NJ });
   let across = Infinity;
-  let face = -Infinity;
+  let face = 0;
+  let looks = 0;
   watch?.start(s);
   while (s.phase() !== 'done' && s.step < 60000) {
     for (let k = 0; k < 50; k++) {
@@ -136,16 +137,22 @@ function cut(mode, tf, watch) {
       bx += s.px[lattice[i0 * NJ + j]] / NJ;
       across = Math.min(across, (s.px[lattice[(i0 + 2) * NJ + j]] - s.px[lattice[(i0 - 1) * NJ + j]]) / s.dp);
     }
-    if (bx > 1.5e-3) for (const i of [i0 - 1, i0 + 2]) for (let j = 0; j < NJ; j++) face = Math.max(face, s.sxx[lattice[i * NJ + j]] - s.pres[lattice[i * NJ + j]]);
+    // σxx next to the faces, the mean through the thickness (what the cut carries) while the front tension is fully on.
+    // The largest value at one point was one outlier look (195 MPa, the next 113) over the rolled strip's residual stress
+    if (bx > 1.5e-3 && tf !== 0 && s.diagnostics().frontTension === tf) {
+      for (const i of [i0 - 1, i0 + 2]) for (let j = 0; j < NJ; j++) face += (s.sxx[lattice[i * NJ + j]] - s.pres[lattice[i * NJ + j]]) / (2 * NJ);
+      looks++;
+    }
   }
-  return { across, face };
+  return { across, face: face / Math.max(1, looks), looks };
 }
 
 // ── pulled apart by a front tension: the faces unload
 {
   const one = cut('none', 200e6);
   const two = cut('dfg', 200e6);
-  between(two.face / one.face, 0, 0.7, `a cut pulled apart (front tension 200 MPa): largest σxx next to the faces, 'dfg' over the single field (${(one.face * 1e-6).toFixed(0)} MPa)`);
+  ok(one.looks >= 20 && two.looks >= 20, 'a cut pulled apart (front tension 200 MPa): looks with the tension on', `${one.looks} and ${two.looks}`);
+  between(two.face / one.face, 0, 0.7, `the same: mean σxx next to the faces through the thickness, 'dfg' over the single field (${(one.face * 1e-6).toFixed(1)} MPa)`);
 }
 
 // ── closed through the bite: the faces hold each other off; and the second field is handled as the first where the
