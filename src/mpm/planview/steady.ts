@@ -155,7 +155,7 @@ export class SteadySampler {
     if (phase !== 'steady') return phase;
     this.steadyLooks++;
     const gap = this.gap ?? steadyGap(sim.halfWidth0);
-    if (sim.headX() >= gap && sim.tailX() <= -sim.contactLength - gap) this.kept.push({ F, snap: snapshot(sim) });
+    if (sim.headX() >= gap && sim.tailX() <= -sim.contactLength - gap && sim.tensionsOn()) this.kept.push({ F, snap: snapshot(sim) });
     return phase;
   }
 

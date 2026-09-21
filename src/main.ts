@@ -437,7 +437,7 @@ function refreshReadouts(rebuildCracks = false): void {
 const phaseText: Record<Diagnostics['phase'], string> = {
   approach: 'ロールに向かっている',
   bite: '噛み込み中',
-  adjusting: 'ロールを調整中（偏平・ギャップ）',
+  adjusting: 'ロール・張力が落ち着くのを待っている',
   steady: '定常圧延',
   'tail-out': '尾端が抜けるところ',
   done: '圧延が終わった',
