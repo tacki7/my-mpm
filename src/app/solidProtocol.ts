@@ -63,6 +63,9 @@ export interface SolidDiag {
   maxDamage: number;
   firstCrack: SolidCrack | null;
   inertiaRatio: number;
+  /** the strip tensions applied now, after ramping [Pa] (Sim3.updateTension): the back one is let go once the tail is at the rolls */
+  backTension: number;
+  frontTension: number;
 }
 
 export interface SolidFrame {

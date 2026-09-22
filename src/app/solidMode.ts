@@ -99,7 +99,7 @@ function settingsOf(q: URLSearchParams): SolidPageSettings {
 /** the conditions of the panel the 3D model does not have: their rows are hidden in the 3 次元 tab */
 /** the section-only conditions the 3D model has as well: their rows stay in the 3 次元 tab */
 const ALSO_IN_3D = ['stands', 'handoff', 'control', 'flatten', 'rollE', 'length'];
-const NOT_IN_3D = ['L', 'tb', 'tf', 'cells', 'yield', 'nucleation', 'f0', 'fc', 'failure', 'crack'];
+const NOT_IN_3D = ['L', 'cells', 'yield', 'nucleation', 'f0', 'fc', 'failure', 'crack'];
 
 export interface SolidModeOptions {
   query: URLSearchParams;
@@ -271,7 +271,7 @@ export class SolidMode {
     ps.append(this.planeStrainBox, el('span', undefined, '板幅方向を止めて解く（平面ひずみ）'));
     ps.title = '板幅方向の速度を 0 にする。2 次元の断面と同じ問題になるので、3 次元の計算の確かめに使う';
     fs.append(ps);
-    fs.append(el('p', 'hint', 'スタンド数（タンデム）・ロール偏平・圧下率一定・板の長さの取り方は「板とロール」の欄で、2 次元と共通。張力（「潤滑と張力」の欄）も効く。GTN・亀裂の面は 3 次元には無い（亀裂になった点は応力を失うだけで、面は開かない）'));
+    fs.append(el('p', 'hint', 'スタンド数（タンデム）・ロール偏平・圧下率一定・板の長さの取り方は「板とロール」の欄で、2 次元と共通。張力（「潤滑と張力」の欄）も効く: 後方張力は最初から、前方張力は頭端が出てから立ち上げ、定常はそれを待つ。GTN・亀裂の面は 3 次元には無い（亀裂になった点は応力を失うだけで、面は開かない）'));
     const note = this.o.panelRoot.querySelector('.note-more') ?? this.o.panelRoot.querySelector('.preset-note');
     if (note) note.after(fs);
     else this.o.panelRoot.prepend(fs);
@@ -829,6 +829,13 @@ export class SolidMode {
         ? ([
             ["ロール半径 R'", num(d.rollRadius, 1e3, 1), 'mm', !d.rollsSettled],
             ['ロールギャップ', num(d.gap, 1e3, 4), 'mm', !d.rollsSettled],
+          ] as [string, string, string, boolean][])
+        : []),
+      // the tensions asked for, and what is on the strip now (ramping, or let go once the tail is at the rolls)
+      ...(this.params && (this.params.rolling.backTension > 0 || this.params.rolling.frontTension > 0)
+        ? ([
+            ['後方張力（今 / 条件）', `${num(d.backTension, 1e-6, 0)} / ${num(this.params.rolling.backTension, 1e-6, 0)}`, 'MPa', d.backTension < this.params.rolling.backTension * 0.999],
+            ['前方張力（今 / 条件）', `${num(d.frontTension, 1e-6, 0)} / ${num(this.params.rolling.frontTension, 1e-6, 0)}`, 'MPa', d.frontTension < this.params.rolling.frontTension * 0.999],
           ] as [string, string, string, boolean][])
         : []),
       ['板の長さ', num(g.sheetLength, 1e3, 1), 'mm', false],

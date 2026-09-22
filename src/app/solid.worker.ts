@@ -124,6 +124,8 @@ function frame(): void {
       maxDamage: s.maxDamage(),
       firstCrack: s.firstCrack,
       inertiaRatio: s.inertiaRatio,
+      backTension: s.backNow,
+      frontTension: s.frontNow,
     },
     history: { t: history.t.slice(), force: history.force.slice(), stand: history.stand.slice() },
     tracks: tracker ? tracker.tracks() : [],
