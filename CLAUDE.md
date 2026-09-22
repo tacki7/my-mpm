@@ -15,7 +15,7 @@ Hancock-MacKenzie、破壊した粒子の応力の扱い）。式と出典の対
 | `src/mpm/params.ts` / `presets.ts` | 入力（SI 単位）と、名前付きの条件 |
 | `src/mpm/tandem.ts` | タンデム（`TandemSim`: スタンドを 1 つずつ解き、材料の状態を次のスタンドの新しい格子へ写す）。`node tools/tandem.mjs --stands 3 [--handoff steady]`（`run.mjs` と同じ引数） |
 | `src/mpm/planview/` | 平面図モデル（x 圧延方向・z 板幅方向、板厚は粒子の状態）。耳割れ用。`node tools/planview.mjs --W 20`。定常の読み方は `steady.ts`（ツールと画面の平面図で共通） |
-| `src/mpm/solid/` | 3 次元モデル（`Sim3`: x・y・z を解く 1/4 モデル、幅広がり・板幅方向の荷重分布）。画面の「3 次元」のタブ（`src/app/solidMode.ts`・`solidView.ts`・`solid.worker.ts`。止まったあとの巻き戻し再生は `tape.ts`、その動画ファイルは `solidVideo.ts`（WebCodecs）と `mux.ts`（MP4・WebM を自前で書く。`tools/checks/mux.mjs` が ffmpeg の本物のフレームで検証））。タンデム・定常になるまでの板長は `tandem3.ts`（`Tandem3`）、ロール偏平・圧下率一定は `Sim3.adjustRolls`。`node tools/solid.mjs --W 8 --L 12 --cells 4 [--plane-strain] [--length steady] [--stands 3 --handoff steady] [--flatten hitchcock --control reduction]`（4 セルで約 2.5 分） |
+| `src/mpm/solid/` | 3 次元モデル（`Sim3`: x・y・z を解く 1/4 モデル、幅広がり・板幅方向の荷重分布）。画面の「3 次元」のタブ（`src/app/solidMode.ts`・`solidView.ts`・`solid.worker.ts`。止まったあとの巻き戻し再生は `tape.ts`、その動画ファイルは `solidVideo.ts`（WebCodecs）と `mux.ts`（MP4・WebM を自前で書く。`tools/checks/mux.mjs` が ffmpeg の本物のフレームで検証））。タンデム・定常になるまでの板長は `tandem3.ts`（`Tandem3`）、ロール偏平・圧下率一定は `Sim3.adjustRolls`。`node tools/solid.mjs --W 8 --L 12 --cells 4 [--plane-strain] [--length steady] [--stands 3 --handoff steady] [--flatten hitchcock --control reduction] [--bend <バレル mm> [--span <mm>]]`（4 セルで約 2.5 分）。ロールの撓みは `rollBend.ts`（梁）+ `Sim3.updateBend` |
 | `src/app/` | ワーカー（`sim.worker.ts`）、描画（`view.ts`）、グラフ、条件パネル |
 | `tools/check.mjs` | 回帰関門。`// @check` の付いたスクリプトを集めて回す |
 | `tools/run.mjs` | ヘッドレスで 1 回圧延して数値を出す（`npm run sim -- --cells 6 --L 8`） |
@@ -116,7 +116,8 @@ Math.exp・log の最後の 1 ビットが違うのでビット一致はしな�
 `&yield=von-mises|gtn&nucleation=tension|always&f0=0.005&fc=0.05`
 `&field=seq|eta|s1|pres|ep|damage|sxx|syy|sxy|dT|lagrange|porosity|loc|drucker&autorun=1&stopafter=<step>`
 `&view=plan&W=20&wcells=10&notch=0&pfield=sxx|szz|seq|eta|damage|spread`（平面図。板幅 mm・半幅のセル数・端の切り欠きの半径 mm）
-`&dim=3&W3=8&L3=12&cells3=4&ps3=1&f3=seq|ep|pres|eta|sxx|syy|szz|damage|spread`（3 次元のタブ。板幅 mm・板の長さ mm・板厚方向のセル数（偶数 4〜8）・平面ひずみで解く・色の量。ほかの条件は 2 次元と共通で、`stands`・`handoff`・`length`・`flatten`・`rollE`・`control` は 3 次元にも効く。`tb`・`tf` も効く。`crack`・`L`・`cells`・GTN は 3 次元では使わない）
+`&dim=3&W3=8&L3=12&cells3=4&ps3=1&f3=seq|ep|pres|eta|sxx|syy|szz|damage|spread`（3 次元のタブ。板幅 mm・板の長さ mm・板厚方向のセル数（偶数 4〜8）・平面ひずみで解く・色の量。
+`&bend3=1&barrel3=300&support3=bearing&span3=400` = ロールの撓み（バレル長 mm・支点を軸受に・支点間距離 mm。`support3` が無ければバレルの端。`diag.rollBend`・`steady.rollBend`）。ほかの条件は 2 次元と共通で、`stands`・`handoff`・`length`・`flatten`・`rollE`・`control` は 3 次元にも効く。`tb`・`tf` も効く。`crack`・`L`・`cells`・GTN は 3 次元では使わない）
 `&escatter=0&ewidth=1&elen=1&eseed=1`（端の延性のばらつき。大きさ %・帯の幅 mm・相関長 mm・種。`escatter=0`（既定）で無し）
 `&stands=1..5`（タンデムのスタンド数。どのスタンドも同じ条件で、圧下率は各スタンドの入側板厚に対して。断面の画面だけ）
 `&length=fixed|steady`（板の長さの取り方。`steady` = 1 スタンド目の板を、定常の読みが揃うのに要る長さに自動で（`L` は使わない。決めた長さは `__mpm.params.rolling.sheetLength`）。ツールは `--length steady`）

@@ -301,11 +301,18 @@ button.pending {
 }
 
 /* a value worked out from the rest (the sheet's length with 「定常状態になるまで」): readable, not editable */
-.conditions input:disabled {
+.conditions input:disabled,
+.conditions select:disabled {
   background: var(--paper);
   color: var(--ink-soft);
   border-style: dashed;
   cursor: not-allowed;
+}
+
+/* a row the choices above it put aside (the span while the supports are the barrel's ends) */
+.conditions .field.off > .field-label,
+.conditions .field.off > .hint {
+  color: var(--ink-soft);
 }
 
 .hint {

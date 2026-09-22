@@ -116,6 +116,7 @@ function frame(): void {
       rollRadius: s.roll.R,
       gap: s.gap,
       rollsSettled: s.rollsSettled,
+      rollBend: s.beam ? { centre: s.bend[1], edge: s.bendAt(s.halfWidth0), settled: s.bendSettled } : null,
       phase: s.phase(),
       progress: finished ? 1 : progressOf(T),
       now: T.sampler.last,
