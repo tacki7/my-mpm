@@ -333,8 +333,9 @@ export function thicknessOut(sim: Sim, sample: [number, number] | null = null): 
     }
   }
   const length = ((meanX(i1 - 1) - meanX(i0)) * (i1 - i0)) / (i1 - 1 - i0);
-  // NaN when an end column of the middle half has no point on the grid (the caller stops: 'lost')
-  return area / length;
+  // NaN when an end column of the middle half has no point on the grid (the caller stops: 'lost').
+  // half (rolling.halfThickness): the whole sheet is twice the top half
+  return (sim.half ? 2 * area : area) / length;
 }
 
 /**
@@ -435,13 +436,15 @@ export function remap(old: Sim, base: SimParams, h1: number, sample: [number, nu
     }
     P.rolling.entryStrain = c ? ep / c : 0;
   }
+  // half (rolling.halfThickness): the points are the top half's, so the mass on the grid is the half sheet's
+  const hOn = old.half ? h1 / 2 : h1;
   let M = 0;
   if (sample) {
     P.rolling.sheetLength = steadyLength(P, every);
-    M = rho * h1 * P.rolling.sheetLength;
+    M = rho * hOn * P.rolling.sheetLength;
   } else {
     for (let p = 0; p < old.n; p++) if (old.active[p]) M += old.mass[p];
-    P.rolling.sheetLength = M / (rho * h1);
+    P.rolling.sheetLength = M / (rho * hOn);
   }
   const sim = new Sim(P);
   const n = sim.n;

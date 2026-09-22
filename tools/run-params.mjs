@@ -53,6 +53,8 @@ export function runParams(args) {
     if (v !== 'gap' && v !== 'reduction') throw new Error(`--control ${v}: gap or reduction`);
     r.gapControl = v;
   });
+  // --half: only the top half of the thickness, y = 0 a symmetry plane (docs/model.md「板厚方向の対称モデル（2 次元）」)
+  if (has('half')) r.halfThickness = true;
   // --length steady: the sheet as long as the (first) stand needs to get to the steady state (--L is then not used)
   text('length', (v) => {
     if (v !== 'fixed' && v !== 'steady') throw new Error(`--length ${v}: fixed or steady`);

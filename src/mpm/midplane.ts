@@ -18,8 +18,9 @@ export class MidPlaneEta {
   constructor(sim: Sim) {
     this.last = new Float64Array(sim.n);
     const NJ = sim.NJ;
-    this.mid = [NJ / 2 - 1, NJ / 2];
-    this.surf = [0, NJ - 1];
+    // half (rolling.halfThickness): row 0 lies on the plane, the top row is the surface
+    this.mid = sim.half ? [0] : [NJ / 2 - 1, NJ / 2];
+    this.surf = sim.half ? [NJ - 1] : [0, NJ - 1];
   }
 
   /** one look (every LOOK steps); outside the steady phase it only moves the reference strain on */
