@@ -170,10 +170,14 @@ export class SolidMode {
       this.$(id).parentElement!.append(p);
       this.summaries.push(p);
     }
-    new ResizeObserver(() => {
+    // the canvas itself as well as the stage: the charts' row under it grows (a legend, a summary) without the
+    // stage changing, and the picture would be drawn at the old size and squashed by the CSS
+    const ro = new ResizeObserver(() => {
       this.view.resize();
       this.dirty = this.chartsDirty = true;
-    }).observe(this.$('solid-stage'));
+    });
+    ro.observe(this.$('solid-stage'));
+    ro.observe(this.$('solid-canvas'));
     requestAnimationFrame(() => this.drawLoop());
   }
 
@@ -995,8 +999,9 @@ export class SolidMode {
       },
       get view() {
         const v = self.view;
-        return { yaw: v.yaw, pitch: v.pitch, zoom: v.zoom, cut: v.cut, rolls: v.rolls, fit: v.fit, yScale: v.yScale };
+        return { yaw: v.yaw, pitch: v.pitch, zoom: v.zoom, cut: v.cut, rolls: v.rolls, fit: v.fit, yScale: v.yScale, pan: [v.panX, v.panY], pivot: v.pivot };
       },
+      screenOfPoint: (x: number, y: number, z: number) => self.view.screenOfPoint(x, y, z),
       setDim: (d: Dim) => self.setDim(d),
       setField: (id: SolidFieldName) => self.setField(id),
       run: () => self.run(),

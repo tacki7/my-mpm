@@ -114,6 +114,34 @@ try {
   const v1 = await c.evaluate('__mpm.solid.view');
   ok(v1.yaw < v0.yaw - 0.3 && v1.pitch > v0.pitch + 0.1, 'a drag to the right turns the drawing with the hand (yaw falls)', `yaw ${v0.yaw.toFixed(2)} → ${v1.yaw.toFixed(2)}, pitch ${v0.pitch.toFixed(2)} → ${v1.pitch.toFixed(2)}`);
   ok(await c.evaluate(`document.querySelectorAll('.look-from button[aria-checked="true"]').length === 0`), 'and no named direction is the current one then');
+  // turning about the middle of the canvas: after a Shift+drag (a pan) the pivot moves to what is at the middle,
+  // the picture itself does not move (the origin's projection is the same after a turn left and back), and while
+  // the drawing turns the pivot's projection stays at the middle
+  const size = await c.evaluate(`(() => { const cv = document.getElementById('solid-canvas'); const r = cv.getBoundingClientRect(); return { w: cv.width, h: cv.height, cssW: r.width * devicePixelRatio, cssH: r.height * devicePixelRatio }; })()`);
+  ok(Math.abs(size.w - size.cssW) <= 1 && Math.abs(size.h - size.cssH) <= 1, "the canvas is drawn at its own size (it follows the charts' row under it growing)", `${size.w}×${size.h} px, CSS ${size.cssW.toFixed(0)}×${size.cssH.toFixed(0)}`);
+  const mid = await c.evaluate(`(() => { const r = document.getElementById('solid-canvas').getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 + 8 }; })()`);
+  const origin = () => c.evaluate('__mpm.solid.screenOfPoint(0, 0, 0)');
+  await mouse('mousePressed', at.x, at.y, { modifiers: 8 });
+  for (let k = 1; k <= 4; k++) await mouse('mouseMoved', at.x + 20 * k, at.y + 8 * k, { buttons: 1, modifiers: 8 });
+  await mouse('mouseReleased', at.x + 80, at.y + 32, { modifiers: 8 });
+  await painted();
+  const vp = await c.evaluate('__mpm.solid.view');
+  const oPan = await origin();
+  ok(vp.pan[0] === 80 && vp.pan[1] === 32 && vp.yaw === v1.yaw, 'a Shift+drag pans without turning', `pan ${vp.pan}, yaw ${vp.yaw.toFixed(2)} (was ${v1.yaw.toFixed(2)})`);
+  const key = (k) => c.send('Input.dispatchKeyEvent', { type: 'keyDown', key: k, code: k, windowsVirtualKeyCode: k === 'ArrowLeft' ? 37 : 39 });
+  await key('ArrowLeft');
+  await painted();
+  const vl = await c.evaluate('__mpm.solid.view');
+  const pivotAt = await c.evaluate(`__mpm.solid.screenOfPoint(${vl.pivot.join(',')})`);
+  const oLeft = await origin();
+  ok(Math.abs(vl.yaw - vp.yaw - (5 * Math.PI) / 180) < 1e-12 && vl.pan[0] === 0 && vl.pan[1] === 0 && Math.hypot(vl.pivot[0] - vp.pivot[0], vl.pivot[1], vl.pivot[2]) > 1e-4,
+    '← turns 5° about what is at the middle: the pan is folded into the pivot', `pivot ${vl.pivot.map((v) => (v * 1e3).toFixed(2))} mm (was ${vp.pivot.map((v) => (v * 1e3).toFixed(2))}), pan ${vl.pan}`);
+  // (0.6 px: the canvas' size is rounded to whole px)
+  ok(Math.hypot(pivotAt.x - mid.x, pivotAt.y - mid.y) < 0.6 && Math.hypot(oLeft.x - oPan.x, oLeft.y - oPan.y) > 1, 'the pivot is drawn at the middle of the canvas and the rest turned about it', `pivot at (${pivotAt.x.toFixed(1)}, ${pivotAt.y.toFixed(1)}), middle (${mid.x.toFixed(1)}, ${mid.y.toFixed(1)})`);
+  await key('ArrowRight');
+  await painted();
+  const oBack = await origin();
+  ok(Math.hypot(oBack.x - oPan.x, oBack.y - oPan.y) < 1e-6, '→ turns back: the picture is where the pan left it (moving the pivot did not move it)', `origin at (${oBack.x.toFixed(2)}, ${oBack.y.toFixed(2)}) vs (${oPan.x.toFixed(2)}, ${oPan.y.toFixed(2)})`);
   await c.send('Input.dispatchMouseEvent', { type: 'mouseWheel', x: at.x, y: at.y, deltaX: 0, deltaY: -400 });
   await painted();
   const v2 = await c.evaluate('__mpm.solid.view');
