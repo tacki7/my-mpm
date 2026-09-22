@@ -128,6 +128,20 @@ ok(fine.numerics.cellsThrough === 80, 'the largest the URL keys allow at the def
   const viaCond = applyQuery(base, new URLSearchParams({ cond: enc({ rolling: { flattening: 'hitchcock', gapControl: 'reduction', rollNu: 0.25 } }) }));
   ok(viaCond.rolling.flattening === 'hitchcock' && viaCond.rolling.gapControl === 'reduction' && viaCond.rolling.rollNu === 0.25, "cond carries them too (and the roll's ν, which has no readable key)");
 }
+// the half-thickness model: ?sym=1 sets rolling.halfThickness and comes back as sym=1; sym=0, absent and odd values
+// are the whole thickness (no key at all); points() counts half the points
+{
+  const half = applyQuery(base, new URLSearchParams({ sym: '1' }));
+  const q = conditionsQuery('standard', base, half);
+  ok(half.rolling.halfThickness === true, '?sym=1 sets rolling.halfThickness');
+  ok(q.get('sym') === '1' && !q.has('cond') && same(applyQuery(base, q), half), 'and goes back into the URL as sym=1, no cond', q.toString());
+  const off = applyQuery(base, new URLSearchParams({ sym: '0' }));
+  const odd = applyQuery(base, new URLSearchParams({ sym: 'yes' }));
+  ok(!('halfThickness' in off.rolling) && !('halfThickness' in odd.rolling) && conditionsQuery('standard', base, off).toString() === 'preset=standard', 'sym=0 and an odd value are the whole thickness: no key');
+  ok(points(half) === points(base) / 2, 'points(): half the points', `${points(half)} of ${points(base)}`);
+  const viaCond = applyQuery(base, new URLSearchParams({ cond: enc({ rolling: { halfThickness: true } }) }));
+  ok(viaCond.rolling.halfThickness === true && conditionsQuery('standard', base, viaCond).get('sym') === '1', 'cond carries it too, and it comes back as the readable key');
+}
 // the sheet's length worked out: ?length=steady sets rolling.lengthMode and comes back as the same key
 {
   const st = applyQuery(base, new URLSearchParams({ length: 'steady' }));
