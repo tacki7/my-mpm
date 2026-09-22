@@ -109,6 +109,10 @@
             <figcaption>接触圧力（上から見たバイト）<span class="fig-range" id="solid-map-range"></span></figcaption>
             <canvas id="solid-chart-map"></canvas>
           </figure>
+          <figure class="locus" id="solid-locus">
+            <figcaption>破断軌跡 εf(η) と負荷経路</figcaption>
+            <canvas id="solid-chart-locus"></canvas>
+          </figure>
         </div>
       </section>
 
@@ -149,8 +153,9 @@
         <section class="certificate stand-results dim3-only" id="solid-stand-section" hidden>
           <h2>スタンドごとの結果（3 次元）</h2>
           <div class="table-scroll"><table id="solid-stand-results"></table></div>
-          <p class="table-note">荷重・先進率は各スタンドの定常の平均。次のスタンドの入側の板厚と板幅は、出てきた板の厚さ（体積から。弾性の戻りを含む）と幅（端の面の平均）。次のスタンドの板は長方形の断面で作り直すので、端のふくらみの形は引き継がない（応力・ひずみ・損傷は引き継ぐ）</p>
+          <p class="table-note">荷重・先進率は各スタンドの定常の平均。次のスタンドの入側の板厚と板幅は、出てきた板の厚さ（体積から。弾性の戻りを含む）と幅（端の面の平均）。次のスタンドの板は断面の形（端のふくらみ、板厚のむら）ごと作り直す（応力・ひずみ・損傷も引き継ぐ）</p>
         </section>
+        <section class="explorer dim3-only" id="solid-explorer" aria-label="応力状態（3 次元）"></section>
         <section class="export dim3-only" id="solid-export" aria-label="結果の書き出し（3 次元）"></section>
       </aside>
     </main>

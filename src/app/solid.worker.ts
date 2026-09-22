@@ -5,10 +5,12 @@ import { READ_STEPS } from '../mpm/solid/steady.ts';
 import { Tandem3, steadyLength3 } from '../mpm/solid/tandem3.ts';
 import { standEndTail, standProgress } from '../mpm/progress.ts';
 import { faces } from '../mpm/solid/surface.ts';
+import { Tracker3 } from './tracker3.ts';
 import { karman } from '../mpm/slab.ts';
 import type { FromSolidWorker, SolidFieldName, SolidFrame, ToSolidWorker } from './solidProtocol.ts';
 
 let tandem: Tandem3 | null = null;
+let tracker: Tracker3 | null = null;
 let field: SolidFieldName = 'seq';
 let running = false;
 let finished = false;
@@ -126,6 +128,7 @@ function frame(): void {
       inertiaRatio: s.inertiaRatio,
     },
     history: { t: history.t.slice(), force: history.force.slice(), stand: history.stand.slice() },
+    tracks: tracker ? tracker.tracks() : [],
     running,
     msPerStep,
   };
@@ -155,6 +158,8 @@ function loop(): void {
       if (T.done) finished = true;
       else if (T.stand !== stand) ready(T);
     }
+    // the paths, every chunk (at most 5 steps: the section model's tracker reads every 20)
+    tracker?.record();
     steps += Math.max(0, chunk);
     if (stopAfter !== null && T.stepOffset + T.sim.step >= stopAfter) {
       reached = true;
@@ -181,8 +186,13 @@ self.onmessage = (e: MessageEvent<ToSolidWorker>) => {
         stopAfter = m.stopAfter;
         history = { t: [], force: [], stand: [] };
         tandem = new Tandem3(solidParams(m.params, m.solid), m.stands, m.handoff);
+        tracker = new Tracker3(tandem.sim);
         tandem.onStandDone = (e) => {
+          // the stand's last steps go on its paths; the next stand's tracker carries them on (Sim3.parentOf)
+          // and retires this one
+          tracker?.record();
           post({ type: 'stand', result: e.result });
+          if (e.next) tracker = new Tracker3(e.next, tracker);
         };
         ready(tandem);
         frame();

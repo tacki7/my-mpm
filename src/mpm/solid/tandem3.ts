@@ -327,6 +327,7 @@ export function remap3(old: Sim3, base: Solid3Params, h1: number, w1: number, sa
   const mass = M / n;
   const cell = sim.dp * sim.dp * sim.dz;
   let nFailed = 0;
+  const parentOf = new Int32Array(n);
   // the old strip's section: y and z of each (row, column) averaged over the sampled columns along x
   const meanY = new Float64Array(old.NJ * old.NK);
   const meanZ = new Float64Array(old.NJ * old.NK);
@@ -381,6 +382,7 @@ export function remap3(old: Sim3, base: Solid3Params, h1: number, w1: number, sa
     const jo = Math.max(0, Math.min(old.NJ - 1, Math.round(jf)));
     const ko = Math.max(0, Math.min(old.NK - 1, Math.round(kf)));
     const p = old.lattice(io, jo, ko);
+    parentOf[q] = p;
     // the shape: y and z where the old column has them; the symmetry planes are not crossed
     sim.py[q] = Math.max(0.25 * sim.dp, at(meanY, jf, kf));
     sim.pz[q] = Math.max(0.25 * sim.dz, at(meanZ, jf, kf));
@@ -411,5 +413,6 @@ export function remap3(old: Sim3, base: Solid3Params, h1: number, w1: number, sa
   }
   sim.nFailed = nFailed;
   sim.firstCrack = old.firstCrack;
+  sim.parentOf = parentOf;
   return sim;
 }

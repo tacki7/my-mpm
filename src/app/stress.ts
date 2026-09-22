@@ -16,6 +16,24 @@ export function principal(sxx: number, syy: number, sxy: number, szz: number): P
   return { s1: v[0], s2: v[1], s3: v[2] };
 }
 
+/** Principal stresses, s1 ≥ s2 ≥ s3, of the full symmetric state (the three-dimensional model), trigonometric form. */
+export function principal3(sxx: number, syy: number, szz: number, sxy: number, syz: number, szx: number): Principal {
+  const m = (sxx + syy + szz) / 3;
+  const p1 = sxy * sxy + syz * syz + szx * szx;
+  const a = sxx - m;
+  const b = syy - m;
+  const c = szz - m;
+  const p2 = a * a + b * b + c * c + 2 * p1;
+  const q = Math.sqrt(p2 / 6);
+  if (!(q > 0)) return { s1: m, s2: m, s3: m };
+  // r = det(B) / 2 with B = (S − m I) / q
+  const r = (a * (b * c - syz * syz) - sxy * (sxy * c - syz * szx) + szx * (sxy * syz - b * szx)) / (2 * q * q * q);
+  const phi = Math.acos(Math.max(-1, Math.min(1, r))) / 3;
+  const s1 = m + 2 * q * Math.cos(phi);
+  const s3 = m + 2 * q * Math.cos(phi + (2 * Math.PI) / 3);
+  return { s1, s2: 3 * m - s1 - s3, s3 };
+}
+
 /**
  * Lode parameter (2σ2 − σ1 − σ3)/(σ1 − σ3): −1 in uniaxial tension, +1 in uniaxial
  * compression, 0 in pure shear — and in plane-strain J2 flow, where σzz is the

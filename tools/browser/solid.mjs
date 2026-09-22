@@ -4,11 +4,13 @@
 // its steady values compared with `node tools/solid.mjs` (relative 1e-5: Chrome's and Node's V8 differ in the
 // last bit of a few Math functions); every field tab redraws; a real drag turns the drawing, the wheel zooms, a
 // double click puts it back; the view buttons; the conditions URL opens the same 3D condition; back on 2 次元 the
-// section still runs, and showing 3 次元 pauses it; a narrow screen (700 px). Not a `@check`. About 3 minutes.
+// section still runs, and showing 3 次元 pauses it; the stress state and the fracture locus (a standard strip: the
+// most damaged point; a strip that cracks: the first crack's point, the role buttons by real clicks); a narrow
+// screen (700 px). Not a `@check`. About 12 minutes.
 //
 //   CDP_PORT=<cdp> node tools/browser/solid.mjs <url> [out-prefix]
 //
-// Writes <out-prefix>-solid.png, -top.png, -cut.png, -narrow.png when a prefix is given; look at them.
+// Writes <out-prefix>-solid.png, -locus.png, -top.png, -cut.png, -narrow.png when a prefix is given; look at them.
 import { execFileSync } from 'node:child_process';
 import { connect } from './cdp.mjs';
 import { ok, near, done } from '../checks/lib.mjs';
@@ -78,6 +80,19 @@ try {
   ok((table.find((t) => t.startsWith('幅広がり W1/W0')) ?? '').includes((s.spread * 100).toFixed(2)), 'and the spread');
   await shot('solid');
 
+  // ── the fracture locus and the stress state of the followed points (explorer.ts on the 3D page)
+  const cell = (key) => c.evaluate(`(() => { const r = document.querySelector('#solid-explorer-state tr[data-key="${key}"]'); return r && { value: +r.dataset.value, text: (r.children[1] ?? r).textContent }; })()`);
+  const shown = await c.evaluate('JSON.parse(JSON.stringify(__mpm.solid.explorer))');
+  ok((await visible('#solid-explorer')) && (await visible('#solid-chart-locus')) && shown?.role === 'max-damage' && shown.path.length >= 30, 'the 3D page shows the stress state and the locus; with no crack, the most damaged point', `${shown?.role}, ${shown?.path.length / 3} samples`);
+  ok(await c.evaluate(`document.querySelector('#solid-explorer button[data-role="first-crack"]').disabled && document.querySelector('#solid-explorer button[data-role="max-damage"]').getAttribute('aria-checked') === 'true' && !document.querySelector('#solid-explorer button[data-role="selected"]')`), 'the role buttons: no first crack to show, the most damaged one chosen, no point picking in 3D');
+  const same = ['sxx', 'syy', 'szz', 'syz', 'szx', 'seq', 'pres', 's1', 'eta', 'ep', 'dJC'].map(async (k) => [k, (await cell(k))?.value, shown.state[k]]);
+  const cells = await Promise.all(same);
+  ok(cells.every(([, v, w]) => v === w) && (await cell('position'))?.text.includes('板幅の中央から'), 'the table is the followed point\'s state (six stress components, σ1, η, εp, D) and its position across the width', cells.filter(([, v, w]) => v !== w).map(([k, v, w]) => `${k}: ${v} vs ${w}`).join(', '));
+  const inked = await c.evaluate(`(() => { const cv = document.querySelector('#solid-chart-locus'); const d = cv.getContext('2d').getImageData(0, 0, cv.width, cv.height).data; let n = 0; for (let i = 3; i < d.length; i += 4) if (d[i] > 0) n++; return n / (cv.width * cv.height); })()`);
+  ok(inked > 0.02, 'the locus is drawn', `${(inked * 100).toFixed(1)} % of the canvas inked`);
+  const legend = await c.evaluate(`document.querySelector('#solid-locus .locus-legend').textContent`);
+  ok(/εf\(η\)/.test(legend) && /損傷最大/.test(legend) && /D·εf/.test(legend), 'its legend names the locus, the followed point and D·εf(η)', legend);
+
   // ── every field tab
   const tabs = await c.evaluate(`[...document.querySelectorAll('#solid-tabs button')].map((b) => b.dataset.field)`);
   for (const id of tabs) {
@@ -125,6 +140,28 @@ try {
   await c.waitFor('__mpm.solid.active && __mpm.solid.ready', 60000);
   const again = await c.evaluate('({ s: __mpm.solid.settings, mu: __mpm.solid.params.rolling.mu, L: __mpm.solid.params.rolling.sheetLength })');
   ok(Math.abs(again.s.width - W * 1e-3) < 1e-12 && again.mu === 0.1 && Math.abs(again.L - 12e-3) < 1e-12, 'it opens the 3 次元 tab with that strip; the shared conditions (μ) reach the 3D model');
+
+  // ── a strip that cracks (4340's Johnson-Cook damage, D2 cut to 0.15, 30 %, W 2 mm): the first crack's point, by a real click
+  const cond = Buffer.from(JSON.stringify({ damage: { D2: 0.15, etaCutoff: -2 } })).toString('base64url');
+  await c.navigate(page(`?dim=3&W3=2&L3=8&mat=s4340&damage=johnson-cook&r=30&cond=${cond}`));
+  await c.waitFor('__mpm.solid.active && __mpm.solid.ready', 60000);
+  ok(await c.evaluate('__mpm.solid.params.damage.D2 === 0.15 && __mpm.solid.params.rolling.reduction === 0.3'), 'the cond reaches the 3D model (D2 0.15, 30 %)');
+  await click('#run');
+  await c.waitFor('__mpm.solid.done', 600000);
+  await painted();
+  const crack = await c.evaluate('JSON.parse(JSON.stringify({ first: __mpm.solid.diag.firstCrack, n: __mpm.solid.diag.nFailed, shown: __mpm.solid.explorer, tracks: __mpm.solid.tracks.map((t) => t.role) }))');
+  ok(crack.first && crack.n > 10 && crack.shown?.role === 'first-crack' && crack.shown.id === crack.first.point && crack.tracks.includes('max-damage'), 'the strip cracks and the first crack\'s point is shown, unasked', `${crack.n} failed, shown ${crack.shown?.role} ${crack.shown?.id} (crack's point ${crack.first?.point})`);
+  const fail = await cell('failed');
+  const atFail = await cell('atFailure');
+  const end = crack.shown.path.slice(-3);
+  ok(fail?.text === '亀裂' && atFail && Math.abs(atFail.value - crack.first.eta) < 1e-9 && Math.abs(end[0] - crack.first.eta) < 1e-9 && Math.abs(end[2] - 1) < 0.05, 'its table says 亀裂 with the state at failure; its path ends at the crack\'s η with D = 1', `η ${atFail?.value?.toFixed(3)} (crack ${crack.first?.eta.toFixed(3)}), D ${end[2]?.toFixed(3)}`);
+  await click('#solid-explorer button[data-role="max-damage"]');
+  await c.waitFor(`__mpm.solid.explorer.role === 'max-damage' && document.querySelector('#solid-explorer-state').dataset.role === 'max-damage'`, 5000);
+  ok((await cell('failed'))?.text === '健全' && (await cell('dJC'))?.value > 0.5, 'a click on 損傷最大 shows an intact point with its damage', `D ${(await cell('dJC'))?.value?.toFixed(3)}`);
+  await click('#solid-explorer button[data-role="first-crack"]');
+  await c.waitFor(`__mpm.solid.explorer.role === 'first-crack'`, 5000);
+  await shot('locus');
+  ok(c.errors.length === 0, 'no exceptions so far', c.errors.join(' | '));
 
   // ── back on 2 次元 the section runs; showing 3 次元 pauses it
   await c.navigate(page('?cells=6&L=8&dim=3'));
