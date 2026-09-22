@@ -104,6 +104,8 @@ export class Tandem3 {
   onStandDone: ((e: Stand3Done) => void) | null = null;
   stopped: TandemStop | null = null;
   private finished = false;
+  /** the device the stands step on (useGpu); null: the CPU */
+  private device: GPUDevice | null = null;
 
   constructor(params: Solid3Params, stands = 1, handoff: Handoff = 'done') {
     if (!(Number.isInteger(stands) && stands >= 1 && stands <= MAX_STANDS)) throw new Error(`stands must be 1 to ${MAX_STANDS}`);
@@ -118,6 +120,29 @@ export class Tandem3 {
     return this.finished;
   }
 
+  /** the current stand and the ones after it step on the device (Sim3.attachGpu); advanceBatch() from then on */
+  async useGpu(device: GPUDevice): Promise<void> {
+    this.device = device;
+    await this.sim.attachGpu(device);
+  }
+
+  /**
+   * K steps of the current stand on the GPU (Sim3.advanceBatch), and the look when they end at a multiple of
+   * READ_STEPS, as advance() does after each step. A stand that ends hands the device to the next.
+   */
+  async advanceBatch(K: number): Promise<SolidLook | null> {
+    if (this.finished) return null;
+    const sim = this.sim;
+    if (Math.floor((sim.step + K - 1) / READ_STEPS) !== Math.floor(sim.step / READ_STEPS)) throw new Error('a batch must end at a multiple of READ_STEPS');
+    await sim.advanceBatch(K);
+    const look = this.lookAfterStep();
+    if (this.sim !== sim) {
+      sim.detachGpu();
+      if (this.device) await this.sim.attachGpu(this.device);
+    }
+    return look;
+  }
+
   /**
    * One step of the current stand, and its look every READ_STEPS steps (returned; null otherwise). A stand ends at
    * the look that finds it done or stalled, or (handoff 'steady', another stand after it) steady with STEADY_LOOKS
@@ -125,8 +150,12 @@ export class Tandem3 {
    */
   advance(): SolidLook | null {
     if (this.finished) return null;
+    this.sim.advance();
+    return this.lookAfterStep();
+  }
+
+  private lookAfterStep(): SolidLook | null {
     const sim = this.sim;
-    sim.advance();
     if (sim.step % READ_STEPS !== 0) return null;
     const look = this.sampler.look(sim);
     if (look.phase === 'done' || look.phase === 'stalled') this.endStand(look.phase);

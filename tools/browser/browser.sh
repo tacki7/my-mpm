@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ワーカー専用のヘッドレス Chrome を起動・停止する。止めるのは「自分のポートで待ち受けているプロセス」だけ。
-#   browser.sh start <cdpPort> <profileDir>   起動し、DevTools が応答するまで待つ
+#   browser.sh start <cdpPort> <profileDir>   起動し、DevTools が応答するまで待つ（BROWSER_GPU=1 で GPU を有効に）
 #   browser.sh stop  <cdpPort>                そのポートの Chrome だけを kill
 # pkill -f "Google Chrome.*headless" は他ワーカーの Chrome も殺すので使わない。
 # macOS / Windows(Git Bash) 両対応。Windows には lsof が無いので netstat + taskkill で止める。
@@ -46,7 +46,9 @@ case "$1" in
     if curl -s "http://127.0.0.1:$port/json/version" >/dev/null; then echo "already running on $port"; exit 0; fi
     CHROME=$(find_chrome) || { echo "chrome not found"; exit 1; }
     mkdir -p "$prof"
-    nohup "$CHROME" --headless=new --disable-gpu --enable-unsafe-swiftshader --hide-scrollbars \
+    # BROWSER_GPU=1: the GPU on (WebGPU through Metal on macOS; tools/browser/gpu.mjs), else none
+    if [ -n "$BROWSER_GPU" ]; then gpu="--enable-unsafe-webgpu --use-angle=metal"; else gpu="--disable-gpu --enable-unsafe-swiftshader"; fi
+    nohup "$CHROME" --headless=new $gpu --hide-scrollbars \
       --remote-debugging-port=$port --user-data-dir="$prof" --window-size=1700,1050 about:blank \
       >"$prof/chrome.log" 2>&1 &
     pid=$!

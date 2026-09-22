@@ -15,7 +15,7 @@ Hancock-MacKenzie、破壊した粒子の応力の扱い）。式と出典の対
 | `src/mpm/params.ts` / `presets.ts` | 入力（SI 単位）と、名前付きの条件 |
 | `src/mpm/tandem.ts` | タンデム（`TandemSim`: スタンドを 1 つずつ解き、材料の状態を次のスタンドの新しい格子へ写す）。`node tools/tandem.mjs --stands 3 [--handoff steady]`（`run.mjs` と同じ引数） |
 | `src/mpm/planview/` | 平面図モデル（x 圧延方向・z 板幅方向、板厚は粒子の状態）。耳割れ用。`node tools/planview.mjs --W 20`。定常の読み方は `steady.ts`（ツールと画面の平面図で共通） |
-| `src/mpm/solid/` | 3 次元モデル（`Sim3`: x・y・z を解く 1/4 モデル、幅広がり・板幅方向の荷重分布）。画面の「3 次元」のタブ（`src/app/solidMode.ts`・`solidView.ts`・`solid.worker.ts`。止まったあとの巻き戻し再生は `tape.ts`、その動画ファイルは `solidVideo.ts`（WebCodecs）と `mux.ts`（MP4・WebM を自前で書く。`tools/checks/mux.mjs` が ffmpeg の本物のフレームで検証））。タンデム・定常になるまでの板長は `tandem3.ts`（`Tandem3`）、ロール偏平・圧下率一定は `Sim3.adjustRolls`。`node tools/solid.mjs --W 8 --L 12 --cells 4 [--plane-strain] [--length steady] [--stands 3 --handoff steady] [--flatten hitchcock --control reduction] [--bend <バレル mm> [--span <mm>]] [--crown <µm>]`（4 セルで約 2.5 分）。ロールの撓みは `rollBend.ts`（梁）+ `Sim3.updateBend`。入側の板クラウン・出側のクラウンと平坦度は `Sim3.ySize`・`exitMeasure`・`steady.ts` |
+| `src/mpm/solid/` | 3 次元モデル（`Sim3`: x・y・z を解く 1/4 モデル、幅広がり・板幅方向の荷重分布）。画面の「3 次元」のタブ（`src/app/solidMode.ts`・`solidView.ts`・`solid.worker.ts`。止まったあとの巻き戻し再生は `tape.ts`、その動画ファイルは `solidVideo.ts`（WebCodecs）と `mux.ts`（MP4・WebM を自前で書く。`tools/checks/mux.mjs` が ffmpeg の本物のフレームで検証））。タンデム・定常になるまでの板長は `tandem3.ts`（`Tandem3`）、ロール偏平・圧下率一定は `Sim3.adjustRolls`。`node tools/solid.mjs --W 8 --L 12 --cells 4 [--plane-strain] [--length steady] [--stands 3 --handoff steady] [--flatten hitchcock --control reduction] [--bend <バレル mm> [--span <mm>]] [--crown <µm>]`（4 セルで約 2.5 分）。ロールの撓みは `rollBend.ts`（梁）+ `Sim3.updateBend`。入側の板クラウン・出側のクラウンと平坦度は `Sim3.ySize`・`exitMeasure`・`steady.ts`。GPU は `solid/gpu/`（`kernels.ts` WGSL・`stepper.ts`）+ `Sim3.advanceBatch`、比較の頁は `tools/gpu/check.html` |
 | `src/app/` | ワーカー（`sim.worker.ts`）、描画（`view.ts`）、グラフ、条件パネル |
 | `tools/check.mjs` | 回帰関門。`// @check` の付いたスクリプトを集めて回す |
 | `tools/run.mjs` | ヘッドレスで 1 回圧延して数値を出す（`npm run sim -- --cells 6 --L 8`） |
@@ -96,6 +96,12 @@ Math.exp・log の最後の 1 ビットが違うのでビット一致はしな�
 （約 5.5 分、CPU ロックを取って回す。3 スタンドを実クリックで最後まで回して `node tools/tandem.mjs` と比べる（#1 は相対 1e-5、#2 以降は h0 を 1e-7 ずらしたときの揺れの 2 倍まで）、
 枠・表・CSV・PNG・実マウス・5 スタンドの表の幅・700 px・板の破断で止まる・1 スタンドに戻す。`tandem*.png` を自分で見る）。
 
+3 次元の GPU（`src/mpm/solid/gpu/`・`Sim3.advanceBatch`・ワーカーの `loopGpu`・「計算」の選択）を触ったら、GPU 付きの Chrome を別に上げて
+`BROWSER_GPU=1 tools/browser/browser.sh start <cdp2> <作業用ディレクトリ>/chrome-gpu` → `CDP_PORT=<cdp2> node tools/browser/gpu.mjs http://localhost:<dev>/ <作業用ディレクトリ>/g`
+（約 5 分。`tools/gpu/check.html` で同じ状態から 1 ステップ・1 バッチを量ごとに比べ、条件 5 通り（素・張力・ロール偏平 + 圧下率一定・撓み・損傷）を定常まで回して CPU と比べ、
+画面で `gpu3=1` と無しを最後まで回して比べる。`--quick` で画面の節を飛ばす。アダプタが無ければ SKIP。CI（ubuntu）には GPU が無いので `@check` ではない）。
+`BROWSER_GPU` 無しの `browser.sh` は `--disable-gpu` で、`navigator.gpu` はあってもアダプタが取れない（CPU への退避の確認に使える）。
+
 残り時間の表示（時計の上の「残り 約 …」、`src/app/eta.ts`・`src/mpm/progress.ts`・ワーカーの `progress`）を触ったら `CDP_PORT=<cdp> node tools/browser/eta.mjs http://localhost:<dev>/ <作業用ディレクトリ>/eta`
 （約 5 分。表示した残り時間を、実際に掛かった残り時間と比べる: 断面・一時停止・タンデム 2 スタンド（`handoff` 2 通り）・平面図・3 次元。`eta-section.png` を自分で見る）。
 
@@ -117,7 +123,7 @@ Math.exp・log の最後の 1 ビットが違うのでビット一致はしな�
 `&field=seq|eta|s1|pres|ep|damage|sxx|syy|sxy|dT|lagrange|porosity|loc|drucker&autorun=1&stopafter=<step>`
 `&view=plan&W=20&wcells=10&notch=0&pfield=sxx|szz|seq|eta|damage|spread`（平面図。板幅 mm・半幅のセル数・端の切り欠きの半径 mm）
 `&dim=3&W3=8&L3=12&cells3=4&ps3=1&f3=seq|ep|pres|eta|sxx|syy|szz|damage|spread`（3 次元のタブ。板幅 mm・板の長さ mm・板厚方向のセル数（偶数 4〜8）・平面ひずみで解く・色の量。
-`&bend3=1&barrel3=300&support3=bearing&span3=400` = ロールの撓み（バレル長 mm・支点を軸受に・支点間距離 mm。`support3` が無ければバレルの端。`diag.rollBend`・`steady.rollBend`）。`&crown3=40` = 入側の板クラウン µm（幅方向に 2 次。`steady.crownIn`・`crownOut`・`flatness`）。ほかの条件は 2 次元と共通で、`stands`・`handoff`・`length`・`flatten`・`rollE`・`control` は 3 次元にも効く。`tb`・`tf` も効く。`crack`・`L`・`cells`・GTN は 3 次元では使わない）
+`&gpu3=1` = 1 ステップを WebGPU で（無ければ CPU。`__mpm.solid.compute` が `{compute, gpu, note}`）。`&bend3=1&barrel3=300&support3=bearing&span3=400` = ロールの撓み（バレル長 mm・支点を軸受に・支点間距離 mm。`support3` が無ければバレルの端。`diag.rollBend`・`steady.rollBend`）。`&crown3=40` = 入側の板クラウン µm（幅方向に 2 次。`steady.crownIn`・`crownOut`・`flatness`）。ほかの条件は 2 次元と共通で、`stands`・`handoff`・`length`・`flatten`・`rollE`・`control` は 3 次元にも効く。`tb`・`tf` も効く。`crack`・`L`・`cells`・GTN は 3 次元では使わない）
 `&escatter=0&ewidth=1&elen=1&eseed=1`（端の延性のばらつき。大きさ %・帯の幅 mm・相関長 mm・種。`escatter=0`（既定）で無し）
 `&stands=1..5`（タンデムのスタンド数。どのスタンドも同じ条件で、圧下率は各スタンドの入側板厚に対して。断面の画面だけ）
 `&length=fixed|steady`（板の長さの取り方。`steady` = 1 スタンド目の板を、定常の読みが揃うのに要る長さに自動で（`L` は使わない。決めた長さは `__mpm.params.rolling.sheetLength`）。ツールは `--length steady`）

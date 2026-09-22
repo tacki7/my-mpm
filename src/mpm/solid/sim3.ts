@@ -31,6 +31,8 @@ import { startOffset, tailMargin, biteGeometry, cloneParams, hitchcockRadius, RO
 import { beamDeflection, type Beam } from './rollBend.ts';
 import { CTL_EVERY, CTL_TOL_H, CTL_TOL_R, presetRolls } from '../solver.ts';
 import { adiabaticRise, elasticConstants, hmFractureStrain, homologousTemperature, jcFractureStrain, plasticIncrement, staticStrength, strengthFactor, type Elastic } from '../material.ts';
+import { GpuStepper } from './gpu/stepper.ts';
+import { PSTRIDE, P_ACTIVE, P_C, P_DCL, P_DHM, P_DJC, P_EP, P_ETA, P_F, P_FAILED, P_FAILSTEP, P_MASS, P_PRES, P_S, P_SEQ, P_STR, P_STREP, P_TEMP, P_TH, P_TOUCH, P_V, P_VOL0, P_VR, P_WORK, P_X, P_YSIZE, U, U_INTS } from './gpu/kernels.ts';
 
 export interface SolidSettings {
   /** full strip width at the entry [m] */
@@ -263,6 +265,13 @@ export class Sim3 {
   readonly nBinsX: number;
   private stallX = -INF;
 
+  /** the step on a WebGPU device (attachGpu); null: the CPU's advance() */
+  gpu: GpuStepper | null = null;
+  /** the plastic work before the GPU took over (the device sums its own from zero) */
+  private gpuWork0 = 0;
+  /** the uniform block's constant part, filled when the GPU is attached */
+  private gpuBase: ArrayBuffer | null = null;
+
   constructor(input: Solid3Params) {
     const P: Solid3Params = { ...cloneParams(input), solid: { ...input.solid } };
     this.params = P;
@@ -467,16 +476,219 @@ export class Sim3 {
   }
 
   /**
+   * K steps on the GPU (attachGpu), the same stages as advance() (gpu/kernels.ts), with the controls that take a
+   * step's result run once for the batch on the CPU with dt × K: the roll's adjustment and bending on the batch's
+   * mean force, the tensions and the pusher from the state at the batch's start, the stall check when the batch
+   * holds a multiple of 200 steps. The roll, the tensions and the deflection are therefore uniform over a batch:
+   * K is at most CTL_EVERY, and a batch ends at a multiple of CTL_EVERY (the gauge is read there). The state
+   * (the arrays) is read back after every batch, so everything that reads the strip works as after advance();
+   * a point that fails does so at its step on the device, but the crack's record is the state at the read.
+   */
+  async advanceBatch(K: number): Promise<void> {
+    const g = this.gpu;
+    if (!g || !this.gpuBase) throw new Error('no GPU attached');
+    if (!(Number.isInteger(K) && K >= 1 && K <= CTL_EVERY)) throw new Error(`a batch is 1 to ${CTL_EVERY} steps`);
+    if (Math.floor((this.step + K - 1) / CTL_EVERY) !== Math.floor(this.step / CTL_EVERY)) throw new Error('a batch must end at a multiple of CTL_EVERY');
+    const { nxN, nyN, nzN, dt, accFz, accMap, stepFz, binCol0, nBinsX } = this;
+    const dtEff = K * dt;
+    if (this.pusherActive && this.headX() > this.xExitProbe) this.pusherActive = false;
+    if (!this.pusherActive && !this.stalled && Math.floor((this.step + K - 1) / 200) > Math.floor((this.step - 1) / 200)) this.checkStall();
+    this.updateTension();
+    const base = new Uint32Array(this.gpuBase);
+    for (let s = 0; s < K; s++) {
+      const e = g.uniform(s);
+      e.u.set(base);
+      e.f[U.cy] = this.roll.cy;
+      e.f[U.R] = this.roll.R;
+      e.f[U.gapHalf] = this.roll.cy - this.roll.R;
+      e.f[U.omega] = this.roll.omega;
+      e.f[U.vR] = this.roll.vR;
+      e.f[U.vcy] = this.roll.vcy;
+      e.u[U.pushing] = this.pusherActive ? 1 : 0;
+      e.f[U.tractionB] = -this.backNow * this.backScale;
+      e.f[U.tractionF] = this.frontNow * this.frontScale;
+      e.u[U.backOn] = this.backNow > 0 ? 1 : 0;
+      e.u[U.frontOn] = this.frontNow > 0 ? 1 : 0;
+      e.u[U.stepIndex] = this.step + s;
+    }
+    const bend = new Float32Array(2 * nzN);
+    if (this.beam) {
+      bend.set(this.bend, 0);
+      bend.set(this.bendVel, nzN);
+    }
+    const out = await g.run(K, bend);
+    this.pull(out.particles);
+    const acc = out.acc;
+    let fy = 0;
+    let tq = 0;
+    for (let ix = 0; ix < nxN; ix++) {
+      fy += acc[2 * ix];
+      tq += acc[2 * ix + 1];
+    }
+    const ng = nxN * nyN * nzN;
+    const o1 = 2 * nxN;
+    const o2 = o1 + ng;
+    for (let idx = 0; idx < ng; idx++) {
+      const fc = acc[o1 + idx];
+      const ff = acc[o2 + idx];
+      if (fc === 0 && ff === 0) continue;
+      const ix = Math.floor(idx / (nyN * nzN));
+      const iz = idx % nzN;
+      accFz[iz] += fc + ff;
+      if (this.beam) stepFz[iz] += fc;
+      const b = ix - binCol0;
+      if (b >= 0 && b < nBinsX) accMap[b * nzN + iz] += fc + ff;
+    }
+    this.accFy += -fy;
+    this.accTq += tq;
+    this.accSteps += K;
+    if (!this.rollsSettled) this.ctlForce += ((-2 * fy) / K / this.ctlWidth - this.ctlForce) * Math.min(1, dtEff / this.ctlTauF);
+    this.ixPrevLo = 0;
+    this.ixPrevHi = nxN;
+    this.t += dtEff;
+    this.step += K;
+    if (!this.rollsSettled) this.adjustRolls(dtEff);
+    if (this.beam) this.updateBend(dtEff, K);
+  }
+
+  /** The step goes to the device from here: the state is uploaded once, and read back after every batch. */
+  async attachGpu(device: GPUDevice): Promise<void> {
+    this.detachGpu();
+    const g = new GpuStepper(device, { n: this.n, nxN: this.nxN, nyN: this.nyN, nzN: this.nzN });
+    const err = await g.compileErrors();
+    if (err) {
+      g.destroy();
+      throw new Error('WGSL: ' + err);
+    }
+    g.upload(this.pack());
+    this.gpuWork0 = this.plasticWork;
+    this.gpuBase = this.uniformBase();
+    this.gpu = g;
+  }
+
+  detachGpu(): void {
+    this.gpu?.destroy();
+    this.gpu = null;
+    this.gpuBase = null;
+  }
+
+  /** the uniform block's constant part (gpu/kernels.ts U) */
+  private uniformBase(): ArrayBuffer {
+    const buf = new ArrayBuffer(256);
+    const f = new Float32Array(buf);
+    const u = new Uint32Array(buf);
+    const mat = this.params.material;
+    const r = this.params.rolling;
+    const dmg = this.params.damage;
+    const v: Record<string, number> = {
+      n: this.n, nxN: this.nxN, nyN: this.nyN, nzN: this.nzN,
+      h: this.h, invH: 1 / this.h, ox: this.ox, dt: this.dt,
+      dp: this.dp, mu: r.mu, planeStrain: this.params.solid.planeStrain ? 1 : 0, vPush: this.vIn,
+      mMin: 1e-12 * this.mass[0], K: this.el.K, G: this.el.G, jcA: mat.jcA, jcB: mat.jcB, jcN: mat.jcN, jcC: mat.jcC, jcM: mat.jcM,
+      epsDot0: mat.epsDot0, tRoom: mat.tRoom, tMelt: mat.tMelt, rho: mat.rho, cp: mat.cp, chi: mat.chi, rateScale: r.millSpeed / r.rollSpeed,
+      xMin: this.ox + 2 * this.h, xMax: (this.nxN - 3) * this.h + this.ox, yMax: (this.nyN - 4) * this.h, zMax: (this.nzN - 4) * this.h,
+      tailEnd: this.NJ * this.NK, ng: this.nxN * this.nyN * this.nzN, swift: mat.hardening === 'swift' ? 1 : 0, swK: mat.swK, swE0: mat.swE0, swN: mat.swN,
+      bending: this.beam ? 1 : 0, gripCols: this.gripCols, NI: this.NI, dz: this.dz,
+      dmgModel: dmg.model === 'none' ? 0 : dmg.model === 'hancock-mackenzie' ? 2 : dmg.model === 'cockcroft-latham' ? 3 : 1,
+      etaCutoff: dmg.etaCutoff, D1: dmg.D1, D2: dmg.D2, D3: dmg.D3, D4: dmg.D4, D5: dmg.D5, clCrit: dmg.clCrit,
+    };
+    for (const [k, i] of Object.entries(U)) {
+      if (!(k in v)) continue;
+      if (U_INTS.has(i)) u[i] = v[k];
+      else f[i] = v[k];
+    }
+    return buf;
+  }
+
+  /** the arrays packed for the device (gpu/kernels.ts offsets) */
+  private pack(): Float32Array {
+    const { n, NK } = this;
+    const a = new Float32Array(n * PSTRIDE);
+    for (let p = 0; p < n; p++) {
+      const b = p * PSTRIDE;
+      a[b + P_X] = this.px[p]; a[b + P_X + 1] = this.py[p]; a[b + P_X + 2] = this.pz[p];
+      a[b + P_V] = this.vx[p]; a[b + P_V + 1] = this.vy[p]; a[b + P_V + 2] = this.vz[p];
+      for (let k = 0; k < 9; k++) {
+        a[b + P_C + k] = this.C[9 * p + k];
+        a[b + P_F + k] = this.F[9 * p + k];
+      }
+      a[b + P_S] = this.sxx[p]; a[b + P_S + 1] = this.syy[p]; a[b + P_S + 2] = this.szz[p]; a[b + P_S + 3] = this.sxy[p]; a[b + P_S + 4] = this.syz[p]; a[b + P_S + 5] = this.szx[p];
+      a[b + P_PRES] = this.pres[p]; a[b + P_MASS] = this.mass[p]; a[b + P_VOL0] = this.vol0[p]; a[b + P_EP] = this.ep[p]; a[b + P_TEMP] = this.temp[p];
+      a[b + P_STR] = this.strength[p]; a[b + P_STREP] = this.strengthEp[p]; a[b + P_VR] = this.vr[p]; a[b + P_TH] = this.th[p];
+      a[b + P_SEQ] = this.seq[p]; a[b + P_ETA] = this.eta[p]; a[b + P_TOUCH] = this.touch[p]; a[b + P_ACTIVE] = this.active[p]; a[b + P_FAILED] = this.failed[p];
+      a[b + P_WORK] = 0; a[b + P_YSIZE] = this.ySize[p % NK]; a[b + P_DJC] = this.dJC[p]; a[b + P_DHM] = this.dHM[p]; a[b + P_DCL] = this.dCL[p]; a[b + P_FAILSTEP] = -1;
+    }
+    return a;
+  }
+
+  /** the device's state back into the arrays, with the failures it found and the plastic work it summed */
+  private pull(a: Float32Array): void {
+    const { n } = this;
+    let work = 0;
+    let nFailed = 0;
+    let first = -1;
+    let firstStep = Infinity;
+    for (let p = 0; p < n; p++) {
+      const b = p * PSTRIDE;
+      this.px[p] = a[b + P_X]; this.py[p] = a[b + P_X + 1]; this.pz[p] = a[b + P_X + 2];
+      this.vx[p] = a[b + P_V]; this.vy[p] = a[b + P_V + 1]; this.vz[p] = a[b + P_V + 2];
+      for (let k = 0; k < 9; k++) {
+        this.C[9 * p + k] = a[b + P_C + k];
+        this.F[9 * p + k] = a[b + P_F + k];
+      }
+      this.sxx[p] = a[b + P_S]; this.syy[p] = a[b + P_S + 1]; this.szz[p] = a[b + P_S + 2]; this.sxy[p] = a[b + P_S + 3]; this.syz[p] = a[b + P_S + 4]; this.szx[p] = a[b + P_S + 5];
+      this.pres[p] = a[b + P_PRES]; this.ep[p] = a[b + P_EP]; this.temp[p] = a[b + P_TEMP];
+      this.strength[p] = a[b + P_STR]; this.strengthEp[p] = a[b + P_STREP]; this.vr[p] = a[b + P_VR]; this.th[p] = a[b + P_TH];
+      this.seq[p] = a[b + P_SEQ]; this.eta[p] = a[b + P_ETA]; this.touch[p] = a[b + P_TOUCH]; this.active[p] = a[b + P_ACTIVE];
+      this.dJC[p] = a[b + P_DJC]; this.dHM[p] = a[b + P_DHM]; this.dCL[p] = a[b + P_DCL];
+      const failed = a[b + P_FAILED] !== 0;
+      this.failed[p] = failed ? 1 : 0;
+      if (failed) {
+        nFailed++;
+        const fs = a[b + P_FAILSTEP];
+        if (fs >= 0 && fs < firstStep) {
+          firstStep = fs;
+          first = p;
+        }
+      }
+      work += a[b + P_WORK];
+    }
+    this.plasticWork = this.gpuWork0 + work;
+    this.nFailed = nFailed;
+    if (!this.firstCrack && first >= 0) {
+      const p = first;
+      const i = Math.floor(p / (this.NJ * this.NK));
+      const j = Math.floor(p / this.NK) % this.NJ;
+      const k = p % this.NK;
+      this.firstCrack = {
+        t: firstStep * this.dt,
+        step: firstStep,
+        x: this.px[p],
+        y: this.py[p],
+        z: this.pz[p],
+        sheetX: (this.NI - 1 - i + 0.5) * this.dp,
+        sheetY: (j + 0.5) * this.dp,
+        sheetZ: (k + 0.5) * this.dz,
+        point: p,
+        eta: this.eta[p],
+        seq: this.seq[p],
+        ep: this.ep[p],
+        criterion: this.params.damage.model,
+      };
+    }
+  }
+
+  /**
    * The roll bends under the contact force of this step: the force by z column (the quarter's; the mid-width node's
    * counts twice, the strip on the other side of z = 0 being its mirror image) low-passed over ctlTauF as the
    * flattening's force is, then the beam's deflection at the columns (rollBend.ts). The contact sees the surface
    * move at the deflection's rate. Settled once the mid-width deflection has held still over ctlWindow, as R does.
    */
-  private updateBend(): void {
-    const { nzN, h, dt, stepFz, bendQ, bend, bendVel } = this;
+  private updateBend(dt = this.dt, steps = 1): void {
+    const { nzN, h, stepFz, bendQ, bend, bendVel } = this;
     const k = Math.min(1, dt / this.ctlTauF);
     for (let iz = 1; iz < nzN; iz++) {
-      const q = ((iz === 1 ? 2 : 1) * stepFz[iz]) / h;
+      const q = ((iz === 1 ? 2 : 1) * stepFz[iz]) / steps / h;
       bendQ[iz - 1] += (q - bendQ[iz - 1]) * k;
       stepFz[iz] = 0;
     }
@@ -528,7 +740,7 @@ export class Sim3 {
    *   volume, over the width there: gauge()) against h0 (1 − r)
    * Settled, and held from then on, as in the section model.
    */
-  private adjustRolls(): void {
+  private adjustRolls(dt = this.dt): void {
     const r = this.params.rolling;
     const flat = r.flattening === 'hitchcock';
     const red = r.gapControl === 'reduction';
@@ -554,9 +766,9 @@ export class Sim3 {
     }
     const force = building ? Math.max(this.ctlForce, this.ctlForce0) : this.ctlForce;
     const goal = flat ? hitchcockRadius(r, force, r.h0 - this.gap) : r.rollRadius;
-    const R = this.roll.R + (goal - this.roll.R) * Math.min(1, this.dt / this.ctlTauF);
-    this.setRoll(R);
-    this.ctlRRef += (R - this.ctlRRef) * Math.min(1, (2 * this.dt) / this.ctlTransit);
+    const R = this.roll.R + (goal - this.roll.R) * Math.min(1, dt / this.ctlTauF);
+    this.setRoll(R, true, dt);
+    this.ctlRRef += (R - this.ctlRRef) * Math.min(1, (2 * dt) / this.ctlTransit);
     if (building || Math.abs(R - this.ctlRRef) > CTL_TOL_R * R || Math.abs(R - goal) > CTL_TOL_R * R) this.ctlRSince = t;
     if (building) {
       this.ctlHSince = Infinity;
@@ -571,11 +783,11 @@ export class Sim3 {
   }
 
   /** the roll at radius R and the gap now; `moving`: the contact sees the surface move there over this step */
-  private setRoll(R: number, moving = true): void {
+  private setRoll(R: number, moving = true, dt = this.dt): void {
     const roll = this.roll;
     const cy = R + this.gap / 2;
-    roll.vR = moving ? (R - roll.R) / this.dt : 0;
-    roll.vcy = moving ? (cy - roll.cy) / this.dt : 0;
+    roll.vR = moving ? (R - roll.R) / dt : 0;
+    roll.vcy = moving ? (cy - roll.cy) / dt : 0;
     roll.R = R;
     roll.cy = cy;
     roll.omega = this.params.rolling.rollSpeed / R;
