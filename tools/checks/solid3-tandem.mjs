@@ -106,7 +106,9 @@ ok(s3.roll.R > 1.1 * s3.params.rolling.rollRadius && A3.sampler.count <= 1, "a f
 
 // ── the shape goes into the next stand: a strip (W 2 mm, unrolled) given a crown across the width (the top surface
 //    12 µm higher at mid-width than at the edge) and an edge barrel (the edge 10 µm wider at mid-thickness); the new
-//    strip, on a finer lattice with more columns across, has the same surfaces to a micron
+//    strip, on a finer lattice with more columns across, has the same surfaces to a micron; stripes along x
+//    (±3 µm with a 5-column period, as the lattice leaves on a rolled strip) are not carried: the new strip's top
+//    is flat along x (a carried ripple made the next stand's gauge hunt and rolls that follow the pass never settle)
 {
   const P = solidParams(base((r) => { r.sheetLength = 4e-3; delete r.lengthMode; }), { width: 2e-3, planeStrain: false });
   const old = new Sim3(P);
@@ -117,7 +119,8 @@ ok(s3.roll.R > 1.1 * s3.params.rolling.rollRadius && A3.sampler.count <= 1, "a f
   for (let p = 0; p < old.n; p++) {
     const zf = old.pz[p] / hw; // 0 mid-width … 1 edge
     const yf = old.py[p] / ht; // 0 mid-thickness … 1 surface
-    old.py[p] *= 1 + (crown / ht) * (1 - zf * zf);
+    const i = Math.floor(p / (old.NJ * old.NK));
+    old.py[p] *= 1 + (crown / ht) * (1 - zf * zf) + (3e-6 / ht) * Math.sin((2 * Math.PI * i) / 5);
     old.pz[p] *= 1 + (barrel / hw) * (1 - yf * yf);
   }
   const top = (s, z) => s.py[s.lattice(s.NI >> 1, s.NJ - 1, Math.min(s.NK - 1, Math.round((z / s.halfWidth0) * s.NK - 0.5)))] + 0.5 * s.dp * s.F[9 * s.lattice(s.NI >> 1, s.NJ - 1, 0) + 4];
@@ -130,6 +133,17 @@ ok(s3.roll.R > 1.1 * s3.params.rolling.rollRadius && A3.sampler.count <= 1, "a f
   const barrelNew = edge(next, 0) - edge(next, 0.9 * next.params.rolling.h0 / 2);
   const barrelOld = edge(old, 0) - edge(old, 0.9 * ht);
   near(barrelNew, barrelOld, 0.15, 'the edge barrel comes through (edge, mid-thickness less 0.9 of the half thickness)', `${(barrelNew * 1e6).toFixed(1)} of ${(barrelOld * 1e6).toFixed(1)} µm`);
+  const topAlongX = (s) => {
+    let lo = Infinity;
+    let hi = -Infinity;
+    for (let i = 0; i < s.NI; i++) {
+      const y = s.py[s.lattice(i, s.NJ - 1, 0)];
+      lo = Math.min(lo, y);
+      hi = Math.max(hi, y);
+    }
+    return hi - lo;
+  };
+  ok(topAlongX(old) > 4e-6 && topAlongX(next) < 1e-9, 'the stripes along x are not carried: the new top row is flat along x', `old ${(topAlongX(old) * 1e6).toFixed(1)} µm peak to peak, new ${(topAlongX(next) * 1e9).toFixed(2)} nm`);
   let inside = true;
   for (let p = 0; p < next.n && inside; p++) inside = next.py[p] > 0 && next.pz[p] > 0 && next.py[p] < 0.6 * P.rolling.h0 && next.pz[p] < 1.2 * hw;
   ok(inside, 'every new point is inside the quarter strip');
