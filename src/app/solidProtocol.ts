@@ -50,6 +50,8 @@ export interface SolidGeometry {
   halfWidth0: number;
   /** the strip's crown at the entry [m] (Sim3 crownIn: a parabola, h0 at the mid-width) */
   crownIn: number;
+  /** the whole thickness solved with both rolls (Sim3 fullThickness); else the top quarter, mirrored in the picture */
+  fullThickness: boolean;
   /** the contact pressure map's first x column [m] */
   mapX0: number;
   /** the plane-strain slab method's roll force per unit width for these conditions [N/m] */

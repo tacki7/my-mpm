@@ -70,6 +70,8 @@ export interface SolidPageSettings {
   /** grid cells through the thickness (even: the mid-thickness is a grid plane) */
   cells: number;
   planeStrain: boolean;
+  /** the whole thickness solved with both rolls (Sim3 fullThickness); else the top quarter (y ≥ 0, z ≥ 0), twice as fast */
+  full: boolean;
   /** the strip's crown at the entry [m]: the mid-width thickness (h0) less the edge's, a parabola across the width */
   crown: number;
   /** the roll bends under the force (Sim3 rollBend): its barrel length, and its supports at the barrel's ends or at bearings span apart [m] */
@@ -100,7 +102,7 @@ interface NumberField {
 }
 
 const NUMBERS: NumberField[] = [
-  { key: 'width', group: 'strip', query: 'W3', label: '板幅', unit: 'mm', step: 1, min: 2, max: 200, scale: mm, hint: '解くのは 1/4（板幅と板厚の中央で鏡映）。時間は板幅に比例: 8 mm で約 2.5 分、40 mm で約 14 分、200 mm は 1 時間以上' },
+  { key: 'width', group: 'strip', query: 'W3', label: '板幅', unit: 'mm', step: 1, min: 2, max: 200, scale: mm, hint: '解くのは 1/4（板幅と板厚の中央で鏡映。「板厚の全体を解く」で上下の両方）。時間は板幅に比例: 8 mm で約 2.5 分、40 mm で約 14 分、200 mm は 1 時間以上' },
   { key: 'length', group: 'strip', query: 'L3', label: '板の長さ', unit: 'mm', step: 1, min: 6, max: 40, scale: mm, hint: '定常の読みには 12 mm ほど要る。「板の長さの取り方」が「定常状態になるまで」なら自動' },
   { key: 'cells', group: 'strip', query: 'cells3', label: '板厚方向のセル数', unit: '', step: 2, min: 4, max: 8, scale: 1, hint: '偶数。4 で約 2〜3 分、6 で約 14 分' },
   { key: 'crown', group: 'strip', query: 'crown3', label: '入側の板クラウン', unit: 'µm', step: 5, min: -500, max: 500, scale: 1e-6, hint: '板幅の中央の板厚（h0）から端の板厚を引いた差。幅方向に 2 次曲線。負なら中央が薄い。板厚の半分まで' },
@@ -111,7 +113,7 @@ const NUMBERS: NumberField[] = [
 const BARREL_OVER = 1.5;
 const FIELD = Object.fromEntries(NUMBERS.map((f) => [f.key, f])) as Record<NumberField['key'], NumberField>;
 
-const DEFAULTS: SolidPageSettings = { width: 8 * mm, length: 12 * mm, cells: 4, planeStrain: false, crown: 0, bend: false, barrel: 300 * mm, support: 'barrel', span: 400 * mm, compute: 'cpu', threads: 1 };
+const DEFAULTS: SolidPageSettings = { width: 8 * mm, length: 12 * mm, cells: 4, planeStrain: false, full: false, crown: 0, bend: false, barrel: 300 * mm, support: 'barrel', span: 400 * mm, compute: 'cpu', threads: 1 };
 
 /** the browser has WebGPU (the worker asks for the device; here only for the select) */
 export const HAS_WEBGPU = typeof navigator !== 'undefined' && !!(navigator as Navigator & { gpu?: unknown }).gpu;
@@ -127,7 +129,7 @@ function checked(s: SolidPageSettings): SolidPageSettings {
   // the strip fits on the barrel with room for its spread (a tandem's later stands are wider), and the bearings are beyond the barrel's ends
   const barrel = clamp(s.barrel, FIELD.barrel, BARREL_OVER * width);
   const span = clamp(s.span, FIELD.span, barrel);
-  return { width, length: clamp(s.length, FIELD.length), cells, planeStrain: s.planeStrain, crown: clamp(s.crown, FIELD.crown), bend: s.bend, barrel, support: s.support === 'bearing' ? 'bearing' : 'barrel', span, compute: s.compute === 'gpu' ? 'gpu' : 'cpu', threads: Math.min(MAX_THREADS, Math.max(1, Math.round(s.threads) || 1)) };
+  return { width, length: clamp(s.length, FIELD.length), cells, planeStrain: s.planeStrain, full: s.full === true, crown: clamp(s.crown, FIELD.crown), bend: s.bend, barrel, support: s.support === 'bearing' ? 'bearing' : 'barrel', span, compute: s.compute === 'gpu' ? 'gpu' : 'cpu', threads: Math.min(MAX_THREADS, Math.max(1, Math.round(s.threads) || 1)) };
 }
 
 /** what the solver is told about the roll's bending: nothing with a rigid roll */
@@ -142,6 +144,7 @@ function settingsOf(q: URLSearchParams): SolidPageSettings {
     if (Number.isFinite(v) && v >= f.min && v <= f.max) s[f.key] = v * f.scale;
   }
   s.planeStrain = q.get('ps3') === '1';
+  s.full = q.get('full3') === '1';
   s.bend = q.get('bend3') === '1';
   s.support = q.get('support3') === 'bearing' ? 'bearing' : 'barrel';
   s.compute = q.get('gpu3') === '1' ? 'gpu' : 'cpu';
@@ -209,6 +212,7 @@ export class SolidMode {
   private readonly stopAfter: number | null;
   private readonly inputs = new Map<NumberField['key'], HTMLInputElement>();
   private planeStrainBox!: HTMLInputElement;
+  private fullBox!: HTMLInputElement;
   private computeSelect!: HTMLSelectElement;
   private threadsInput!: HTMLInputElement;
   /** under the select: what the GPU is, or why the run is on the CPU after all */
@@ -371,6 +375,14 @@ export class SolidMode {
     ps.append(this.planeStrainBox, el('span', undefined, '板幅方向を止めて解く（平面ひずみ）'));
     ps.title = '板幅方向の速度を 0 にする。2 次元の断面と同じ問題になるので、3 次元の計算の確かめに使う';
     fs.append(ps);
+    const fullRow = el('label', 'field check');
+    this.fullBox = el('input');
+    this.fullBox.type = 'checkbox';
+    this.fullBox.name = 'solid-full';
+    this.fullBox.addEventListener('change', () => this.o.onEdit());
+    fullRow.append(this.fullBox, el('span', undefined, '板厚の全体を解く（ロール 2 本）'));
+    fullRow.title = '板厚の中央を対称面にせず、上下のロールの両方と板厚の全体を解く。点が 2 倍で時間も 2 倍。条件が上下対称なら 1/4 モデルと同じ答えになる';
+    fs.append(fullRow);
     const computeRow = el('label', 'field');
     computeRow.append(el('span', 'field-label', '計算'));
     const computeBox = el('span', 'field-input');
@@ -464,6 +476,7 @@ export class SolidMode {
     this.shown = { ...s };
     for (const f of NUMBERS) showNumber(this.inputs.get(f.key)!, s[f.key] / f.scale);
     this.planeStrainBox.checked = s.planeStrain;
+    this.fullBox.checked = s.full;
     this.bendBox.checked = s.bend;
     this.supportSelect.value = s.support;
     this.computeSelect.value = s.compute;
@@ -483,6 +496,7 @@ export class SolidMode {
       if (Number.isFinite(v)) s[f.key] = v * f.scale;
     }
     s.planeStrain = this.planeStrainBox.checked;
+    s.full = this.fullBox.checked;
     s.bend = this.bendBox.checked;
     s.support = this.supportSelect.value === 'bearing' ? 'bearing' : 'barrel';
     s.compute = this.computeSelect.value === 'gpu' ? 'gpu' : 'cpu';
@@ -672,6 +686,7 @@ export class SolidMode {
     const s = this.settings;
     for (const f of NUMBERS) if ((f.group === 'strip' && (f.key !== 'crown' || s.crown !== 0)) || (s.bend && (f.key === 'barrel' || s.support === 'bearing'))) q.set(f.query, String(+(s[f.key] / f.scale).toFixed(3)));
     if (s.planeStrain) q.set('ps3', '1');
+    if (s.full) q.set('full3', '1');
     if (s.bend) q.set('bend3', '1');
     if (s.bend && s.support === 'bearing') q.set('support3', 'bearing');
     if (s.compute === 'gpu') q.set('gpu3', '1');
@@ -765,7 +780,7 @@ export class SolidMode {
     this.tape.clear();
     this.stopReplay();
     const crown = Math.max(-0.5 * P.rolling.h0, Math.min(0.5 * P.rolling.h0, this.settings.crown));
-    const solid: SolidSettings = { width: this.settings.width, planeStrain: this.settings.planeStrain, rollBend: rollBendOf(this.settings), ...(crown !== 0 ? { crownIn: crown } : {}) };
+    const solid: SolidSettings = { width: this.settings.width, planeStrain: this.settings.planeStrain, ...(this.settings.full ? { fullThickness: true } : {}), rollBend: rollBendOf(this.settings), ...(crown !== 0 ? { crownIn: crown } : {}) };
     this.send({ type: 'init', params: P, solid, stands: P.rolling.stands ?? 1, handoff: P.rolling.handoff ?? 'done', stopAfter: this.stopAfter, compute: this.settings.compute, threads: this.settings.threads });
     this.standTable.update(1, [], 0, false, null, null);
     this.explorer.reset();
@@ -1138,7 +1153,7 @@ export class SolidMode {
       ['最大損傷', d.maxDamage.toFixed(3), '', false],
       ['亀裂になった点', String(d.nFailed), '個', false],
       ['最初の亀裂', c0 ? (c0.t * 1e3).toFixed(2) : '—', 'ms', false],
-      ['粒子数（1/4 モデル）', g.n.toLocaleString(), '個', false],
+      [g.fullThickness ? '粒子数（1/2 モデル: 板厚の全体）' : '粒子数（1/4 モデル）', g.n.toLocaleString(), '個', false],
       ['時間刻み', (g.dt * 1e9).toFixed(1), 'ns', false],
       ['1 ステップの計算時間', f.msPerStep ? f.msPerStep.toFixed(2) : '—', 'ms', false],
       ['計算', g.compute === 'gpu' ? `GPU（${[g.gpu?.vendor, g.gpu?.architecture, g.gpu?.backend].filter(Boolean).join(' ') || 'WebGPU'}）` : g.threads > 1 ? `CPU（${g.threads} スレッド）` : 'CPU', '', false],
@@ -1197,7 +1212,7 @@ export class SolidMode {
     const html = `
       <div class="bar" style="background:linear-gradient(90deg,${stops.join(',')})"></div>
       <div class="ends"><span>${fmt(lo)}${unit}</span><span>${info.label}</span><span>${fmt(hi)}${unit}</span></div>
-      <div class="exag">板の表面の色。解くのは 1/4 で、板厚と板幅の中央（点線）で鏡映して表示${ys !== 1 ? `。板厚方向を ${ys} 倍に拡大（ロールの円弧も）` : ''}${this.settings.planeStrain ? '。板幅方向を止めた計算（平面ひずみ）' : ''}</div>
+      <div class="exag">板の表面の色。${this.settings.full ? '解くのは板厚の全体と板幅の半分で、板幅の中央（点線）で鏡映して表示' : '解くのは 1/4 で、板厚と板幅の中央（点線）で鏡映して表示'}${ys !== 1 ? `。板厚方向を ${ys} 倍に拡大（ロールの円弧も）` : ''}${this.settings.planeStrain ? '。板幅方向を止めた計算（平面ひずみ）' : ''}</div>
       ${failed ? '<div class="failed-key"><span class="swatch"></span>藍墨の面は亀裂になった点</div>' : ''}
       ${roles.has('first-crack') ? '<div class="failed-key"><span class="ring crack"></span>赤の点線の丸は最初の亀裂</div>' : ''}
       ${roles.has('max-damage') ? '<div class="failed-key"><span class="ring worst"></span>茶の点線の丸は損傷がいちばん大きい点</div>' : ''}`;

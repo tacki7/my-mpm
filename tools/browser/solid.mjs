@@ -448,6 +448,33 @@ try {
   ok(Math.abs(h2 - h0) < 3, 'a double click puts the graphs back to their default height', `${h2} vs ${h0}`);
   await shot('crown');
 
+  // ── the whole thickness (both rolls): the checkbox, the URL, the model, the bottom face, the results; page = tool
+  await c.navigate(page('?dim=3&W3=2'));
+  await c.waitFor('__mpm.solid.active && __mpm.solid.ready', 60000);
+  await click('[name="solid-full"]');
+  await click('#reset');
+  await c.waitFor('__mpm.solid.ready && __mpm.solid.settings.full === true && __mpm.solid.geometry && __mpm.solid.geometry.fullThickness === true', 60000);
+  const fUrl = await c.evaluate('__mpm.solid.url');
+  ok(/full3=1/.test(fUrl), 'the checkbox reaches the model and the conditions URL (full3=1)', fUrl);
+  const fGeo = await c.evaluate('__mpm.solid.geometry');
+  const qGeo = JSON.parse(execFileSync('node', ['tools/solid.mjs', '--W', '2', '--cells', '4', '--json'], { encoding: 'utf8' }));
+  ok(fGeo.lattice[1] === 8 && fGeo.n === 2 * qGeo.points, 'twice the lattice rows and points of the quarter model', `${fGeo.lattice.join(' × ')}, ${fGeo.n} vs ${qGeo.points}`);
+  await click('#run');
+  await c.waitFor('__mpm.solid.done', 600000);
+  await painted();
+  const fd = await c.evaluate('__mpm.solid.diag');
+  const fullTool = JSON.parse(execFileSync('node', ['tools/solid.mjs', '--W', '2', '--cells', '4', '--full', '--json'], { encoding: 'utf8' }));
+  ok(fd.steady && rel(fd.steady.force * 1e-3, fullTool.steady.force_kN) < 1e-5, 'the steady force of the page equals the tool\'s --full (1e-5)', `${(fd.steady?.force * 1e-3).toFixed(4)} vs ${fullTool.steady.force_kN.toFixed(4)} kN`);
+  ok(rel(fullTool.steady.force_kN, qGeo.steady.force_kN) < 1e-9 && rel(fullTool.steady.centreThickness_mm, qGeo.steady.centreThickness_mm) < 1e-9, 'the whole thickness gives the quarter model\'s force and thickness (symmetric conditions, 1e-9)', `${fullTool.steady.force_kN} vs ${qGeo.steady.force_kN} kN`);
+  const fFaces = await c.evaluate('__mpm.solid.frameShown.faces.map((f) => f.name)');
+  ok(fFaces.includes('bottom'), 'the frame carries the bottom face', fFaces.join(','));
+  const fRow = await c.evaluate(`[...document.querySelectorAll('#solid-results tr')].map((r) => r.textContent).find((t) => /粒子数/.test(t))`);
+  ok(/1\/2 モデル/.test(fRow) && new RegExp(fGeo.n.toLocaleString()).test(fRow), 'the results say 1/2 model with the point count', fRow);
+  // the picture: a point under the mid-plane projects below one above it (the picture is not the top half mirrored: the bottom face is its own)
+  const under = await c.evaluate(`(() => ({ under: __mpm.solid.screenOfPoint(-0.004, -0.0004, 0), over: __mpm.solid.screenOfPoint(-0.004, 0.0004, 0) }))()`);
+  ok(under.under && under.over && under.under.y > under.over.y, 'a point below the mid-plane projects under one above it', JSON.stringify(under));
+  await shot('full');
+
   // ── a narrow screen
   await c.setViewport(700, 1000);
   await c.navigate(page('?dim=3'));

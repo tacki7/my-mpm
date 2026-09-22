@@ -280,7 +280,7 @@ export function stripOut(sim: Sim3, sample: [number, number] | null = null): { t
   }
   hw /= (i1 - i0) * NJ;
   const length = ((columnX(sim, i1 - 1) - columnX(sim, i0)) * (i1 - i0)) / (i1 - 1 - i0);
-  return { thickness: (2 * vol) / (length * hw), width: 2 * hw };
+  return { thickness: (2 * sim.rollShare * vol) / (length * hw), width: 2 * hw };
 }
 
 /**
@@ -364,14 +364,15 @@ export function remap3(old: Sim3, base: Solid3Params, h1: number, w1: number, sa
     }
     P.rolling.entryStrain = c ? ep / c : 0;
   }
-  // the quarter's mass
+  // the solved part's mass (the quarter's, or the half's with the whole thickness)
+  const parts = old.fullThickness ? 2 : 4;
   let M = 0;
   if (sample) {
     P.rolling.sheetLength = steadyLength3(P);
-    M = (rho * h1 * w1 * P.rolling.sheetLength) / 4;
+    M = (rho * h1 * w1 * P.rolling.sheetLength) / parts;
   } else {
     for (let p = 0; p < old.n; p++) if (old.active[p]) M += old.mass[p];
-    P.rolling.sheetLength = (4 * M) / (rho * h1 * w1);
+    P.rolling.sheetLength = (parts * M) / (rho * h1 * w1);
   }
   const sim = new Sim3(P, simOpts);
   const n = sim.n;
@@ -406,7 +407,7 @@ export function remap3(old: Sim3, base: Solid3Params, h1: number, w1: number, sa
       const j = Math.floor(q / old.NK);
       const k = q % old.NK;
       // a section with no active point anywhere: the undeformed lattice position
-      meanY[q] = c ? meanY[q] / c : (j + 0.5) * old.dp;
+      meanY[q] = c ? meanY[q] / c : (j + 0.5 - old.jOff) * old.dp;
       meanZ[q] = c ? meanZ[q] / c : (k + 0.5) * old.dz;
     }
   }
@@ -439,7 +440,8 @@ export function remap3(old: Sim3, base: Solid3Params, h1: number, w1: number, sa
     const p = old.lattice(io, jo, ko);
     parentOf[q] = p;
     // the shape: y and z where the old column has them; the symmetry planes are not crossed
-    sim.py[q] = Math.max(0.25 * sim.dp, at(meanY, jf, kf));
+    const yq = at(meanY, jf, kf);
+    sim.py[q] = sim.fullThickness ? yq : Math.max(0.25 * sim.dp, yq);
     sim.pz[q] = Math.max(0.25 * sim.dz, at(meanZ, jf, kf));
     sim.sxx[q] = old.sxx[p];
     sim.syy[q] = old.syy[p];

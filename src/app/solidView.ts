@@ -1,4 +1,5 @@
-// The three-dimensional picture: the strip's faces (the quarter the model solves, mirrored to the whole strip)
+// The three-dimensional picture: the strip's faces (the quarter the model solves, mirrored to the whole strip; with
+// the whole thickness solved, the top and bottom faces as they are, mirrored across the mid-width only)
 // between the two rolls, drawn on a 2D canvas as an axonometric drawing — parallel projection, the faces' cells
 // filled far to near, the strip's outline in ink. The top roll is drawn over the strip as a ghost, so the bite
 // stays visible; the bottom roll is solid steel under it.
@@ -291,16 +292,19 @@ export class SolidView {
     const shown: [Face, number, number, number][] = [];
     const byName = (n: Face['name']) => f.faces.find((x) => x.name === n)!;
     const zSides = this.cut ? [-1] : [1, -1];
+    // the whole thickness solved: the bottom face is its own, nothing is mirrored across y
+    const full = this.geometry?.fullThickness === true;
+    const ySides = full ? [1] : [1, -1];
     for (const sz of zSides) {
       if (facing(0, 1, 0)) shown.push([byName('top'), 1, sz, 1]);
-      if (facing(0, -1, 0)) shown.push([byName('top'), -1, sz, 0.8]);
-      for (const sy of [1, -1]) {
+      if (facing(0, -1, 0)) shown.push([full ? byName('bottom') : byName('top'), full ? 1 : -1, sz, 0.8]);
+      for (const sy of ySides) {
         if (facing(0, 0, sz)) shown.push([byName('edge'), sy, sz, 0.9]);
         if (facing(1, 0, 0)) shown.push([byName('head'), sy, sz, 0.84]);
         if (facing(-1, 0, 0)) shown.push([byName('tail'), sy, sz, 0.84]);
       }
     }
-    if (this.cut && facing(0, 0, 1)) for (const sy of [1, -1]) shown.push([byName('cut'), sy, -1, 0.95]);
+    if (this.cut && facing(0, 0, 1)) for (const sy of ySides) shown.push([byName('cut'), sy, -1, 0.95]);
 
     let total = 0;
     for (const [face] of shown) total += (face.rows - 1) * (face.cols - 1);
@@ -397,8 +401,8 @@ export class SolidView {
         if (Math.abs(pos[3 * v + 1]) > 1e-12) onY = false;
         if (Math.abs(pos[3 * v + 2]) > 1e-12) onZ = false;
       }
-      // drawn dotted: where the solved quarter meets its mirror image
-      const seam = onY || (onZ && !this.cut);
+      // drawn dotted: where the solved quarter meets its mirror image (across y only when the top half is what is solved)
+      const seam = (onY && this.geometry?.fullThickness !== true) || (onZ && !this.cut);
       ctx.setLineDash(seam ? [2, 3] : []);
       let pen = false;
       ctx.beginPath();
