@@ -21,6 +21,8 @@ let msPerStep = 0;
 let tail0: number | null = null;
 
 const FRAME_MS = 33;
+/** the interval between frames the page asked for (a 'frame-ms' message; FRAME_MS when it asks for the worker's own) */
+let frameMs = FRAME_MS;
 
 function post(msg: FromPlanWorker, transfer: Transferable[] = []) {
   (self as unknown as Worker).postMessage(msg, transfer);
@@ -121,7 +123,7 @@ function loop(): void {
   const t0 = performance.now();
   let steps = 0;
   let reached = false;
-  while (performance.now() - t0 < FRAME_MS - 6 && !finished) {
+  while (performance.now() - t0 < Math.max(10, frameMs - 6) && !finished) {
     let chunk = Math.min(25, SAMPLE_STEPS - (s.step % SAMPLE_STEPS));
     if (stopAfter !== null) chunk = Math.min(chunk, stopAfter - s.step);
     for (let k = 0; k < chunk; k++) s.advance();
@@ -183,6 +185,9 @@ self.onmessage = (e: MessageEvent<ToPlanWorker>) => {
       case 'pause':
         running = false;
         frame();
+        break;
+      case 'frame-ms':
+        frameMs = m.ms > 0 ? m.ms : FRAME_MS;
         break;
       case 'field':
         field = m.field;

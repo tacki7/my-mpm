@@ -15,6 +15,7 @@ import { PLAN_FIELDS, PlanView, planFieldInfo } from './planView.ts';
 import { conditionsQuery } from './query.ts';
 import { radioGroup } from './radioGroup.ts';
 import { say } from './liveText.ts';
+import { frameMs } from './frameRate.ts';
 import { Eta, etaText } from './eta.ts';
 
 export type ViewMode = 'section' | 'plan';
@@ -281,8 +282,14 @@ export class PlanMode {
     this.worker?.postMessage(m);
   }
 
+  /** the frame interval changed (src/app/frameRate.ts): the worker takes it up at its next frame */
+  frameMs(ms: number): void {
+    this.send({ type: 'frame-ms', ms });
+  }
+
   private startWorker(): void {
     this.worker = new Worker(new URL('./plan.worker.ts', import.meta.url), { type: 'module' });
+    this.send({ type: 'frame-ms', ms: frameMs() });
     this.worker.onmessage = (e: MessageEvent<FromPlanWorker>) => {
       const m = e.data;
       if (m.type === 'ready') {

@@ -15,9 +15,11 @@ export type SolidFieldName = 'seq' | 'ep' | 'pres' | 'eta' | 'sxx' | 'syy' | 'sz
 export const SOLID_FIELD_IDS: readonly SolidFieldName[] = ['seq', 'ep', 'pres', 'eta', 'sxx', 'syy', 'szz', 'damage', 'spread'];
 
 export type ToSolidWorker =
-  | { type: 'init'; params: SimParams; solid: SolidSettings; stands: number; handoff: Handoff; stopAfter: number | null; compute: Compute }
+  | { type: 'init'; params: SimParams; solid: SolidSettings; stands: number; handoff: Handoff; stopAfter: number | null; compute: Compute; threads: number }
   | { type: 'run' }
-  | { type: 'pause' };
+  | { type: 'pause' }
+  /** the interval between frames [ms]; 0 for the worker's own (src/app/frameRate.ts) */
+  | { type: 'frame-ms'; ms: number };
 
 /** where the step runs: the CPU (advance, f64), or a WebGPU device (Sim3.advanceBatch, f32, batches of steps) */
 export type Compute = 'cpu' | 'gpu';
@@ -28,6 +30,9 @@ export interface SolidGeometry {
   compute: Compute;
   gpu: GpuInfo | null;
   gpuNote: string | null;
+  /** the threads the CPU's step runs on (a team, src/mpm/solid/team.ts; 1 alone); `threadsNote`: why fewer than asked for */
+  threads: number;
+  threadsNote: string | null;
   /** the stand (0 first) of `stands` */
   stand: number;
   stands: number;

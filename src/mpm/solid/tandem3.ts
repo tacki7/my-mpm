@@ -15,7 +15,8 @@
 import { elasticConstants } from '../material.ts';
 import { cloneParams } from '../params.ts';
 import { MAX_STANDS, type Handoff, type TandemStop } from '../tandem.ts';
-import { Sim3, solidScales, type Solid3Params } from './sim3.ts';
+import { Sim3, solidScales, type Sim3Options, type Solid3Params } from './sim3.ts';
+import type { Team } from './team.ts';
 import { READ_STEPS, SolidSampler, type SolidLook, type SolidSteady } from './steady.ts';
 
 export { MAX_STANDS };
@@ -106,13 +107,18 @@ export class Tandem3 {
   private finished = false;
   /** the device the stands step on (useGpu); null: the CPU */
   private device: GPUDevice | null = null;
+  /** the team of workers the stands step with (useTeam); null: this thread alone */
+  private team: Team | null = null;
+  /** how every stand's Sim3 is made (a team's coordinator: `{ shared: true, size }`) */
+  private readonly simOpts: Sim3Options;
 
-  constructor(params: Solid3Params, stands = 1, handoff: Handoff = 'done') {
+  constructor(params: Solid3Params, stands = 1, handoff: Handoff = 'done', simOpts: Sim3Options = {}) {
     if (!(Number.isInteger(stands) && stands >= 1 && stands <= MAX_STANDS)) throw new Error(`stands must be 1 to ${MAX_STANDS}`);
     this.stands = stands;
     this.handoff = handoff;
     this.base = withSteadyLength3(params);
-    this.sim = new Sim3(this.base);
+    this.simOpts = simOpts;
+    this.sim = new Sim3(this.base, simOpts);
   }
 
   /** true once the last stand has ended, or the tandem stopped */
@@ -124,6 +130,24 @@ export class Tandem3 {
   async useGpu(device: GPUDevice): Promise<void> {
     this.device = device;
     await this.sim.attachGpu(device);
+  }
+
+  /** the current stand and the ones after it step with the team (Team.attach; the Sim3s made with its size); advanceTeam() from then on */
+  async useTeam(team: Team): Promise<void> {
+    this.team = team;
+    await team.attach(this.sim);
+  }
+
+  /** advance() with the team (Team.step); a stand that ends hands the team to the next */
+  async advanceTeam(): Promise<SolidLook | null> {
+    if (this.finished) return null;
+    const sim = this.sim;
+    const team = this.team;
+    if (!team) throw new Error('no team (useTeam)');
+    team.step();
+    const look = this.lookAfterStep();
+    if (this.sim !== sim) await team.attach(this.sim);
+    return look;
   }
 
   /**
@@ -175,7 +199,7 @@ export class Tandem3 {
       const whole = result.thicknessOut > 0 && result.widthOut > 0;
       this.stopped = phase === 'stalled' ? 'stalled' : result.separated ? 'separated' : result.massLost > 0 || !whole ? 'lost' : null;
     }
-    const next = more && !this.stopped ? remap3(old, this.base, result.thicknessOut, result.widthOut, sample) : null;
+    const next = more && !this.stopped ? remap3(old, this.base, result.thicknessOut, result.widthOut, sample, this.simOpts) : null;
     this.onStandDone?.({ stand: this.stand, sim: old, next, result });
     if (!next) {
       this.finished = true;
@@ -319,7 +343,7 @@ export function separated3(sim: Sim3): boolean {
  * stand's gauge hunt and rolls that follow the pass never settle. Along x the new lattice is regular; the head's
  * and the tail's shapes are not carried.
  */
-export function remap3(old: Sim3, base: Solid3Params, h1: number, w1: number, sample: [number, number] | null = null): Sim3 {
+export function remap3(old: Sim3, base: Solid3Params, h1: number, w1: number, sample: [number, number] | null = null, simOpts: Sim3Options = {}): Sim3 {
   const P: Solid3Params = { ...cloneParams(base), solid: { ...base.solid, width: w1 } };
   const rho = P.material.rho * P.numerics.massScale;
   P.rolling.h0 = h1;
@@ -349,7 +373,7 @@ export function remap3(old: Sim3, base: Solid3Params, h1: number, w1: number, sa
     for (let p = 0; p < old.n; p++) if (old.active[p]) M += old.mass[p];
     P.rolling.sheetLength = (4 * M) / (rho * h1 * w1);
   }
-  const sim = new Sim3(P);
+  const sim = new Sim3(P, simOpts);
   const n = sim.n;
   const K = sim.el.K;
   // new columns per old column: the ratio of the masses of a lattice column, old to new

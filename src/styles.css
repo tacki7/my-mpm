@@ -144,6 +144,18 @@ button.pending {
   text-align: right;
 }
 
+/* the frame interval, under the clock (src/app/frameRate.ts) */
+.frame-rate {
+  display: block;
+  margin-top: 2px;
+  font-size: var(--fs-xs);
+}
+
+.frame-rate select {
+  font: inherit;
+  margin-left: 0.3em;
+}
+
 /* the time the run still needs, over the clock; its line is kept while it is empty so the masthead does not jump */
 .eta {
   display: block;

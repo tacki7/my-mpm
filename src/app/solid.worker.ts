@@ -4,6 +4,7 @@ import { solidParams, type Sim3 } from '../mpm/solid/sim3.ts';
 import { READ_STEPS, type SolidLook } from '../mpm/solid/steady.ts';
 import { Tandem3, steadyLength3 } from '../mpm/solid/tandem3.ts';
 import { requestGpu, type GpuInfo } from '../mpm/solid/gpu/stepper.ts';
+import { Team, type TeamPort } from '../mpm/solid/team.ts';
 import { CTL_EVERY } from '../mpm/solver.ts';
 import { standEndTail, standProgress } from '../mpm/progress.ts';
 import { faces } from '../mpm/solid/surface.ts';
@@ -24,6 +25,10 @@ let compute: Compute = 'cpu';
 let gpuInfo: GpuInfo | null = null;
 let gpuNote: string | null = null;
 let gpuDevice: GPUDevice | null = null;
+/** the team of helper workers the CPU's step runs on (kept across inits of the same size), and why it is smaller than asked for */
+let team: Team | null = null;
+let threads = 1;
+let threadsNote: string | null = null;
 /** an init that came while the GPU was being asked for is the one to keep */
 let initSeq = 0;
 
@@ -49,6 +54,8 @@ function progressOf(T: Tandem3): number {
 
 // a frame of the faces is light, but a step is heavy (tens of ms on a fine grid): a frame at least every FRAME_MS
 const FRAME_MS = 80;
+/** the interval between frames the page asked for (a 'frame-ms' message; FRAME_MS when it asks for the worker's own) */
+let frameMs = FRAME_MS;
 
 function post(msg: FromSolidWorker, transfer: Transferable[] = []) {
   (self as unknown as Worker).postMessage(msg, transfer);
@@ -86,6 +93,8 @@ function ready(T: Tandem3): void {
       compute,
       gpu: compute === 'gpu' ? gpuInfo : null,
       gpuNote,
+      threads,
+      threadsNote,
       stand: T.stand,
       stands: T.stands,
       sheetLength: sim.params.rolling.sheetLength,
@@ -173,11 +182,15 @@ function loop(): void {
     void loopGpu();
     return;
   }
+  if (team) {
+    void loopTeam();
+    return;
+  }
   const T = tandem;
   const t0 = performance.now();
   let steps = 0;
   let reached = false;
-  while (performance.now() - t0 < FRAME_MS && !finished) {
+  while (performance.now() - t0 < frameMs && !finished) {
     const chunk = chunkOf(T, 5);
     for (let k = 0; k < chunk; k++) {
       const stand = T.stand;
@@ -213,7 +226,7 @@ async function loopGpu(): Promise<void> {
   let steps = 0;
   let reached = false;
   try {
-    while (performance.now() - t0 < FRAME_MS && !finished && running && seq === initSeq) {
+    while (performance.now() - t0 < frameMs && !finished && running && seq === initSeq) {
       const chunk = chunkOf(T, CTL_EVERY - (T.sim.step % CTL_EVERY));
       if (chunk > 0) {
         const stand = T.stand;
@@ -243,10 +256,115 @@ async function loopGpu(): Promise<void> {
   if (running) timer = setTimeout(loop, 0);
 }
 
+/**
+ * The team's loop: the CPU's loop with Tandem3.advanceTeam (a promise, settled at once but where a stand ends
+ * and the next attaches). A worker of the team that throws ends the pass with the error.
+ */
+async function loopTeam(): Promise<void> {
+  const T = tandem!;
+  const seq = initSeq;
+  const t0 = performance.now();
+  let steps = 0;
+  let reached = false;
+  try {
+    while (performance.now() - t0 < frameMs && !finished && running && seq === initSeq) {
+      const chunk = chunkOf(T, 5);
+      for (let k = 0; k < chunk; k++) {
+        const stand = T.stand;
+        const t = T.tOffset + T.sim.t + T.sim.dt;
+        const l = await T.advanceTeam();
+        if (seq !== initSeq) return;
+        if (l) afterLook(T, stand, t, l);
+      }
+      tracker?.record();
+      steps += Math.max(0, chunk);
+      if (stopAfter !== null && T.stepOffset + T.sim.step >= stopAfter) {
+        reached = true;
+        break;
+      }
+    }
+  } catch (err) {
+    running = false;
+    team?.close();
+    team = null;
+    post({ type: 'error', message: String((err as Error)?.message ?? err) });
+    return;
+  }
+  if (steps) msPerStep = (performance.now() - t0) / steps;
+  if (reached) stopAfter = null;
+  if (finished || reached) running = false;
+  frame();
+  if (running) timer = setTimeout(loop, 0);
+}
+
+/** a helper worker of the team behind the port Team wants */
+function spawnHelper(): TeamPort {
+  const w = new Worker(new URL('./solid.helper.worker.ts', import.meta.url), { type: 'module' });
+  let handler: TeamPort['onmessage'] = null;
+  w.onmessage = (e: MessageEvent) => handler?.(e.data);
+  return {
+    postMessage: (m) => w.postMessage(m),
+    get onmessage() {
+      return handler;
+    },
+    set onmessage(h) {
+      handler = h;
+    },
+    terminate: () => w.terminate(),
+  };
+}
+
+/** the threads the CPU's step can run on: the team's size is what the Tandem3 is made for, so this is settled before it is made */
+function threadsFor(want: number): number {
+  threadsNote = null;
+  const n = Math.max(1, Math.floor(want));
+  if (n <= 1) return 1;
+  if (typeof SharedArrayBuffer === 'undefined' || !(self as unknown as { crossOriginIsolated?: boolean }).crossOriginIsolated) {
+    threadsNote = 'このページは SharedArrayBuffer が使えない（cross-origin isolated でない）ので 1 スレッドで計算する';
+    return 1;
+  }
+  return n;
+}
+
+/** the tandem of an init, made for `threads` (a Sim3 made for a team steps only its own share alone: one made anew when the team fails) */
+function makeTandem(m: ToSolidWorker & { type: 'init' }): Tandem3 {
+  const T = new Tandem3(solidParams(m.params, m.solid), m.stands, m.handoff, threads > 1 ? { shared: true, size: threads } : {});
+  tandem = T;
+  tracker = new Tracker3(T.sim);
+  T.onStandDone = (e) => {
+    // the stand's last steps go on its paths; the next stand's tracker carries them on (Sim3.parentOf)
+    // and retires this one
+    tracker?.record();
+    post({ type: 'stand', result: e.result });
+    if (e.next) tracker = new Tracker3(e.next, tracker);
+  };
+  return T;
+}
+
 /** the device for the step where it is asked for and there (once per worker; kept across inits), then the ready */
-async function setCompute(T: Tandem3, want: Compute, seq: number): Promise<void> {
+async function setCompute(m: ToSolidWorker & { type: 'init' }, seq: number): Promise<void> {
+  const want = m.compute;
+  let T = makeTandem(m);
   compute = 'cpu';
   gpuNote = null;
+  if (want === 'cpu' && threads > 1) {
+    try {
+      if (team && team.size !== threads) {
+        team.close();
+        team = null;
+      }
+      if (!team) team = new Team(threads, spawnHelper);
+      await T.useTeam(team);
+      if (seq !== initSeq) return;
+    } catch (err) {
+      if (seq !== initSeq) return;
+      team?.close();
+      team = null;
+      threadsNote = `スレッドが使えないので 1 スレッドで計算する（${String((err as Error)?.message ?? err)}）`;
+      threads = 1;
+      T = makeTandem(m);
+    }
+  }
   if (want === 'gpu') {
     try {
       if (!gpuDevice) {
@@ -290,17 +408,12 @@ self.onmessage = (e: MessageEvent<ToSolidWorker>) => {
         stopAfter = m.stopAfter;
         history = { t: [], force: [], stand: [] };
         tandem?.sim.detachGpu();
-        const T = new Tandem3(solidParams(m.params, m.solid), m.stands, m.handoff);
-        tandem = T;
-        tracker = new Tracker3(T.sim);
-        T.onStandDone = (e) => {
-          // the stand's last steps go on its paths; the next stand's tracker carries them on (Sim3.parentOf)
-          // and retires this one
-          tracker?.record();
-          post({ type: 'stand', result: e.result });
-          if (e.next) tracker = new Tracker3(e.next, tracker);
-        };
-        void setCompute(T, m.compute, initSeq);
+        threads = m.compute === 'cpu' ? threadsFor(m.threads) : 1;
+        if (threads === 1 && team) {
+          team.close();
+          team = null;
+        }
+        void setCompute(m, initSeq);
         break;
       }
       case 'run':
@@ -312,6 +425,9 @@ self.onmessage = (e: MessageEvent<ToSolidWorker>) => {
       case 'pause':
         running = false;
         frame();
+        break;
+      case 'frame-ms':
+        frameMs = m.ms > 0 ? m.ms : FRAME_MS;
         break;
     }
   } catch (err) {

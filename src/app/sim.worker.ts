@@ -53,6 +53,8 @@ interface Picture {
 }
 
 const FRAME_MS = 33;
+/** the interval between frames the page asked for (a 'frame-ms' message; FRAME_MS when it asks for the worker's own) */
+let frameMs = FRAME_MS;
 /** steps between the tandem's own reads (tools/tandem.mjs reads at the same steps, so the results agree) */
 const EVERY = READ_STEPS;
 
@@ -286,7 +288,7 @@ function loop(): void {
   if (!sim || !running) return;
   const t0 = performance.now();
   let steps = 0;
-  while (performance.now() - t0 < FRAME_MS - 6) {
+  while (performance.now() - t0 < Math.max(10, frameMs - 6)) {
     const chunk = stopAfter === null ? 20 : Math.min(20, stopAfter - passStep());
     const t = tandem!;
     for (let k = 0; k < chunk; k++) {
@@ -348,6 +350,9 @@ self.onmessage = (e: MessageEvent<ToWorker>) => {
       case 'pause':
         running = false;
         frame();
+        break;
+      case 'frame-ms':
+        frameMs = m.ms > 0 ? m.ms : FRAME_MS;
         break;
       case 'field':
         field = m.field;
