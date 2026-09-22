@@ -1,11 +1,11 @@
 // One pass of the three-dimensional model (src/mpm/solid/sim3.ts), headless.
 //   node tools/solid.mjs [--W 8] [--L 12] [--cells 4] [--r 0.25] [--R 100] [--h0 1] [--mu 0.08] [--mat spcc]
-//                        [--plane-strain] [--max 200000] [--json]
+//                        [--tb 0] [--tf 0] [--plane-strain] [--max 200000] [--json]
 //                        [--length steady] [--stands 3] [--handoff done|steady]
 //                        [--flatten hitchcock] [--rollE 206] [--control reduction]
 // --length steady: the strip as long as the steady looks need (--L is not used). --stands: a tandem, every stand
 // the same condition, the strip carried from stand to stand (src/mpm/solid/tandem3.ts).
-// Lengths in mm, the reduction as a fraction. The steady values are read as the page reads them (steady.ts).
+// Lengths in mm, tensions in MPa, the reduction as a fraction. The steady values are read as the page reads them (steady.ts).
 import { defaultParams, MATERIALS } from '../src/mpm/params.ts';
 import { solidParams } from '../src/mpm/solid/sim3.ts';
 import { Tandem3 } from '../src/mpm/solid/tandem3.ts';
@@ -21,6 +21,8 @@ r.reduction = +opt('r', 0.25);
 r.rollRadius = +opt('R', 100) * 1e-3;
 r.sheetLength = +opt('L', 12) * 1e-3;
 r.mu = +opt('mu', 0.08);
+r.backTension = +opt('tb', 0) * 1e6;
+r.frontTension = +opt('tf', 0) * 1e6;
 if (opt('length', 'fixed') === 'steady') r.lengthMode = 'steady';
 if (opt('flatten', 'none') === 'hitchcock') r.flattening = 'hitchcock';
 if (has('rollE')) r.rollE = +opt('rollE') * 1e9;

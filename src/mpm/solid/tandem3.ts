@@ -12,6 +12,7 @@
 // rising toward the edge) is not carried, its mean thickness and width are.
 //
 // One stand is a plain pass: the same steps and looks as Sim3 with a SolidSampler.
+import { elasticConstants } from '../material.ts';
 import { cloneParams } from '../params.ts';
 import { MAX_STANDS, type Handoff, type TandemStop } from '../tandem.ts';
 import { Sim3, solidScales, type Solid3Params } from './sim3.ts';
@@ -71,7 +72,13 @@ export function steadyLength3(P: Solid3Params): number {
   const out = Math.max((3 * r.h0 + s.contactLength) * (1 - r.reduction), s.xExitProbe * (1 - r.reduction) + STEADY_LOOKS * look);
   // rolls that follow the pass settle 1.5 transit times after the head is out, and the stretch is the strip rolled after that (tandem.ts)
   const settle = s.rollsAdjusted ? 2 * s.contactLength + 3 * r.h0 * (1 - r.reduction) : 0;
-  return s.contactLength + out + settle + look + r.h0;
+  const base = s.contactLength + out + settle + look + r.h0;
+  // a front tension ramps up after the head is out, and 'steady' waits for it (tandem.ts steadyLength)
+  if (r.frontTension === 0) return base;
+  if (r.tensionRamp && r.tensionRamp > 0) return base + r.tensionRamp * s.vIn;
+  const el = elasticConstants(P.material);
+  const c = Math.sqrt((el.K + (4 / 3) * el.G) / (P.material.rho * P.numerics.massScale));
+  return base / (1 - (10 / c) * s.vIn);
 }
 
 /** The params with lengthMode 'steady' carried out (a copy; sheetLength = steadyLength3 up to a whole 0.1 mm). */
@@ -275,6 +282,10 @@ export function separated3(sim: Sim3): boolean {
  * thickness, the same share of the way across the width, along x by the material. It takes the parent's stresses,
  * pressure, εp, temperature, damage indicators and failure, and starts undeformed up to its volume
  * (F = ∛J I with ln J = −p / K, so the pressure stays what it was).
+ * The strip's shape comes along: a new point's y and z are the old column's, read at the new point's place in the
+ * lattice (bilinear in the old lattice's indices, extrapolated past the outermost centres), so the crown, the edge's
+ * barrel and its wander along x go into the next stand instead of a rectangular block (which lost 8–16 µm of shape
+ * at W 6 mm). Along x the new lattice is regular; the head's and the tail's shapes are not carried.
  */
 export function remap3(old: Sim3, base: Solid3Params, h1: number, w1: number, sample: [number, number] | null = null): Sim3 {
   const P: Solid3Params = { ...cloneParams(base), solid: { ...base.solid, width: w1 } };
@@ -313,15 +324,36 @@ export function remap3(old: Sim3, base: Solid3Params, h1: number, w1: number, sa
   const mass = M / n;
   const cell = sim.dp * sim.dp * sim.dz;
   let nFailed = 0;
+  // the old column's shape at a continuous lattice index (jf, kf): bilinear between the four centres around it,
+  // linear past the outermost ones (a new point nearer the surface than any old centre)
+  const at = (arr: Float64Array, io: number, jf: number, kf: number): number => {
+    const j0 = Math.max(0, Math.min(old.NJ - 2, Math.floor(jf)));
+    const k0 = Math.max(0, Math.min(old.NK - 2, Math.floor(kf)));
+    const tj = old.NJ > 1 ? jf - j0 : 0;
+    const tk = old.NK > 1 ? kf - k0 : 0;
+    const j1 = Math.min(old.NJ - 1, j0 + 1);
+    const k1 = Math.min(old.NK - 1, k0 + 1);
+    return (
+      (1 - tj) * (1 - tk) * arr[old.lattice(io, j0, k0)] +
+      (1 - tj) * tk * arr[old.lattice(io, j0, k1)] +
+      tj * (1 - tk) * arr[old.lattice(io, j1, k0)] +
+      tj * tk * arr[old.lattice(io, j1, k1)]
+    );
+  };
   for (let q = 0; q < n; q++) {
     const i = Math.floor(q / (sim.NJ * sim.NK));
     const j = Math.floor(q / sim.NK) % sim.NJ;
     const k = q % sim.NK;
     const fromHead = sim.NI - 1 - i + 0.5;
     const io = sample ? sample[1] - (Math.floor(fromHead / share) % len) : old.NI - 1 - Math.min(old.NI - 1, Math.floor((fromHead / sim.NI) * old.NI));
-    const jo = sim.NJ === old.NJ ? j : Math.min(old.NJ - 1, Math.floor(((j + 0.5) / sim.NJ) * old.NJ));
-    const ko = Math.min(old.NK - 1, Math.floor(((k + 0.5) / sim.NK) * old.NK));
+    const jf = ((j + 0.5) / sim.NJ) * old.NJ - 0.5;
+    const kf = ((k + 0.5) / sim.NK) * old.NK - 0.5;
+    const jo = Math.max(0, Math.min(old.NJ - 1, Math.round(jf)));
+    const ko = Math.max(0, Math.min(old.NK - 1, Math.round(kf)));
     const p = old.lattice(io, jo, ko);
+    // the shape: y and z where the old column has them; the symmetry planes are not crossed
+    sim.py[q] = Math.max(0.25 * sim.dp, at(old.py, io, jf, kf));
+    sim.pz[q] = Math.max(0.25 * sim.dz, at(old.pz, io, jf, kf));
     sim.sxx[q] = old.sxx[p];
     sim.syy[q] = old.syy[p];
     sim.szz[q] = old.szz[p];
