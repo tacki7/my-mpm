@@ -3,7 +3,7 @@
 // and so are h0, r and R together when the rolls could not bite with them.
 //   ?preset=<id>&h0=1&r=25&R=100&L=16&mu=0.08&tb=0&tf=0&mat=spcc&damage=johnson-cook
 //   &yield=gtn&f0=0.005&fc=0.05&nucleation=tension&crack=none|dfg&handoff=done|steady
-//   &flatten=none|hitchcock&rollE=206 (GPa)&control=gap|reduction&length=fixed|steady
+//   &flatten=none|hitchcock&rollE=206 (GPa)&control=gap|reduction&length=fixed|steady&sym=1
 //   &cells=10&ms=10000&field=eta&autorun=1&stopafter=<steps>
 //   &cond=<base64url JSON>: every other condition, as the leaves that differ from the
 //   preset (conditionsQuery writes it, so a shared URL starts exactly the same run)
@@ -93,6 +93,10 @@ export function applyQuery(base: SimParams, q: URLSearchParams): SimParams {
   const control = q.get('control');
   if (control === 'reduction') p.rolling.gapControl = 'reduction';
   else if (control === 'gap') delete p.rolling.gapControl;
+  // sym=1: the top half of the thickness only, y = 0 a symmetry plane (the section model; absent = the whole thickness)
+  const sym = q.get('sym');
+  if (sym === '1') p.rolling.halfThickness = true;
+  else if (sym === '0') delete p.rolling.halfThickness;
   num('rollE', (v) => {
     if (v * 1e9 === ROLL_E) delete p.rolling.rollE;
     else p.rolling.rollE = v * 1e9;
@@ -143,7 +147,8 @@ const MAX_DEFECTS = 20;
  */
 export function points(p: SimParams): number {
   const n = p.numerics.cellsThrough * p.numerics.ppc;
-  const one = (p.rolling.sheetLength / p.rolling.h0) * n * n;
+  // the half-thickness model seeds the top half only
+  const one = (p.rolling.sheetLength / p.rolling.h0) * n * n * (p.rolling.halfThickness ? 0.5 : 1);
   const grow = 1 / (1 - p.rolling.reduction) ** 2;
   let stands = 0;
   for (let k = 0, f = 1; k < (p.rolling.stands ?? 1); k++, f *= grow) stands += f;
@@ -170,6 +175,7 @@ const RULES: Record<string, Rule> = {
   'rolling.handoff': { oneOf: ['done', 'steady'] },
   'rolling.flattening': { oneOf: ['none', 'hitchcock'] },
   'rolling.gapControl': { oneOf: ['gap', 'reduction'] },
+  'rolling.halfThickness': 'flag',
   'rolling.lengthMode': { oneOf: ['fixed', 'steady'] },
   'rolling.rollE': r(50e9, 700e9),
   'rolling.rollNu': r(0, 0.49),
@@ -313,6 +319,7 @@ export function conditionsQuery(presetId: string, preset: SimParams, params: Sim
   if ((r.flattening ?? 'none') !== (b.flattening ?? 'none')) q.set('flatten', r.flattening ?? 'none');
   put('rollE', (r.rollE ?? ROLL_E) * 1e-9, (b.rollE ?? ROLL_E) * 1e-9);
   if ((r.gapControl ?? 'gap') !== (b.gapControl ?? 'gap')) q.set('control', r.gapControl ?? 'gap');
+  if ((r.halfThickness === true) !== (b.halfThickness === true)) q.set('sym', r.halfThickness ? '1' : '0');
   put('mu', r.mu, b.mu);
   put('tb', r.backTension * 1e-6, b.backTension * 1e-6);
   put('tf', r.frontTension * 1e-6, b.frontTension * 1e-6);

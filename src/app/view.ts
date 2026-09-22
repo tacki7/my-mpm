@@ -199,11 +199,18 @@ export class BiteView {
     const T = this.transform();
     let best = -1;
     let bd = radius * radius;
+    // half: a click on the mirror image (y < 0) picks the point it mirrors
+    const mirror = this.geometry.halfThickness;
     for (let p = 0; p < f.flags.length; p++) {
       if (!(f.flags[p] & 1)) continue;
       const dx = T.X(f.pos[2 * p]) - x;
-      const dy = T.Y(f.pos[2 * p + 1]) - y;
-      const d = dx * dx + dy * dy;
+      const py = f.pos[2 * p + 1];
+      const dy = T.Y(py) - y;
+      let d = dx * dx + dy * dy;
+      if (mirror) {
+        const dm = T.Y(-py) - y;
+        d = Math.min(d, dx * dx + dm * dm);
+      }
       if (d < bd) {
         bd = d;
         best = p;
@@ -221,15 +228,30 @@ export class BiteView {
     return { x: r.left + T.X(f.pos[2 * p]), y: r.top + T.Y(f.pos[2 * p + 1]) };
   }
 
+  /** Client coordinates of a sheet coordinate [m] (headless checks find the seam and a mirror image), or null. */
+  screenOfPoint(x: number, y: number): { x: number; y: number } | null {
+    if (!this.frame || !this.geometry) return null;
+    const r = this.canvas.getBoundingClientRect();
+    const T = this.transform();
+    return { x: r.left + T.X(x), y: r.top + T.Y(y) };
+  }
+
   private drawMarks(T: ReturnType<BiteView['transform']>, f: Frame): void {
     const ctx = this.ctx;
     ctx.save();
+    const mirror = this.geometry!.halfThickness;
     for (const m of this.marks) {
       if (m.id < 0 || m.id >= f.flags.length || !(f.flags[m.id] & 1)) continue;
       const x = T.X(f.pos[2 * m.id]);
       const y = T.Y(f.pos[2 * m.id + 1]);
       ctx.beginPath();
       ctx.arc(x, y, m.kind === 'selected' ? 8 : 6, 0, Math.PI * 2);
+      // half: the ring on the mirror image too
+      if (mirror) {
+        const ym = T.Y(-f.pos[2 * m.id + 1]);
+        ctx.moveTo(x + (m.kind === 'selected' ? 8 : 6), ym);
+        ctx.arc(x, ym, m.kind === 'selected' ? 8 : 6, 0, Math.PI * 2);
+      }
       ctx.setLineDash(m.kind === 'max-damage' ? [3, 2] : []);
       ctx.lineWidth = 2;
       ctx.strokeStyle = m.kind === 'first-crack' ? '#c23b22' : m.kind === 'max-damage' ? '#8d5a33' : '#1d2a3a';
@@ -298,6 +320,15 @@ export class BiteView {
       ctx.lineTo(T.X(x), yBot);
       ctx.stroke();
     }
+    // half: the symmetry plane, a dotted seam between the points and their mirror image
+    if (g.halfThickness) {
+      ctx.setLineDash([2, 3]);
+      ctx.strokeStyle = 'rgba(29,42,58,0.6)';
+      ctx.beginPath();
+      ctx.moveTo(0, T.Y(0));
+      ctx.lineTo(this.w, T.Y(0));
+      ctx.stroke();
+    }
     ctx.restore();
     ctx.fillStyle = '#1d2a3a';
     ctx.font = uiFont(12);
@@ -357,9 +388,12 @@ export class BiteView {
     const hy = 0.5 * g.dp * T.sy;
     const { pos, F } = f;
     const W = this.w;
-    const rect = (p: number, failedPoint = false) => {
+    // half: every point is drawn twice, itself and its mirror image (y → −y, F → S F S with S = diag(1, −1):
+    // the off-diagonal terms change sign), in the same colour
+    const copies = g.halfThickness ? [1, -1] : [1];
+    const rect = (p: number, failedPoint = false, s = 1) => {
       const cx = T.X(pos[2 * p]);
-      const cy = T.Y(pos[2 * p + 1]);
+      const cy = T.Y(s * pos[2 * p + 1]);
       if (cx < -40 || cx > W + 40) return;
       // images of the half edges (dp/2, 0) and (0, dp/2); screen y points down. A failed point is drawn as its
       // starting square: its F means nothing once it has failed, and a broken sheet's failed points are drawn out
@@ -369,8 +403,8 @@ export class BiteView {
       const f10 = failedPoint ? 0 : F[4 * p + 2];
       const f11 = failedPoint ? 1 : F[4 * p + 3];
       let ax = f00 * hx;
-      let ay = -f10 * hy;
-      let bx = f01 * hx;
+      let ay = -s * f10 * hy;
+      let bx = s * f01 * hx;
       let by = -f11 * hy;
       const ka = 1 + PAD / (Math.hypot(ax, ay) || 1);
       const kb = 1 + PAD / (Math.hypot(bx, by) || 1);
@@ -392,13 +426,13 @@ export class BiteView {
       const v = info.scale === 'diverging' ? (mid - 0.5) * 2 * m : lo + mid * span;
       ctx.fillStyle = css(color(v));
       ctx.beginPath();
-      for (const p of list) rect(p);
+      for (const s of copies) for (const p of list) rect(p, false, s);
       ctx.fill();
     }
     if (failed.length) {
       ctx.fillStyle = '#1d2a3a';
       ctx.beginPath();
-      for (const p of failed) rect(p, true);
+      for (const s of copies) for (const p of failed) rect(p, true, s);
       ctx.fill();
     }
   }
@@ -423,15 +457,17 @@ export class BiteView {
     const taken = new Set<number>();
     const tension = new Path2D();
     const compression = new Path2D();
-    for (let p = 0; p < n; p++) {
+    // half: the mirror image's crosses too (the angle mirrored)
+    const copies = this.geometry!.halfThickness ? [1, -1] : [1];
+    for (const sgn of copies) for (let p = 0; p < n; p++) {
       if ((f.flags[p] & 3) !== 1) continue;
       const cx = T.X(f.pos[2 * p]);
-      const cy = T.Y(f.pos[2 * p + 1]);
+      const cy = T.Y(sgn * f.pos[2 * p + 1]);
       if (cx < 0 || cx > this.w || cy < 0 || cy > this.h) continue;
       const key = Math.floor(cy / GLYPH) * cols + Math.floor(cx / GLYPH);
       if (taken.has(key)) continue;
       taken.add(key);
-      const th = d[3 * p];
+      const th = sgn * d[3 * p];
       for (const [a, s] of [
         [th, d[3 * p + 1]],
         [th + Math.PI / 2, d[3 * p + 2]],

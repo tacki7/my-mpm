@@ -668,6 +668,10 @@ window.__mpm = {
   get done() {
     return !!last?.passDone || (stopAfter !== null && (last?.stepOffset ?? 0) + (last?.diag.step ?? 0) >= stopAfter && !running);
   },
+  /** the stand on show's steady means so far (TandemSim's readings, SI; null before one) */
+  get steady() {
+    return last?.steady ?? null;
+  },
   get diag() {
     return last?.diag ?? null;
   },
@@ -754,6 +758,8 @@ window.__mpm = {
   },
   /** client coordinates of a material point on the roll-bite canvas (headless checks click there) */
   screenOf: (id: number) => view.screenOf(id),
+  /** client coordinates of a sheet coordinate [m] on the roll-bite canvas (the seam of the half model: y = 0) */
+  screenOfPoint: (x: number, y: number) => view.screenOfPoint(x, y),
   /** zoom, pan (m), exaggeration mode and in use, principal directions */
   get view() {
     const s = view.state;

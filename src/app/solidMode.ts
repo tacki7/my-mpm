@@ -156,7 +156,7 @@ function settingsOf(q: URLSearchParams): SolidPageSettings {
 /** the conditions of the panel the 3D model does not have: their rows are hidden in the 3 次元 tab */
 /** the section-only conditions the 3D model has as well: their rows stay in the 3 次元 tab */
 const ALSO_IN_3D = ['stands', 'handoff', 'control', 'flatten', 'rollE', 'length'];
-const NOT_IN_3D = ['L', 'cells', 'yield', 'nucleation', 'f0', 'fc', 'failure', 'crack'];
+const NOT_IN_3D = ['L', 'cells', 'yield', 'nucleation', 'f0', 'fc', 'failure', 'crack', 'sym'];
 
 export interface SolidModeOptions {
   query: URLSearchParams;

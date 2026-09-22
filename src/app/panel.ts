@@ -239,6 +239,14 @@ export function buildPanel(root: HTMLElement, onEdit: () => void): Panel {
   flatten.classList.add('section-only');
   flatten.title =
     "Hitchcock の式 R' = R (1 + C P / Δh)、C = 16 (1 − ν²) / (π E)。P は MPM で計算した圧延荷重で、圧延しながらロールの半径を R' に合わせていく（荷重と R' が釣り合うまで「ロールを調整中」）";
+  // under the entry thickness it halves
+  const sym = select('sym', '板厚方向', [
+    ['full', '全厚（ロール 2 本）'],
+    ['half', '対称（上半分・ロール 1 本）'],
+  ]);
+  sym.classList.add('section-only');
+  sym.title =
+    '「対称」は板の上半分だけを解く（中心面 y = 0 を対称面に、ロールは上の 1 本）。半分の点で約 2 倍速い。荷重・トルク・板厚は板全体の値。中心の亀裂は対称面の上で開く。絵は下半分を鏡で写し、下半分の点をクリックすると同じ点（上半分）が選ばれる。平面図と 3 次元には効かない';
 
   for (const g of GROUPS) {
     // a folded group is a <details> (its summary is the title); the others a <fieldset>
@@ -276,6 +284,7 @@ export function buildPanel(root: HTMLElement, onEdit: () => void): Panel {
       if (f.key === 'r') fs.append(control);
       if (f.key === 'L') fs.append(length);
       if (f.key === 'R') fs.append(flatten);
+      if (f.key === 'h0') fs.append(sym);
     }
     root.append(fs);
     if (g.title === '潤滑と張力') root.append(matGroup, materialEditor.root, defectEditor.root);
@@ -311,6 +320,7 @@ export function buildPanel(root: HTMLElement, onEdit: () => void): Panel {
       selects.get('length')!.value = p.rolling.lengthMode ?? 'fixed';
       lockLength(p.rolling.lengthMode === 'steady');
       selects.get('flatten')!.value = p.rolling.flattening ?? 'none';
+      selects.get('sym')!.value = p.rolling.halfThickness ? 'half' : 'full';
     },
     read(base) {
       const p: SimParams = structuredClone(base);
@@ -330,6 +340,9 @@ export function buildPanel(root: HTMLElement, onEdit: () => void): Panel {
       else delete p.rolling.lengthMode;
       if (selects.get('flatten')!.value === 'hitchcock') p.rolling.flattening = 'hitchcock';
       else delete p.rolling.flattening;
+      // the whole thickness is written as no key at all (as the presets have it)
+      if (selects.get('sym')!.value === 'half') p.rolling.halfThickness = true;
+      else delete p.rolling.halfThickness;
       for (const g of GROUPS) {
         for (const f of g.fields) {
           const input = inputs.get(f.key)!;
