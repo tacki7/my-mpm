@@ -842,6 +842,21 @@ canvas#bite:focus-visible + .pick-aim {
   vertical-align: -1px;
 }
 
+.legend .failed-key .ring {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  margin-right: 5px;
+  border: 2px dashed #c23b22;
+  border-radius: 50%;
+  vertical-align: -2px;
+}
+
+.legend .failed-key .ring.worst {
+  border-color: #8d5a33;
+  border-style: dotted;
+}
+
 .sr-only {
   position: absolute;
   width: 1px;

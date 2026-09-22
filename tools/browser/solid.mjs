@@ -160,6 +160,35 @@ try {
   ok((await cell('failed'))?.text === '健全' && (await cell('dJC'))?.value > 0.5, 'a click on 損傷最大 shows an intact point with its damage', `D ${(await cell('dJC'))?.value?.toFixed(3)}`);
   await click('#solid-explorer button[data-role="first-crack"]');
   await c.waitFor(`__mpm.solid.explorer.role === 'first-crack'`, 5000);
+  // the rings on the 3D picture: pixels of the ring's colour on a circle of its radius around the point's screen position
+  // (the whole strip on show: at the end of the pass the head, where the first crack is, has left the bite's picture)
+  await click('#solid-whole');
+  await c.waitFor(`__mpm.solid.view.fit === 'strip'`, 5000);
+  await painted();
+  const ring = (role, rgb, radius) => c.evaluate(`(() => {
+    const at = __mpm.solid.screenOf('${role}');
+    if (!at) return null;
+    const cv = document.getElementById('solid-canvas');
+    const r = cv.getBoundingClientRect();
+    const k = cv.width / r.width;
+    const d = cv.getContext('2d').getImageData(0, 0, cv.width, cv.height).data;
+    let hit = 0;
+    const N = 72;
+    for (let i = 0; i < N; i++) {
+      const a = (2 * Math.PI * i) / N;
+      const x = Math.round((at.x - r.left + ${radius} * Math.cos(a)) * k);
+      const y = Math.round((at.y - r.top + ${radius} * Math.sin(a)) * k);
+      const o = 4 * (y * cv.width + x);
+      if (Math.abs(d[o] - ${rgb[0]}) < 40 && Math.abs(d[o + 1] - ${rgb[1]}) < 40 && Math.abs(d[o + 2] - ${rgb[2]}) < 40) hit++;
+    }
+    return { hit: hit / N, x: at.x - r.left, y: at.y - r.top, w: r.width, h: r.height };
+  })()`);
+  const red = await ring('first-crack', [0xc2, 0x3b, 0x22], 9);
+  const brown = await ring('max-damage', [0x8d, 0x5a, 0x33], 7);
+  ok(red && red.x > 0 && red.x < red.w && red.y > 0 && red.y < red.h && red.hit > 0.3 && red.hit < 0.85, 'a red dashed ring is drawn around the first crack on the 3D picture', red ? `${(red.hit * 100).toFixed(0)} % of the ring red at (${red.x.toFixed(0)}, ${red.y.toFixed(0)})` : 'no position');
+  ok(brown && brown.hit > 0.15 && brown.hit < 0.85, 'and a brown dotted ring around the most damaged point', brown ? `${(brown.hit * 100).toFixed(0)} % of the ring brown` : 'no position');
+  const keys = await c.evaluate(`document.querySelector('#solid-legend').textContent`);
+  ok(/赤の点線の丸は最初の亀裂/.test(keys) && /茶の点線の丸は損傷/.test(keys), 'the legend names both rings');
   await shot('locus');
   ok(c.errors.length === 0, 'no exceptions so far', c.errors.join(' | '));
 
