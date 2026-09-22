@@ -734,12 +734,15 @@ export class SolidMode {
     const lg = this.$('solid-legend');
     lg.dataset.field = this.field;
     const failed = (this.last?.diag.nFailed ?? 0) > 0;
+    const roles = new Set((this.last?.tracks ?? []).map((t) => t.role));
     const ys = this.view.yScale;
     const html = `
       <div class="bar" style="background:linear-gradient(90deg,${stops.join(',')})"></div>
       <div class="ends"><span>${fmt(lo)}${unit}</span><span>${info.label}</span><span>${fmt(hi)}${unit}</span></div>
       <div class="exag">板の表面の色。解くのは 1/4 で、板厚と板幅の中央（点線）で鏡映して表示${ys !== 1 ? `。板厚方向を ${ys} 倍に拡大（ロールの円弧も）` : ''}${this.settings.planeStrain ? '。板幅方向を止めた計算（平面ひずみ）' : ''}</div>
-      ${failed ? '<div class="failed-key"><span class="swatch"></span>藍墨の面は亀裂になった点</div>' : ''}`;
+      ${failed ? '<div class="failed-key"><span class="swatch"></span>藍墨の面は亀裂になった点</div>' : ''}
+      ${roles.has('first-crack') ? '<div class="failed-key"><span class="ring crack"></span>赤の点線の丸は最初の亀裂</div>' : ''}
+      ${roles.has('max-damage') ? '<div class="failed-key"><span class="ring worst"></span>茶の点線の丸は損傷がいちばん大きい点</div>' : ''}`;
     if (lg.innerHTML !== html) lg.innerHTML = html;
   }
 
@@ -994,6 +997,7 @@ export class SolidMode {
       get explorer() {
         return self.explorer.shown;
       },
+      screenOf: (role: 'first-crack' | 'max-damage') => self.view.screenOf(role),
       get url() {
         return self.query().toString();
       },
