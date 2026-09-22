@@ -40,6 +40,11 @@ const VIDEO_WIDTH = 1280;
 /** a value of the legend's ends */
 const fmtEnd = (v: number) => (Math.abs(v) >= 100 ? v.toFixed(0) : Math.abs(v) >= 1 ? v.toFixed(2) : v.toFixed(3));
 
+/** how far into the run's history a frame reaches (rows of the force chart at that frame) */
+function historyLen(f: SolidFrame): number {
+  return f.history.from + f.history.t.length;
+}
+
 /** what a frame holds in memory: the faces' vertices and values (the rest is small) */
 function frameBytes(f: SolidFrame): number {
   let n = 0;
@@ -183,6 +188,8 @@ export class SolidMode {
   /** the stress state and the fracture locus of the first crack's and the most damaged point */
   private explorer!: Explorer;
   private last: SolidFrame | null = null;
+  /** the run's force history, whole (the frames carry the rows since the one before; a frame's own reach is historyLen) */
+  private history: { t: number[]; force: number[]; stand: number[] } = { t: [], force: [], stand: [] };
   /** the frames of the run so far, for playback once it has stopped (tape.ts thins it to a few hundred) */
   private readonly tape = new Tape<SolidFrame>(frameBytes);
   /** playback: which frame of the tape is on show and whether it is playing; null while the live frame is shown */
@@ -447,7 +454,7 @@ export class SolidMode {
 
   /** what the worker got: the GPU's kind, or the reason it is on the CPU (nothing for a plain CPU run) */
   private showCompute(g: SolidGeometry): void {
-    const text = g.gpuNote ?? g.threadsNote ?? (g.compute === 'gpu' ? `GPU で計算する（${[g.gpu?.vendor, g.gpu?.architecture].filter(Boolean).join(' ') || 'WebGPU'}）` : g.threads > 1 ? `CPU の ${g.threads} スレッドで計算する` : '');
+    const text = g.gpuNote ?? g.threadsNote ?? (g.compute === 'gpu' ? `GPU で計算する（${[g.gpu?.vendor, g.gpu?.architecture, g.gpu?.backend].filter(Boolean).join(' ') || 'WebGPU'}）` : g.threads > 1 ? `CPU の ${g.threads} スレッドで計算する` : '');
     this.computeNote.textContent = text;
     this.computeNote.hidden = !text;
     this.computeNote.classList.toggle('warn', !!(g.gpuNote ?? g.threadsNote));
@@ -754,6 +761,7 @@ export class SolidMode {
     this.running = false;
     this.frames = 0;
     this.awaitingReady = true;
+    this.history = { t: [], force: [], stand: [] };
     this.tape.clear();
     this.stopReplay();
     const crown = Math.max(-0.5 * P.rolling.h0, Math.min(0.5 * P.rolling.h0, this.settings.crown));
@@ -834,6 +842,11 @@ export class SolidMode {
     // a frame of a step already on the tape (sent on a pause, or at the end) replaces it
     const prev = this.last;
     this.last = f;
+    for (let i = Math.max(0, this.history.t.length - f.history.from); i < f.history.t.length; i++) {
+      this.history.t.push(f.history.t[i]);
+      this.history.force.push(f.history.force[i]);
+      this.history.stand.push(f.history.stand[i]);
+    }
     if (prev && prev.diag.step === f.diag.step && prev.diag.stand === f.diag.stand) this.tape.replaceLast(f);
     else this.tape.push(f);
     const roll = this.params?.rolling;
@@ -858,7 +871,7 @@ export class SolidMode {
 
   /** the frame on show: the tape's while playing back, else the latest */
   private shownFrame(): SolidFrame | null {
-    return this.replay ? (this.tape.frames[this.replay.at] ?? this.last) : this.last;
+    return this.replay ? (this.tape.at(this.replay.at) ?? this.last) : this.last;
   }
 
   // ── playback of the recorded frames ────────────────────────────────────────
@@ -1026,7 +1039,8 @@ export class SolidMode {
     }
     if (!this.replay) this.replay = { at, playing: false, timer: null };
     else this.replay.at = at;
-    const f = this.tape.frames[at];
+    const f = this.tape.at(at);
+    if (!f) return;
     this.showFrame(f);
     this.$('solid-phase').textContent = `再生 ${at + 1} / ${n}　${f.diag.stopped ? stopPhrase(f.diag.stopped, this.standResults.length) : phaseText[f.diag.phase]}`;
     this.dirty = this.chartsDirty = true;
@@ -1127,7 +1141,7 @@ export class SolidMode {
       ['粒子数（1/4 モデル）', g.n.toLocaleString(), '個', false],
       ['時間刻み', (g.dt * 1e9).toFixed(1), 'ns', false],
       ['1 ステップの計算時間', f.msPerStep ? f.msPerStep.toFixed(2) : '—', 'ms', false],
-      ['計算', g.compute === 'gpu' ? `GPU（${[g.gpu?.vendor, g.gpu?.architecture].filter(Boolean).join(' ') || 'WebGPU'}）` : g.threads > 1 ? `CPU（${g.threads} スレッド）` : 'CPU', '', false],
+      ['計算', g.compute === 'gpu' ? `GPU（${[g.gpu?.vendor, g.gpu?.architecture, g.gpu?.backend].filter(Boolean).join(' ') || 'WebGPU'}）` : g.threads > 1 ? `CPU（${g.threads} スレッド）` : 'CPU', '', false],
     ];
     this.$('solid-results').replaceChildren(
       ...rows.map(([k, v, u, provisional]) => {
@@ -1197,8 +1211,9 @@ export class SolidMode {
     this.explorer.draw();
     const W0 = 2 * g.halfWidth0;
     // roll force over time, with the plane-strain slab method × the entry width for scale
-    const t = (f?.history.t ?? []).map((v) => v * 1e3);
-    const F = (f?.history.force ?? []).map((v) => v * 1e-3);
+    const len = f ? historyLen(f) : 0;
+    const t = this.history.t.slice(0, len).map((v) => v * 1e3);
+    const F = this.history.force.slice(0, len).map((v) => v * 1e-3);
     const slabTotal = g.slabForce * W0 * 1e-3;
     drawChart(this.$<HTMLCanvasElement>('solid-chart-force'), {
       xLabel: '時間 [ms]',
@@ -1207,7 +1222,7 @@ export class SolidMode {
       hmarks: [{ y: slabTotal, label: g.stands > 1 ? `スラブ法 × 入側の板幅（#${g.stand + 1}）` : 'スラブ法 × 入側の板幅' }],
       // where a tandem's next stand starts
       marks: [
-        ...(f?.history.stand ?? []).flatMap((k, i, a) => (i > 0 && k !== a[i - 1] ? [{ x: t[i - 1], label: `#${k + 1}`, color: standColor(k) }] : [])),
+        ...this.history.stand.slice(0, len).flatMap((k, i, a) => (i > 0 && k !== a[i - 1] ? [{ x: t[i - 1], label: `#${k + 1}`, color: standColor(k) }] : [])),
         // where the playback is
         ...(this.replay ? [{ x: (this.shownFrame()?.diag.t ?? 0) * 1e3, label: '再生', color: STEEL }] : []),
       ],

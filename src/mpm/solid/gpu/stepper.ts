@@ -1,7 +1,7 @@
 // Runs batches of the 3D model's step on a WebGPU device (kernels.ts) and hands the state back: the particle
 // buffer, the batch's force sums, and the deflection the CPU controls set. Sim3.advanceBatch packs the state,
 // fills the uniforms and reads the result; this class only owns the device's objects.
-import { NSLOT, PSTRIDE, UCOUNT, USTRIDE, WGSL } from './kernels.ts';
+import { DISPATCH_MAX, NSLOT, PSTRIDE, UCOUNT, USTRIDE, WG, WGSL } from './kernels.ts';
 
 export interface GpuGeometry {
   n: number;
@@ -21,17 +21,87 @@ export interface GpuInfo {
   vendor: string;
   architecture: string;
   device: string;
+  /** the backend the adapter reported, when it does ('metal', 'vulkan', 'd3d12', ...; '' when unknown) */
+  backend: string;
 }
 
-/** the device, or null where WebGPU is not there (a browser without it, an insecure page, a CPU-only Chrome) */
+/** the limits a device is asked for: the adapter's own where they are above the defaults, so a big strip fits */
+const RAISED: (keyof GPUSupportedLimits)[] = ['maxStorageBufferBindingSize', 'maxBufferSize', 'maxComputeWorkgroupsPerDimension'];
+
+function infoOf(adapter: GPUAdapter): GpuInfo {
+  const a = adapter.info as (GPUAdapterInfo & { backend?: string }) | undefined;
+  return { vendor: a?.vendor ?? '', architecture: a?.architecture ?? '', device: a?.device ?? '', backend: a?.backend ?? '' };
+}
+
+async function deviceOf(adapter: GPUAdapter): Promise<GPUDevice> {
+  const requiredLimits: Record<string, number> = {};
+  for (const k of RAISED) {
+    const v = adapter.limits[k];
+    if (typeof v === 'number') requiredLimits[k] = v;
+  }
+  try {
+    return await adapter.requestDevice({ requiredLimits });
+  } catch {
+    // an adapter that will not grant its own limits (seen on some drivers): the defaults, then
+    return await adapter.requestDevice();
+  }
+}
+
+/**
+ * A device, or null where WebGPU is not there (a browser without it, an insecure page, a CPU-only Chrome).
+ * The high-performance adapter where the browser offers a choice (a discrete GPU next to an integrated one),
+ * with its own limits on buffer size and dispatch width. Any backend: nothing here is Metal's or Vulkan's.
+ */
 export async function requestGpu(): Promise<{ device: GPUDevice; info: GpuInfo } | null> {
   const gpu = (globalThis.navigator as Navigator | undefined)?.gpu;
   if (!gpu) return null;
-  const adapter = await gpu.requestAdapter();
+  const adapter = (await gpu.requestAdapter({ powerPreference: 'high-performance' })) ?? (await gpu.requestAdapter());
   if (!adapter) return null;
-  const device = await adapter.requestDevice();
-  const a = adapter.info;
-  return { device, info: { vendor: a?.vendor ?? '', architecture: a?.architecture ?? '', device: a?.device ?? '' } };
+  const device = await deviceOf(adapter);
+  return { device, info: infoOf(adapter) };
+}
+
+/**
+ * Every distinct adapter the browser offers, each with a device: WebGPU exposes no list of GPUs, only a choice
+ * by power preference, so a machine with two kinds of GPU (a discrete one and an integrated one) yields two,
+ * and a machine with several GPUs of one kind yields one (the browser picks). For work that is independent —
+ * several passes at once (tools/gpu/check.ts) — the jobs go round the pool; one pass is not split across
+ * devices (its grid would cross the host every step, slower than one GPU alone).
+ */
+export async function requestGpuPool(): Promise<{ device: GPUDevice; info: GpuInfo }[]> {
+  const gpu = (globalThis.navigator as Navigator | undefined)?.gpu;
+  if (!gpu) return [];
+  const seen = new Map<string, GPUAdapter>();
+  for (const powerPreference of ['high-performance', 'low-power'] as const) {
+    const a = await gpu.requestAdapter({ powerPreference });
+    if (!a || (a as GPUAdapter & { isFallbackAdapter?: boolean }).isFallbackAdapter) continue;
+    const i = infoOf(a);
+    const key = `${i.vendor}|${i.architecture}|${i.device}|${a.limits.maxBufferSize}|${a.limits.maxComputeWorkgroupsPerDimension}`;
+    if (!seen.has(key)) seen.set(key, a);
+  }
+  const out: { device: GPUDevice; info: GpuInfo }[] = [];
+  for (const a of seen.values()) out.push({ device: await deviceOf(a), info: infoOf(a) });
+  return out;
+}
+
+/** the bytes the stepper would allocate for a geometry, against a device's limits: the reason it will not fit, or null */
+export function gpuFit(device: GPUDevice, geo: GpuGeometry): string | null {
+  const ng = geo.nxN * geo.nyN * geo.nzN;
+  const L = device.limits;
+  const sizes: [string, number][] = [
+    ['粒子', geo.n * PSTRIDE * 4],
+    ['格子', NSLOT * ng * 4],
+    ['和', (2 * geo.nxN + 2 * ng) * 4],
+  ];
+  for (const [what, bytes] of sizes) {
+    if (bytes > L.maxStorageBufferBindingSize || bytes > L.maxBufferSize) {
+      const lim = Math.min(L.maxStorageBufferBindingSize, L.maxBufferSize);
+      return `${what}のバッファが ${(bytes / 2 ** 20).toFixed(0)} MiB で、この GPU の上限 ${(lim / 2 ** 20).toFixed(0)} MiB を超える`;
+    }
+  }
+  const wgMax = Math.max(Math.ceil(geo.n / WG), Math.ceil(ng / WG));
+  if (wgMax > DISPATCH_MAX * L.maxComputeWorkgroupsPerDimension) return `ワークグループ ${wgMax} 個で、この GPU の 1 回の起動の上限を超える`;
+  return null;
 }
 
 export class GpuStepper {
@@ -61,6 +131,8 @@ export class GpuStepper {
     this.device = device;
     this.geo = geo;
     this.ng = geo.nxN * geo.nyN * geo.nzN;
+    const unfit = gpuFit(device, geo);
+    if (unfit) throw new Error(unfit);
     const pBytes = geo.n * PSTRIDE * 4;
     const aBytes = (2 * geo.nxN + 2 * this.ng) * 4;
     const U = GPUBufferUsage;
@@ -134,25 +206,31 @@ export class GpuStepper {
     if (!this.checked) device.pushErrorScope('validation');
     const enc = device.createCommandEncoder();
     enc.clearBuffer(this.abuf);
-    const wgP = Math.ceil(geo.n / 64);
-    const wgX = Math.ceil(geo.nxN / 64);
-    const wgG = Math.ceil(ng / 64);
     const P = this.pipes;
+    // a dispatch of w workgroups as rows of at most DISPATCH_MAX (the default limit per dimension); kernels.ts tid()
+    const dispatch = (pass: GPUComputePassEncoder, pipe: GPUComputePipeline, w: number) => {
+      pass.setPipeline(pipe);
+      if (w <= DISPATCH_MAX) pass.dispatchWorkgroups(w);
+      else pass.dispatchWorkgroups(DISPATCH_MAX, Math.ceil(w / DISPATCH_MAX));
+    };
+    const wgP = Math.ceil(geo.n / WG);
+    const wgX = Math.ceil(geo.nxN / WG);
+    const wgG = Math.ceil(ng / WG);
     for (let s = 0; s < K; s++) {
       enc.clearBuffer(this.gbuf);
       const pass = enc.beginComputePass();
       pass.setBindGroup(0, this.bind, [s * USTRIDE]);
-      pass.setPipeline(P.p2g); pass.dispatchWorkgroups(wgP);
-      pass.setPipeline(P.fold); pass.dispatchWorkgroups(wgX);
-      pass.setPipeline(P.grid); pass.dispatchWorkgroups(wgG);
+      dispatch(pass, P.p2g, wgP);
+      dispatch(pass, P.fold, wgX);
+      dispatch(pass, P.grid, wgG);
       if (!this.skipFollow) {
-        pass.setPipeline(P.folA); pass.dispatchWorkgroups(wgP);
-        pass.setPipeline(P.folB); pass.dispatchWorkgroups(wgG);
+        dispatch(pass, P.folA, wgP);
+        dispatch(pass, P.folB, wgG);
       }
-      pass.setPipeline(P.mirror); pass.dispatchWorkgroups(wgX);
-      pass.setPipeline(P.g2pv); pass.dispatchWorkgroups(wgP);
-      pass.setPipeline(P.vmean); pass.dispatchWorkgroups(wgX);
-      pass.setPipeline(P.g2pu); pass.dispatchWorkgroups(wgP);
+      dispatch(pass, P.mirror, wgX);
+      dispatch(pass, P.g2pv, wgP);
+      dispatch(pass, P.vmean, wgX);
+      dispatch(pass, P.g2pu, wgP);
       pass.end();
     }
     enc.copyBufferToBuffer(this.pbuf, 0, this.pRead, 0, this.pRead.size);

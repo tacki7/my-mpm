@@ -101,6 +101,9 @@ Math.exp・log の最後の 1 ビットが違うのでビット一致はしな�
 （約 5 分。`tools/gpu/check.html` で同じ状態から 1 ステップ・1 バッチを量ごとに比べ、条件 5 通り（素・張力・ロール偏平 + 圧下率一定・撓み・損傷）を定常まで回して CPU と比べ、
 画面で `gpu3=1` と無しを最後まで回して比べる。`--quick` で画面の節を飛ばす。アダプタが無ければ SKIP。CI（ubuntu）には GPU が無いので `@check` ではない）。
 `BROWSER_GPU` 無しの `browser.sh` は `--disable-gpu` で、`navigator.gpu` はあってもアダプタが取れない（CPU への退避の確認に使える）。
+`browser.sh` は macOS・Linux・Windows（Git Bash）で動く（Chrome は `CHROME` → 既定の場所 → PATH、GPU の旗は OS で Metal / Vulkan、`BROWSER_GPU_FLAGS` で上書き、
+止めるのは lsof → ss → netstat）。カーネルはどの GPU でも動くように書く（`docs/model.md`「GPU」: 既定の制限、2 次元ディスパッチ、`select` の引数の clamp）。
+複数の GPU は `requestGpuPool()`（高性能・省電力の 2 通りで取れる別々のアダプタ。1 回の圧延は分けない）。
 3 次元の複数スレッド（`src/mpm/solid/team.ts`・`grid3.ts`・`Sim3` の段（`runPhase`）・ワーカーの `loopTeam`・「CPU のコア数」）を触ったら `node tools/checks/solid3-threads.mjs`（約 4 分、`@check`。`Team` の `serial` で決定的に比べる）と、
 画面で `?dim=3&W3=4&L3=12&cells3=4&autorun=1&threads3=3` を最後まで回して `__mpm.solid.compute.threads === 3`・荷重が `node tools/solid.mjs --W 4` と 1e-9 で合うこと。
 `solid.mjs` の節にも入っている。

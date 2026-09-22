@@ -26,6 +26,9 @@ npm ci
 npm run dev          # http://localhost:5173 を開く
 ```
 
+Linux（Ubuntu など）でも同じ（`npm ci` → `npm run dev`）。GPU の計算は Chrome の WebGPU で、Linux では Vulkan（NVIDIA・AMD・Intel の
+ドライバ）を通る。ヘッドレスの検証（`tools/browser/browser.sh`）は Chrome を `CHROME` 環境変数 → `/usr/bin/google-chrome` など → PATH の順に探す。
+
 macOS では、Finder で `MPM Rolling Lab.command` をダブルクリックしても起動できる（ターミナルが開いて開発サーバーを立て、
 既定のブラウザで http://localhost:5173/ を開く。もう動いていればブラウザで開くだけ。`node_modules` が無ければ先に `npm ci`。
 止めるのはそのターミナルの窓で Ctrl+C）。初回に「開発元を確認できない」と出たら、右クリック ▸「開く」。
