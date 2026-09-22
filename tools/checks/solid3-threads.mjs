@@ -1,5 +1,5 @@
 // The 3D model's team of threads (src/mpm/solid/team.ts on node's worker_threads, tools/lib/solid-team.mjs),
-// about a minute in all:
+// about 2.5 minutes on 8 cores (M2), longer on CI's 2 cores where 3 threads share them (the gate's own limit below):
 // - a pass on 3 threads is the pass on 1 thread: the steady means, the strip out, the failed points and the
 //   step count agree to 1e-9 (the sums over a column's points are taken in a different order, so not bit for bit)
 // - the team is faster than the thread alone (where the machine has 4 cores or more)
@@ -9,7 +9,7 @@
 //   to 1e-9 as well: a stage that depended on a neighbour's work in the same stage (the update once decided a
 //   point's owner from a position the neighbour had already moved) shows here every time, not one run in three
 // - a Sim3 not made for the team is refused
-// @check
+// @check 600s
 import { ok, near, done } from './lib.mjs';
 import { defaultParams } from '../../src/mpm/params.ts';
 import { Sim3, solidParams } from '../../src/mpm/solid/sim3.ts';
