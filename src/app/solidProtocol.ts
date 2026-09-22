@@ -5,6 +5,7 @@ import type { SolidLook, SolidSteady } from '../mpm/solid/steady.ts';
 import type { Stand3Result } from '../mpm/solid/tandem3.ts';
 import type { Handoff, TandemStop } from '../mpm/tandem.ts';
 import type { Face } from '../mpm/solid/surface.ts';
+import type { Track } from './protocol.ts';
 
 /** what the strip's faces can be coloured by */
 export type SolidFieldName = 'seq' | 'ep' | 'pres' | 'eta' | 'sxx' | 'syy' | 'szz' | 'damage' | 'spread';
@@ -72,6 +73,8 @@ export interface SolidFrame {
   diag: SolidDiag;
   /** t [s] (the running clock), roll force [N] and stand of every look so far */
   history: { t: number[]; force: number[]; stand: number[] };
+  /** the points on the fracture locus: the first to fail and the most damaged (tracker3.ts) */
+  tracks: Track[];
   running: boolean;
   msPerStep: number;
 }

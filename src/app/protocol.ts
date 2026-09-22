@@ -45,6 +45,9 @@ export interface PointState {
   syy: number;
   sxy: number;
   szz: number;
+  /** the other shears, in the three-dimensional model (tracker3.ts) */
+  syz?: number;
+  szx?: number;
   /** pressure, compression positive */
   pres: number;
   seq: number;
@@ -65,9 +68,12 @@ export interface PointState {
   /** where the point sat in the undeformed sheet: from the head end backwards, from the mid-plane */
   sheetX: number;
   sheetY: number;
+  /** ... and from the mid-width, in the three-dimensional model */
+  sheetZ?: number;
   /** current position */
   x: number;
   y: number;
+  z?: number;
   /** the rate and temperature of the Johnson-Cook fracture strain at this point */
   epsDotStar: number;
   Ts: number;
