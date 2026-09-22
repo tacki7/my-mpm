@@ -283,9 +283,12 @@ export function separated3(sim: Sim3): boolean {
  * pressure, εp, temperature, damage indicators and failure, and starts undeformed up to its volume
  * (F = ∛J I with ln J = −p / K, so the pressure stays what it was).
  * The strip's shape comes along: a new point's y and z are the old column's, read at the new point's place in the
- * lattice (bilinear in the old lattice's indices, extrapolated past the outermost centres), so the crown, the edge's
- * barrel and its wander along x go into the next stand instead of a rectangular block (which lost 8–16 µm of shape
- * at W 6 mm). Along x the new lattice is regular; the head's and the tail's shapes are not carried.
+ * lattice (bilinear in the old lattice's indices, extrapolated past the outermost centres), so the crown and the
+ * edge's barrel go into the next stand instead of a rectangular block (which lost 8–16 µm of shape at W 6 mm). The
+ * shape is the old strip's section averaged along x (over the steady sample, or the middle half of a whole strip):
+ * the lattice-period stripes of the old pass (±2 µm at 4 cells) are not carried, since they would make the next
+ * stand's gauge hunt and rolls that follow the pass never settle. Along x the new lattice is regular; the head's
+ * and the tail's shapes are not carried.
  */
 export function remap3(old: Sim3, base: Solid3Params, h1: number, w1: number, sample: [number, number] | null = null): Sim3 {
   const P: Solid3Params = { ...cloneParams(base), solid: { ...base.solid, width: w1 } };
@@ -324,9 +327,36 @@ export function remap3(old: Sim3, base: Solid3Params, h1: number, w1: number, sa
   const mass = M / n;
   const cell = sim.dp * sim.dp * sim.dz;
   let nFailed = 0;
-  // the old column's shape at a continuous lattice index (jf, kf): bilinear between the four centres around it,
+  // the old strip's section: y and z of each (row, column) averaged over the sampled columns along x
+  const meanY = new Float64Array(old.NJ * old.NK);
+  const meanZ = new Float64Array(old.NJ * old.NK);
+  {
+    const i0 = sample ? sample[0] : Math.floor(old.NI / 4);
+    const i1 = sample ? sample[1] : Math.ceil((3 * old.NI) / 4) - 1;
+    const cnt = new Int32Array(old.NJ * old.NK);
+    for (let io = i0; io <= i1; io++) {
+      for (let j = 0; j < old.NJ; j++) {
+        for (let k = 0; k < old.NK; k++) {
+          const p = old.lattice(io, j, k);
+          if (!old.active[p]) continue;
+          meanY[j * old.NK + k] += old.py[p];
+          meanZ[j * old.NK + k] += old.pz[p];
+          cnt[j * old.NK + k]++;
+        }
+      }
+    }
+    for (let q = 0; q < meanY.length; q++) {
+      const c = cnt[q];
+      const j = Math.floor(q / old.NK);
+      const k = q % old.NK;
+      // a section with no active point anywhere: the undeformed lattice position
+      meanY[q] = c ? meanY[q] / c : (j + 0.5) * old.dp;
+      meanZ[q] = c ? meanZ[q] / c : (k + 0.5) * old.dz;
+    }
+  }
+  // the mean section's shape at a continuous lattice index (jf, kf): bilinear between the four centres around it,
   // linear past the outermost ones (a new point nearer the surface than any old centre)
-  const at = (arr: Float64Array, io: number, jf: number, kf: number): number => {
+  const at = (arr: Float64Array, jf: number, kf: number): number => {
     const j0 = Math.max(0, Math.min(old.NJ - 2, Math.floor(jf)));
     const k0 = Math.max(0, Math.min(old.NK - 2, Math.floor(kf)));
     const tj = old.NJ > 1 ? jf - j0 : 0;
@@ -334,10 +364,10 @@ export function remap3(old: Sim3, base: Solid3Params, h1: number, w1: number, sa
     const j1 = Math.min(old.NJ - 1, j0 + 1);
     const k1 = Math.min(old.NK - 1, k0 + 1);
     return (
-      (1 - tj) * (1 - tk) * arr[old.lattice(io, j0, k0)] +
-      (1 - tj) * tk * arr[old.lattice(io, j0, k1)] +
-      tj * (1 - tk) * arr[old.lattice(io, j1, k0)] +
-      tj * tk * arr[old.lattice(io, j1, k1)]
+      (1 - tj) * (1 - tk) * arr[j0 * old.NK + k0] +
+      (1 - tj) * tk * arr[j0 * old.NK + k1] +
+      tj * (1 - tk) * arr[j1 * old.NK + k0] +
+      tj * tk * arr[j1 * old.NK + k1]
     );
   };
   for (let q = 0; q < n; q++) {
@@ -352,8 +382,8 @@ export function remap3(old: Sim3, base: Solid3Params, h1: number, w1: number, sa
     const ko = Math.max(0, Math.min(old.NK - 1, Math.round(kf)));
     const p = old.lattice(io, jo, ko);
     // the shape: y and z where the old column has them; the symmetry planes are not crossed
-    sim.py[q] = Math.max(0.25 * sim.dp, at(old.py, io, jf, kf));
-    sim.pz[q] = Math.max(0.25 * sim.dz, at(old.pz, io, jf, kf));
+    sim.py[q] = Math.max(0.25 * sim.dp, at(meanY, jf, kf));
+    sim.pz[q] = Math.max(0.25 * sim.dz, at(meanZ, jf, kf));
     sim.sxx[q] = old.sxx[p];
     sim.syy[q] = old.syy[p];
     sim.szz[q] = old.szz[p];
