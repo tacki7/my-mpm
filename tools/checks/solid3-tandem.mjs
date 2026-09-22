@@ -4,6 +4,7 @@
 // - the length 'steady' gives the steady looks a 'steady' handoff needs
 // - two stands, handoff 'steady': the next stand's entry strip is the measured one, and both stands' force per
 //   width agree with the section model's tandem (TandemSim) on the same grid — the strain is carried
+// - remap3 carries the strip's shape: a strip given a crown and an edge barrel comes out of the handoff with them
 // - flattening 'hitchcock' with a constant reduction: the rolls settle, R' and the gap agree with the section
 //   model's, and the strip's mean thickness is the target
 // @check
@@ -13,7 +14,7 @@ import { Sim } from '../../src/mpm/solver.ts';
 import { TandemSim } from '../../src/mpm/tandem.ts';
 import { Sim3, solidParams, solidScales } from '../../src/mpm/solid/sim3.ts';
 import { READ_STEPS, SolidSampler } from '../../src/mpm/solid/steady.ts';
-import { STEADY_LOOKS, Tandem3, steadyLength3 } from '../../src/mpm/solid/tandem3.ts';
+import { STEADY_LOOKS, Tandem3, remap3, steadyLength3 } from '../../src/mpm/solid/tandem3.ts';
 
 const W = 1e-3;
 const base = (edit = () => {}) => {
@@ -102,4 +103,35 @@ near(s3.gap, A2.gap, 3e-3, "the gap = the section model's");
 const target = s3.params.rolling.h0 * (1 - s3.params.rolling.reduction);
 near(s3.gauge().thickness, target, 1.5e-3, 'the strip at the gauge is the target thickness');
 ok(s3.roll.R > 1.1 * s3.params.rolling.rollRadius && A3.sampler.count <= 1, "a flattened roll: R' above R, and the phase waited for it", `R' ${(s3.roll.R * 1e3).toFixed(1)} mm, ${A3.sampler.count} steady looks at settling`);
+
+// ── the shape goes into the next stand: a strip (W 2 mm, unrolled) given a crown across the width (the top surface
+//    12 µm higher at mid-width than at the edge) and an edge barrel (the edge 10 µm wider at mid-thickness); the new
+//    strip, on a finer lattice with more columns across, has the same surfaces to a micron
+{
+  const P = solidParams(base((r) => { r.sheetLength = 4e-3; delete r.lengthMode; }), { width: 2e-3, planeStrain: false });
+  const old = new Sim3(P);
+  const crown = 12e-6;
+  const barrel = 10e-6;
+  const hw = old.halfWidth0;
+  const ht = P.rolling.h0 / 2;
+  for (let p = 0; p < old.n; p++) {
+    const zf = old.pz[p] / hw; // 0 mid-width … 1 edge
+    const yf = old.py[p] / ht; // 0 mid-thickness … 1 surface
+    old.py[p] *= 1 + (crown / ht) * (1 - zf * zf);
+    old.pz[p] *= 1 + (barrel / hw) * (1 - yf * yf);
+  }
+  const top = (s, z) => s.py[s.lattice(s.NI >> 1, s.NJ - 1, Math.min(s.NK - 1, Math.round((z / s.halfWidth0) * s.NK - 0.5)))] + 0.5 * s.dp * s.F[9 * s.lattice(s.NI >> 1, s.NJ - 1, 0) + 4];
+  const edge = (s, y) => s.pz[s.lattice(s.NI >> 1, Math.min(s.NJ - 1, Math.round((y / (s.params.rolling.h0 / 2)) * s.NJ - 0.5)), s.NK - 1)] + 0.5 * s.dz * s.F[9 * s.lattice(s.NI >> 1, 0, s.NK - 1) + 8];
+  const next = remap3(old, P, 0.8 * P.rolling.h0, 2 * hw * 1.05);
+  ok(next.NK > old.NK && next.NJ === old.NJ, 'the new lattice is finer across the width', `${old.NK} → ${next.NK} columns across, ${next.NJ} rows`);
+  const crownNew = top(next, 0) - top(next, 0.9 * next.halfWidth0);
+  const crownOld = top(old, 0) - top(old, 0.9 * hw);
+  near(crownNew, crownOld, 0.15, 'the crown comes through the handoff (top surface, mid-width less 0.9 of the half width)', `${(crownNew * 1e6).toFixed(1)} of ${(crownOld * 1e6).toFixed(1)} µm`);
+  const barrelNew = edge(next, 0) - edge(next, 0.9 * next.params.rolling.h0 / 2);
+  const barrelOld = edge(old, 0) - edge(old, 0.9 * ht);
+  near(barrelNew, barrelOld, 0.15, 'the edge barrel comes through (edge, mid-thickness less 0.9 of the half thickness)', `${(barrelNew * 1e6).toFixed(1)} of ${(barrelOld * 1e6).toFixed(1)} µm`);
+  let inside = true;
+  for (let p = 0; p < next.n && inside; p++) inside = next.py[p] > 0 && next.pz[p] > 0 && next.py[p] < 0.6 * P.rolling.h0 && next.pz[p] < 1.2 * hw;
+  ok(inside, 'every new point is inside the quarter strip');
+}
 done();

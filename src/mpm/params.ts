@@ -388,13 +388,36 @@ export function hitchcockRadius(r: RollingParams, force: number, dh: number): nu
   return r.rollRadius * (1 + (hitchcockC(r) * Math.max(0, force)) / dh);
 }
 
+/** Steps from the start of a run to the head's corner meeting the roll (startOffset) */
+export const START_STEPS = 100;
+
 /**
- * Where a run starts: the head this many grid cells short of the bite's entry (x = −Lc, where the head's corner
- * meets the roll). A node takes mass from points up to 1.5 cells away, so two cells is the nearest start with no
- * node in the roll at step 0; the way up to the rolls is not computed (it was 2 h0 before). The section
- * model, the plan view and the 3D model.
+ * Where a run starts: the head this far short of the bite's entry (x = −Lc, where the head's corner meets the
+ * roll), the way the head travels in START_STEPS steps at the entry speed. The step is the solvers' (the CFL
+ * step on the mass-scaled dilatational wave; h the cell, K and G the elastic constants). About half a cell on
+ * steel at mass scaling 1e4, so the nodes a cell past the entry start with a little mass inside the roll (a node
+ * takes mass from points up to 1.5 cells away); the way up to the rolls is not computed (it was 2 h0 before, then
+ * two cells). The section model, the plan view and the 3D model.
  */
-export const START_GAP = 2;
+export function startOffset(P: SimParams, h: number, K: number, G: number): number {
+  const r = P.rolling;
+  const rho = P.material.rho * P.numerics.massScale;
+  const c = Math.sqrt((K + (4 / 3) * G) / rho);
+  const dt = (P.numerics.cfl * h) / (c + 1.5 * r.rollSpeed);
+  return START_STEPS * dt * r.rollSpeed * (1 - r.reduction);
+}
+
+/**
+ * The grid's margin behind the tail at the start: 6 cells, plus what brings the bite's entry to the same place
+ * within a cell as with the head a whole number of cells before it. The points sit on the grid as they did with
+ * the head two cells before the entry (a whole number of cells before it is the same lattice), so moving the
+ * start does not move the points against the grid: ahead of the bite the sheet moves as one at the entry speed,
+ * so the place within a cell where each column meets the rolls is set at the start and never mixes, and the
+ * plan view's steady force moved 3.4 % with a half-cell start (docs/validation.md「始める位置」).
+ */
+export function tailMargin(h: number, offset: number): number {
+  return 6 * h + Math.ceil(offset / h - 1e-9) * h - offset;
+}
 
 /** Derived geometry of the roll bite (rigid rolls). */
 export function biteGeometry(r: RollingParams) {

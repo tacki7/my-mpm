@@ -13,7 +13,7 @@
 // @check
 import { ok, between, near, done } from './lib.mjs';
 import { Sim } from '../../src/mpm/solver.ts';
-import { defaultParams, DAMAGE_4340 } from '../../src/mpm/params.ts';
+import { defaultParams, DAMAGE_4340, START_STEPS } from '../../src/mpm/params.ts';
 import { presetById } from '../../src/mpm/presets.ts';
 import { READ_STEPS, TandemSim } from '../../src/mpm/tandem.ts';
 
@@ -139,18 +139,19 @@ function remapCheck(name, P) {
     between(worst(a.tenths, b.tenths), 0, tenth, `${name}: ${what} per tenth of the material along the sheet, largest change / largest tenth`);
   }
 
-  // the carried stresses stay put while the sheet moves freely (a few hundred steps, before the rolls)
+  // the carried stresses stay put while the sheet moves freely (half the way to the rolls: the head meets them
+  // START_STEPS steps in)
   const stress = (s, q) => [s.pres[q], s.sxx[q], s.syy[q]];
   const s0 = Array.from({ length: sim.n }, (_, q) => stress(sim, q));
   let sum2 = 0;
   for (const v of s0) for (const x of v) sum2 += x * x;
   const rms = Math.sqrt(sum2 / (3 * sim.n));
-  for (let k = 0; k < 300; k++) t.advance();
+  for (let k = 0; k < START_STEPS / 2; k++) t.advance();
   const ph = t.sim.phase();
   let d2 = 0;
   for (let q = 0; q < sim.n; q++) stress(sim, q).forEach((x, c) => (d2 += (x - s0[q][c]) ** 2));
   const moved = Math.sqrt(d2 / (3 * sim.n));
-  ok(ph === 'approach' && rms > 1e7, `${name}: 300 steps on, the sheet has not reached the rolls; residual stresses ${(rms * 1e-6).toFixed(0)} MPa rms`, ph);
+  ok(ph === 'approach' && rms > 1e7, `${name}: ${START_STEPS / 2} steps on, the sheet has not reached the rolls; residual stresses ${(rms * 1e-6).toFixed(0)} MPa rms`, ph);
   between(moved / rms, 0, 0.15, `${name}: the carried p, σxx and σyy move by (rms, of their rms)`);
   return t;
 }

@@ -142,7 +142,7 @@ const rigid = pass(params());
   // the thickness the gap is held on is the one handed on (by area): the chain is h0 (1 − r)^k. With the gauge on the
   // points' edges stand 2 came in 0.37 % thinner than stand 1's sheet was held at, and every stand's reduction was off
   near(b.result.h0, a.result.h0 * (1 - r0.reduction), 1e-3, "stand 2's entry thickness is stand 1's target");
-  ok(a.start.phase === 'approach' && a.start.head < -a.start.Lc - 1.5 * a.start.h && a.start.R > 1.4 * r0.rollRadius && a.start.ep0 > 0.3, "stand 2's sheet starts before the bite of its flattened rolls, which start from the strain brought in", `R' ${(a.start.R * 1e3).toFixed(1)} mm, εp ${a.start.ep0.toFixed(3)}, head ${(a.start.head * 1e3).toFixed(2)} mm, Lc ${(a.start.Lc * 1e3).toFixed(2)} mm`);
+  ok(a.start.phase === 'approach' && a.start.head < -a.start.Lc - 0.4 * a.start.h && a.start.R > 1.4 * r0.rollRadius && a.start.ep0 > 0.3, "stand 2's sheet starts before the bite of its flattened rolls, which start from the strain brought in", `R' ${(a.start.R * 1e3).toFixed(1)} mm, εp ${a.start.ep0.toFixed(3)}, head ${(a.start.head * 1e3).toFixed(2)} mm, Lc ${(a.start.Lc * 1e3).toFixed(2)} mm`);
   between(b.result.rollRadius / a.start.R, 0.97, 1.03, "and end within 3 % of where they started");
   ok(b.result.rollsSettled && b.result.steadyForce > 0, 'stand 2 settles too and has steady readings');
   near(b.result.exitThickness, b.result.h0 * (1 - r0.reduction), 1.5e-3, "stand 2's sheet at its reduction of its own entry thickness");

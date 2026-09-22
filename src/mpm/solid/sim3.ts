@@ -19,10 +19,11 @@
 // - Pusher, mass scaling, the mill-speed scaling of the strain rate and the damage indicators mean the
 //   same as in the section model, and so are rolls that follow the pass (Hitchcock's flattening with the
 //   roll force per unit width, a constant reduction on the strip's mean thickness: adjustRolls).
-//   No tensions, no crack faces: a failed
-//   point carries no deviator and no tension (it is counted, and the first one is recorded). A tandem
-//   is a Sim3 per stand (tandem3.ts).
-import { START_GAP, biteGeometry, cloneParams, hitchcockRadius, type DamageModel, type SimParams } from '../params.ts';
+//   Strip tensions as in the section model: a stress on the end column's actual cross-section (the quarter's),
+//   shared over the h0-long grips at the ends by a linear weight and each point's deformed section (updateTension,
+//   gripScale). No crack faces: a failed point carries no deviator and no tension (it is counted, and the first one
+//   is recorded). A tandem is a Sim3 per stand (tandem3.ts).
+import { startOffset, tailMargin, biteGeometry, cloneParams, hitchcockRadius, type DamageModel, type SimParams } from '../params.ts';
 import { CTL_EVERY, CTL_TOL_H, CTL_TOL_R, presetRolls } from '../solver.ts';
 import { adiabaticRise, elasticConstants, hmFractureStrain, homologousTemperature, jcFractureStrain, plasticIncrement, staticStrength, strengthFactor, type Elastic } from '../material.ts';
 
@@ -145,6 +146,18 @@ export class Sim3 {
   step = 0;
   pusherActive = true;
   stalled = false;
+  /** tension stresses applied at this step, after ramping [Pa] */
+  backNow = 0;
+  frontNow = 0;
+  /** end column section / Σ w A_p over the tail's and the head's grips (see gripScale) */
+  private backScale = 1;
+  private frontScale = 1;
+  private backOffAt = -1;
+  private frontOnAt = -1;
+  /** ramp time of the tensions [s] */
+  readonly tensionRamp: number;
+  /** lattice columns in each end's grip (h0 long, at most half the strip) */
+  readonly gripCols: number;
   plasticWork = 0;
   nFailed = 0;
   firstCrack: SolidCrack | null = null;
@@ -234,12 +247,13 @@ export class Sim3 {
     this.halfWidth0 = hw;
 
     const Lc = this.contactLength;
-    // just short of the rolls (params.ts START_GAP)
-    this.xHead0 = -Lc - START_GAP * h;
+    // just short of the rolls (params.ts startOffset)
+    const offset = startOffset(P, h, this.el.K, this.el.G);
+    this.xHead0 = -Lc - offset;
     const xTail0 = this.xHead0 - r.sheetLength;
     const elongated = r.sheetLength / (1 - r.reduction);
     const xEnd = 2 * r.h0 + 2 * h + elongated * 1.1 + 8 * h;
-    this.ox = xTail0 - 6 * h;
+    this.ox = xTail0 - tailMargin(h, offset);
     this.nxN = Math.ceil((xEnd - this.ox) / h) + 1;
     this.nyN = Math.ceil((r.h0 / 2 + 4 * h) / h) + 2;
     // room for the spread: a quarter of the half width, and four cells
@@ -349,6 +363,9 @@ export class Sim3 {
 
     const c = Math.sqrt((this.el.K + (4 / 3) * this.el.G) / rho);
     this.dt = (num.cfl * h) / (c + 1.5 * r.rollSpeed);
+    // tensions ramp over ten passes of the (mass-scaled) elastic wave along the strip (solver.ts)
+    this.tensionRamp = r.tensionRamp && r.tensionRamp > 0 ? r.tensionRamp : (10 * r.sheetLength) / c;
+    this.gripCols = Math.max(1, Math.min(Math.round(r.h0 / dp), Math.floor(NI / 2)));
     const epMid = (1 / Math.sqrt(3)) * Math.log(1 / (1 - r.reduction));
     const twoK = (2 / Math.sqrt(3)) * staticStrength(P.material, epMid);
     this.inertiaRatio = (rho * r.rollSpeed * r.rollSpeed * r.reduction) / twoK;
@@ -383,6 +400,7 @@ export class Sim3 {
     this.gMv.fill(0, lo, hi);
     if (this.pusherActive && this.headX() > this.xExitProbe) this.pusherActive = false;
     if (!this.pusherActive && !this.stalled && this.step % 200 === 0) this.checkStall();
+    this.updateTension();
     this.p2g();
     this.gridUpdate();
     this.g2pVelocity();
@@ -498,6 +516,11 @@ export class Sim3 {
     const { cy, R } = this.roll;
     const pushing = this.pusherActive;
     const tailEnd = this.NJ * this.NK; // the points of the tail column come first
+    // force per gripped point [N] per unit of its deformed section and of its grip weight (see gripScale)
+    const grip = this.gripCols;
+    const NI = this.NI;
+    const tractionB = -this.backNow * this.backScale;
+    const tractionF = this.frontNow * this.frontScale;
     const wx = [0, 0, 0];
     const wy = [0, 0, 0];
     const wz = [0, 0, 0];
@@ -544,9 +567,14 @@ export class Sim3 {
       const a20 = kk * szx[p] + m * C[o + 6];
       const a21 = kk * syz[p] + m * C[o + 7];
       const a22 = kk * (szz[p] - pr) + m * C[o + 8];
-      const mvx = m * vx[p];
+      let mvx = m * vx[p];
       const mvy = m * vy[p];
       const mvz = m * vz[p];
+      if (tractionB !== 0 || tractionF !== 0) {
+        const i = Math.floor(p / tailEnd);
+        if (tractionB !== 0 && i < grip) mvx += dt * tractionB * this.gripWeight(i, 1) * this.section(p);
+        else if (tractionF !== 0 && i >= NI - grip) mvx += dt * tractionF * this.gripWeight(i, 2) * this.section(p);
+      }
 
       // penetration of the point's top edge (its half size along the deformed y edge) into the roll
       const ex = xp;
@@ -1200,7 +1228,7 @@ export class Sim3 {
         }
         const s1 = maxPrincipal(sx - pr, sy - pr, sz - pr, sa, sb, sc);
         if (s1 > 0) dCL[p] += ((s1 / q) * dep) / dmg.clCrit;
-        if (dmg.model !== 'none' && this.governingDamage(p) >= 1) this.fail(p);
+        if (dmg.model !== 'none' && this.governingDamage(p) >= 1 && !this.inGrip(p)) this.fail(p);
       }
     }
   }
@@ -1236,6 +1264,107 @@ export class Sim3 {
     };
   }
 
+  /** the point's deformed cross-section normal to x [m²]: dp dz × the yz cofactor of F (|F e_y × F e_z|'s x-component) */
+  section(p: number): number {
+    const o = 9 * p;
+    const { F } = this;
+    return this.dp * this.dz * Math.abs(F[o + 4] * F[o + 8] - F[o + 5] * F[o + 7]);
+  }
+
+  /** In the gripped length of an end while a tension is applied there: damage is shown there but does not fail the point. */
+  inGrip(p: number): boolean {
+    const i = Math.floor(p / (this.NJ * this.NK));
+    return (this.frontNow > 0 && i >= this.NI - this.gripCols) || (this.backNow > 0 && i < this.gripCols);
+  }
+
+  /**
+   * Share of the end load for a point of lattice column i in the grip of the tail (1) or the head (2): largest at
+   * the end column, falling linearly towards the inner end of the grip (solver.ts gripWeight).
+   */
+  gripWeight(i: number, end: number): number {
+    const g = this.gripCols;
+    const j = end === 1 ? g - 1 - i : i - (this.NI - g);
+    return (j + 0.5) / g;
+  }
+
+  /** Total load the tail (1) or head (2) grip puts on the quarter strip this step [N], signed along x. */
+  endLoad(tg: number): number {
+    const { n, active, NI } = this;
+    const m = this.NJ * this.NK;
+    const g = this.gripCols;
+    const t = tg === 1 ? -this.backNow * this.backScale : this.frontNow * this.frontScale;
+    let f = 0;
+    for (let p = 0; p < n; p++) {
+      const i = Math.floor(p / m);
+      if (!active[p] || (tg === 1 ? i >= g : i < NI - g)) continue;
+      f += t * this.gripWeight(i, tg) * this.section(p);
+    }
+    return f;
+  }
+
+  /** The end column's actual cross-section (the quarter's): Σ of its active points' deformed sections [m²] */
+  endSection(tg: number): number {
+    const m = this.NJ * this.NK;
+    const from = tg === 1 ? 0 : this.n - m;
+    let a = 0;
+    for (let p = from; p < from + m; p++) if (this.active[p]) a += this.section(p);
+    return a;
+  }
+
+  /**
+   * Tension stresses for this step (solver.ts updateTension): back tension ramps up from the start and is let go
+   * once the tail reaches the entry plane; front tension is switched on when the head passes the exit probe and
+   * ramps up from then.
+   */
+  private updateTension(): void {
+    const r = this.params.rolling;
+    const t = this.t;
+    const ramp = this.tensionRamp;
+    if (r.backTension !== 0) {
+      if (this.backOffAt < 0 && this.tailX() >= -this.contactLength) this.backOffAt = t;
+      let back = r.backTension * Math.min(1, t / ramp);
+      const release = Math.min(ramp, this.contactLength / this.vIn);
+      if (this.backOffAt >= 0) back *= Math.max(0, 1 - (t - this.backOffAt) / release);
+      this.backScale = this.gripScale(1);
+      this.backNow = this.backScale > 0 ? back : 0;
+    }
+    if (r.frontTension !== 0) {
+      if (this.frontOnAt < 0 && this.headX() > this.xExitProbe) this.frontOnAt = t;
+      const front = this.frontOnAt >= 0 ? r.frontTension * Math.min(1, (t - this.frontOnAt) / ramp) : 0;
+      this.frontScale = this.gripScale(2);
+      this.frontNow = this.frontScale > 0 ? front : 0;
+    }
+  }
+
+  /**
+   * The end column's section over Σ w A_p of the points in that end's grip (w the grip weight, A_p the deformed
+   * section): each gripped point's load is σ w A_p times this, so the total is σ × the end column's section whatever
+   * the grip's columns look like. 0 when the end column has left the grid.
+   */
+  private gripScale(tg: number): number {
+    const a = this.endSection(tg);
+    if (!(a > 0)) return 0;
+    const { n, active, NI } = this;
+    const m = this.NJ * this.NK;
+    const g = this.gripCols;
+    let sum = 0;
+    for (let p = 0; p < n; p++) {
+      const i = Math.floor(p / m);
+      if (!active[p] || (tg === 1 ? i >= g : i < NI - g)) continue;
+      sum += this.gripWeight(i, tg) * this.section(p);
+    }
+    return sum > 0 ? a / sum : 0;
+  }
+
+  /** The tensions asked for are fully on (solver.ts tensionsOn): 'steady' waits for them */
+  tensionsOn(): boolean {
+    const r = this.params.rolling;
+    // the tension the last step applied: updateTension() reads t at the start of the step
+    const t = this.t - this.dt;
+    if (r.frontTension !== 0 && (this.frontOnAt < 0 || t - this.frontOnAt < this.tensionRamp)) return false;
+    return r.backTension === 0 || t >= this.tensionRamp;
+  }
+
   /** front of the head column (+∞ once it has left the grid) */
   headX(): number {
     const { n, active, px } = this;
@@ -1260,7 +1389,7 @@ export class Sim3 {
     if (head < -this.contactLength) return 'approach';
     if (head < this.xExitProbe) return 'bite';
     if (tail > -this.contactLength) return 'tail-out';
-    return this.rollsSettled ? 'steady' : 'adjusting';
+    return this.rollsSettled && this.tensionsOn() ? 'steady' : 'adjusting';
   }
 
   /** the sheet no longer moves though it is between the rolls (the rolls cannot draw it in) */

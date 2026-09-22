@@ -24,7 +24,7 @@
 //   the slip, sliding at the full capacity otherwise. No regularisation, no dependence on Δt.
 // - Pusher, tensions, mass scaling and the mill-speed scaling of the strain rate mean the
 //   same as in the section model and use the same parameters.
-import { START_GAP, biteGeometry, type DamageModel, type Defect, type SimParams } from '../params.ts';
+import { startOffset, tailMargin, biteGeometry, type DamageModel, type Defect, type SimParams } from '../params.ts';
 import { elasticConstants, flowStress, hmFractureStrain, homologousTemperature, jcFractureStrain, plasticIncrement, type Elastic } from '../material.ts';
 
 /**
@@ -241,12 +241,13 @@ export class PlanSim {
     const dp = h / num.ppc;
     this.dp = dp;
     const Lc = geo.contactLength;
-    // just short of the rolls (params.ts START_GAP)
-    this.xHead0 = -Lc - START_GAP * h;
+    // just short of the rolls (params.ts startOffset)
+    const offset = startOffset(P, h, this.el.K, this.el.G);
+    this.xHead0 = -Lc - offset;
     const xTail0 = this.xHead0 - r.sheetLength;
     const elongated = r.sheetLength / (1 - r.reduction);
     const xEnd = 2 * r.h0 + 2 * h + elongated * 1.1 + 8 * h;
-    this.ox = xTail0 - 6 * h;
+    this.ox = xTail0 - tailMargin(h, offset);
     this.oz = -3 * h;
     this.nxN = Math.ceil((xEnd - this.ox) / h) + 1;
     // room for the width to spread
@@ -1473,8 +1474,10 @@ export class PlanSim {
    */
   tensionsOn(): boolean {
     const r = this.params.rolling;
-    if (r.frontTension !== 0 && (this.frontOnAt < 0 || this.t - this.frontOnAt < this.tensionRamp)) return false;
-    return r.backTension === 0 || this.t >= this.tensionRamp;
+    // the tension the last step applied: updateTension() reads t at the start of the step
+    const t = this.t - this.dt;
+    if (r.frontTension !== 0 && (this.frontOnAt < 0 || t - this.frontOnAt < this.tensionRamp)) return false;
+    return r.backTension === 0 || t >= this.tensionRamp;
   }
 
   /** Tensions as in the section model: back tension ramps up and is released once the tail reaches the entry; front tension from when the head passes the exit probe. The load goes in through the grips (gripScale). */

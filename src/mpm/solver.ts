@@ -18,7 +18,7 @@
 //
 // World frame: x along rolling (the exit plane of the rigid rolls is x = 0),
 // y through the thickness (mid-plane y = 0). Everything per unit width.
-import { ROLL_E, START_GAP, biteGeometry, cloneParams, hitchcockRadius, type DamageModel, type MaterialParams, type RollingParams, type SimParams } from './params.ts';
+import { ROLL_E, startOffset, tailMargin, biteGeometry, cloneParams, hitchcockRadius, type DamageModel, type MaterialParams, type RollingParams, type SimParams } from './params.ts';
 import { druckerWork, localization } from './bifurcation.ts';
 import { karmanFlattened, karman } from './slab.ts';
 import {
@@ -424,15 +424,16 @@ export class Sim {
     const dp = h / num.ppc;
     this.dp = dp;
 
-    // The sheet starts with its head just short of the rolls: START_GAP cells before the entry of the bite.
+    // The sheet starts with its head just short of the rolls: START_STEPS steps before the entry of the bite.
     const Lc = this.contactLength;
-    this.xHead0 = -Lc - START_GAP * h;
+    const offset = startOffset(P, h, this.el.K, this.el.G);
+    this.xHead0 = -Lc - offset;
     const xTail0 = this.xHead0 - r.sheetLength;
     // Enough room for the whole sheet to come out on the exit side.
     const elongated = r.sheetLength / (1 - r.reduction);
     const xEnd = 2 * r.h0 + 2 * h + elongated * 1.1 + 8 * h;
     const yHalf = r.h0 / 2 + 4 * h;
-    this.ox = xTail0 - 6 * h;
+    this.ox = xTail0 - tailMargin(h, offset);
     this.oy = -yHalf;
     this.nxN = Math.ceil((xEnd - this.ox) / h) + 1;
     this.nyN = Math.ceil((2 * yHalf) / h) + 1;
@@ -619,11 +620,12 @@ export class Sim {
     // column and centred on it: bins whose edges fall on the columns collect 0, 1
     // or 2 of them by round-off, which made the friction hill saw-toothed.
     this.binW = h;
-    // (−Lc − 6h − ox)/h = (max(2h0, 4h) + L)/h, a whole number of columns up to round-off (floor made
-    // 179.999… into 179 and moved the window one column back)
-    this.binCol0 = Math.round((-Lc - 6 * h - this.ox) / h);
+    // The window runs from 6 cells before the entry to 6 cells after the exit, each end widened to the next
+    // column (the entry is a whole number of columns from ox up to round-off, tailMargin; the 1e-6 keeps
+    // 179.999… as 180, which a plain floor once made 179 and moved the window one column back)
+    this.binCol0 = Math.floor((-Lc - 6 * h - this.ox) / h + 1e-6);
     this.binX0 = this.ox + (this.binCol0 - 0.5) * h;
-    this.nBins = Math.ceil((Lc + 12 * h) / h);
+    this.nBins = Math.ceil((6 * h - this.ox) / h - 1e-6) - this.binCol0 + 1;
     this.binN = new Float64Array(this.nBins);
     this.binT = new Float64Array(this.nBins);
     this.lastP = new Float64Array(this.nBins);
@@ -2076,8 +2078,10 @@ export class Sim {
    */
   private tensionsOn(): boolean {
     const r = this.params.rolling;
-    if (r.frontTension !== 0 && (this.frontOnAt < 0 || this.t - this.frontOnAt < this.tensionRamp)) return false;
-    return r.backTension === 0 || this.t >= this.tensionRamp;
+    // the tension the last step applied: updateTension() reads t at the start of the step
+    const t = this.t - this.dt;
+    if (r.frontTension !== 0 && (this.frontOnAt < 0 || t - this.frontOnAt < this.tensionRamp)) return false;
+    return r.backTension === 0 || t >= this.tensionRamp;
   }
 
   /**
