@@ -185,6 +185,7 @@ export class SolidView {
     if (this.rolls) this.drawRoll(project, -1);
     if (this.frame) this.drawStrip(project, this.frame);
     this.drawMarks(project);
+    if (this.frame) this.drawTracks(project, this.frame);
     if (this.rolls) this.drawRoll(project, 1);
     this.drawTriad();
   }
@@ -453,6 +454,42 @@ export class SolidView {
       ctx.fillText(label, lx - wText / 2, ly + 13.5);
     }
     ctx.restore();
+  }
+
+  /** The mirror images of a solved point that the picture shows: itself and its image across the mid-width plane,
+   *  or the far image alone once the strip is cut open there. */
+  private mirrors(): number[] {
+    return this.cut ? [-1] : [1, -1];
+  }
+
+  /** the followed points: a red dashed ring around the first crack, a brown dotted one around the most damaged point */
+  private drawTracks(project: (x: number, y: number, z: number, out: Float64Array) => void, f: SolidFrame): void {
+    const ctx = this.ctx;
+    const pr = new Float64Array(3);
+    ctx.save();
+    ctx.lineWidth = 2;
+    for (const t of f.tracks) {
+      const crack = t.role === 'first-crack';
+      ctx.strokeStyle = crack ? '#c23b22' : '#8d5a33';
+      ctx.setLineDash(crack ? [4, 3] : [2, 2]);
+      for (const sz of this.mirrors()) {
+        project(t.state.x, t.state.y, sz * (t.state.z ?? 0), pr);
+        ctx.beginPath();
+        ctx.arc(pr[0], pr[1], crack ? 9 : 7, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+    }
+    ctx.restore();
+  }
+
+  /** Client coordinates of a followed point's ring (headless checks look there), or null when none is drawn. */
+  screenOf(role: SolidFrame['tracks'][number]['role']): { x: number; y: number } | null {
+    const t = this.frame?.tracks.find((k) => k.role === role);
+    if (!t || !this.geometry) return null;
+    const r = this.canvas.getBoundingClientRect();
+    const pr = new Float64Array(3);
+    this.projector()(t.state.x, t.state.y, this.mirrors()[0] * (t.state.z ?? 0), pr);
+    return { x: r.left + pr[0], y: r.top + pr[1] };
   }
 
   /** which way the axes point, bottom left (above the legend) */
