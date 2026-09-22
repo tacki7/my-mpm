@@ -13,7 +13,8 @@
 // - a two-stand tandem in the half model keeps the mass to 1e-12 and hands the whole thickness on (the next stand's h0
 //   is the thickness that came out, 2 × the half's area, and its sheet has the half's mass)
 // - the whole model is untouched: the default 6-cell 8-mm pass's steady force is what it was before the option
-//   existed (3.239085928983561 kN/mm, node 24, 2026-09-23), to 1e-12
+//   existed (3.239085928983561 kN/mm, node 24 on macOS, 2026-09-23), to 1e-9: the value is bit for bit on the machine
+//   that measured it, and CI's Linux V8 differs in the last bit of Math.exp / log, which the pass grows to ~1e-11
 // Calibrated on copies (2026-09-23): with the ghost row not folded (foldGhosts skipped) the force is 4.7 % off, the
 // slip 30 % off and the faces carry 92 MPa on average (8 items fail); without the tie-break on the plane's nodes
 // (assignFields) a face carries 138 MPa (the largest-face item fails).
@@ -58,7 +59,7 @@ function pass(half) {
 {
   const whole = pass(false);
   const half = pass(true);
-  near(whole.force * 1e-6, 3.239085928983561, 1e-12, 'the whole model: the steady force of the default 6-cell 8-mm pass is what it was [kN/mm]');
+  near(whole.force * 1e-6, 3.239085928983561, 1e-9, 'the whole model: the steady force of the default 6-cell 8-mm pass is what it was [kN/mm]');
   ok(half.s.half && half.s.rolls.length === 1 && half.s.NJ === whole.s.NJ / 2 && half.s.n === whole.s.n / 2, 'half: one roll, half the rows and points', `${half.s.n} of ${whole.s.n} points`);
   ok(whole.phase === 'done' && half.phase === 'done' && whole.reads === half.reads && whole.reads >= 1, 'both passes run to the end with the same steady reads', `${half.reads} reads`);
   near(half.force, whole.force, 1e-9, 'half: the steady roll force agrees with the whole model [N/m]');
