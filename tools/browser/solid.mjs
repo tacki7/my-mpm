@@ -2,7 +2,7 @@
 // a real click on 「3 次元」 shows the 3D page (the section, the plan view and their controls are gone, the panel
 // has the 3D strip's settings and not the conditions the 3D model lacks); a 4 mm strip is rolled to the end and
 // its steady values compared with `node tools/solid.mjs` (relative 1e-5: Chrome's and Node's V8 differ in the
-// last bit of a few Math functions); every field tab redraws; a real drag turns the drawing, the wheel zooms, a
+// last bit of a few Math functions); the playback bar (巻き戻す, 再生, the slider, a field tab while paused); every field tab redraws; a real drag turns the drawing, the wheel zooms, a
 // double click puts it back; the view buttons; the conditions URL opens the same 3D condition; back on 2 次元 the
 // section still runs, and showing 3 次元 pauses it; the stress state and the fracture locus (a standard strip: the
 // most damaged point; a strip that cracks: the first crack's point, the role buttons by real clicks); a narrow
@@ -79,6 +79,36 @@ try {
   ok(row.includes((s.force * 1e-3).toFixed(2)), 'the results table shows the steady roll force', row);
   ok((table.find((t) => t.startsWith('幅広がり W1/W0')) ?? '').includes((s.spread * 100).toFixed(2)), 'and the spread');
   await shot('solid');
+
+  // ── playback of the recorded frames (tape.ts): the bar appears once the run has stopped; 巻き戻す, 再生, 一時停止,
+  // the slider, and a field tab while playing back; the end of the tape is the live frame
+  const rp0 = await c.evaluate('JSON.parse(JSON.stringify({ n: __mpm.solid.replay.length, at: __mpm.solid.replay.at, hidden: document.getElementById("solid-replay").hidden, frames: __mpm.solid.frames }))');
+  ok(!rp0.hidden && rp0.n >= 50 && rp0.n <= 400 && rp0.at === null && rp0.frames > rp0.n, 'the run recorded a tape of at most 400 frames and the playback bar is shown, on the live frame', `${rp0.n} kept of ${rp0.frames} frames`);
+  await click('#solid-rewind');
+  await painted();
+  const rp1 = await c.evaluate('JSON.parse(JSON.stringify({ at: __mpm.solid.replay.at, step: __mpm.solid.frameShown.diag.step, phase: document.getElementById("solid-phase").textContent, clock: document.getElementById("clock").textContent, head: Math.max(...__mpm.solid.frameShown.faces[0].pos.filter((v, i) => i % 3 === 0 && !Number.isNaN(v))) }))');
+  ok(rp1.at === 0 && rp1.step === 0 && rp1.phase.startsWith('再生 1 /') && rp1.clock.startsWith('t = 0.00 ms') && rp1.head < 0, '巻き戻す shows the first frame: step 0, the strip before the rolls, the clock and the status say so', `${rp1.phase}; ${rp1.clock}; head at ${(rp1.head * 1e3).toFixed(1)} mm`);
+  await click('#solid-play');
+  await c.waitFor('__mpm.solid.replay.playing && __mpm.solid.replay.at >= 12', 10000);
+  await click('#solid-play');
+  const rp2 = await c.evaluate('JSON.parse(JSON.stringify({ at: __mpm.solid.replay.at, playing: __mpm.solid.replay.playing, btn: document.getElementById("solid-play").textContent }))');
+  await painted();
+  await painted();
+  const rp3 = await c.evaluate('__mpm.solid.replay.at');
+  ok(!rp2.playing && rp2.at >= 12 && rp2.at < rp0.n - 1 && rp3 === rp2.at && rp2.btn === '再生', '再生 runs through the frames (about 12 a second) and the same button pauses it', `paused at ${rp2.at}, still ${rp3}`);
+  await click('#solid-tabs button[data-field="ep"]');
+  await c.waitFor(`document.getElementById('solid-legend').dataset.field === 'ep'`, 5000);
+  ok(await c.evaluate('__mpm.solid.replay.at === ' + rp2.at), 'a field tab while paused recolours the frame on show without leaving it');
+  await click('#solid-tabs button[data-field="seq"]');
+  await c.waitFor(`document.getElementById('solid-legend').dataset.field === 'seq'`, 5000);
+  // a real click at the right end of the slider: the last frame, which is the live one
+  const sl = await c.evaluate(`(() => { const b = document.getElementById('solid-scrub').getBoundingClientRect(); return { x: b.right - 6, y: b.y + b.height / 2 }; })()`);
+  await mouse('mousePressed', sl.x, sl.y);
+  await mouse('mouseReleased', sl.x, sl.y);
+  await painted();
+  const rp4 = await c.evaluate('JSON.parse(JSON.stringify({ at: __mpm.solid.replay.at, same: __mpm.solid.frameShown.diag.step === __mpm.solid.diag.step, phase: document.getElementById("solid-phase").textContent, slider: +document.getElementById("solid-scrub").value, n: __mpm.solid.replay.length }))');
+  ok(rp4.at === null && rp4.same && rp4.slider === rp4.n - 1 && rp4.phase === '圧延が終わった', 'the slider\'s end is the live frame: playback is left and the status is the run\'s', `${rp4.phase}, slider ${rp4.slider} / ${rp4.n - 1}`);
+  ok(c.errors.length === 0, 'no exceptions in the playback', c.errors.join(' | '));
 
   // ── the fracture locus and the stress state of the followed points (explorer.ts on the 3D page)
   const cell = (key) => c.evaluate(`(() => { const r = document.querySelector('#solid-explorer-state tr[data-key="${key}"]'); return r && { value: +r.dataset.value, text: (r.children[1] ?? r).textContent }; })()`);

@@ -9,12 +9,14 @@ import type { Track } from './protocol.ts';
 
 /** what the strip's faces can be coloured by */
 export type SolidFieldName = 'seq' | 'ep' | 'pres' | 'eta' | 'sxx' | 'syy' | 'szz' | 'damage' | 'spread';
+/** the order of the fields in a face's `vals`: every frame carries all of them, so the page colours the strip by
+ *  itself (a field tab needs no round trip to the worker) and a recorded frame can be shown in any field */
+export const SOLID_FIELD_IDS: readonly SolidFieldName[] = ['seq', 'ep', 'pres', 'eta', 'sxx', 'syy', 'szz', 'damage', 'spread'];
 
 export type ToSolidWorker =
-  | { type: 'init'; params: SimParams; solid: SolidSettings; stands: number; handoff: Handoff; field: SolidFieldName; stopAfter: number | null }
+  | { type: 'init'; params: SimParams; solid: SolidSettings; stands: number; handoff: Handoff; stopAfter: number | null }
   | { type: 'run' }
-  | { type: 'pause' }
-  | { type: 'field'; field: SolidFieldName };
+  | { type: 'pause' };
 
 /** Fixed facts of a stand, sent after init and again when a tandem's next stand starts. Lengths in m. */
 export interface SolidGeometry {
@@ -66,7 +68,6 @@ export interface SolidDiag {
 export interface SolidFrame {
   type: 'frame';
   faces: Face[];
-  field: SolidFieldName;
   /** half width along the strip (the edge's outer face) [m], by lattice column from the tail */
   edgeX: Float32Array;
   edgeHalfWidth: Float32Array;

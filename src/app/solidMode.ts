@@ -22,12 +22,23 @@ import { SolidStandTable } from './solidStandTable.ts';
 import { stopPhrase } from './standTable.ts';
 import { Explorer, standColor } from './explorer.ts';
 import { SOLID_FIELDS, SolidView, solidFieldInfo, type ViewPreset } from './solidView.ts';
+import { Tape } from './tape.ts';
 
 export type Dim = '2' | '3';
 
 const mm = 1e-3;
 const INK = '#1d2a3a';
 const STEEL = '#5f6b75';
+/** the worker's frame cadence [ms] while it runs (solid.worker.ts FRAME_MS): playback at ×1 shows the frames at the rate they came */
+const FRAME_MS = 80;
+const SPEEDS = [0.25, 0.5, 1, 2, 4];
+
+/** what a frame holds in memory: the faces' vertices and values (the rest is small) */
+function frameBytes(f: SolidFrame): number {
+  let n = 0;
+  for (const face of f.faces) n += face.pos.byteLength + face.vals.byteLength + face.failed.byteLength;
+  return n + 8 * f.history.t.length * 3;
+}
 
 const phaseText: Record<SolidPhase, string> = {
   approach: 'ロールに向かっている',
@@ -123,6 +134,11 @@ export class SolidMode {
   /** the stress state and the fracture locus of the first crack's and the most damaged point */
   private explorer!: Explorer;
   private last: SolidFrame | null = null;
+  /** the frames of the run so far, for playback once it has stopped (tape.ts thins it to a few hundred) */
+  private readonly tape = new Tape<SolidFrame>(frameBytes);
+  /** playback: which frame of the tape is on show and whether it is playing; null while the live frame is shown */
+  private replay: { at: number; playing: boolean; timer: ReturnType<typeof setInterval> | null } | null = null;
+  private speed = 1;
   private params: SimParams | null = null;
   private field: SolidFieldName;
   private running = false;
@@ -148,12 +164,14 @@ export class SolidMode {
     this.settings = settingsOf(o.query);
     this.field = (SOLID_FIELDS.find((f) => f.id === o.query.get('f3'))?.id ?? 'seq') as SolidFieldName;
     this.view = new SolidView(this.$<HTMLCanvasElement>('solid-canvas'));
+    this.view.field = this.field;
     document.body.dataset.dim = '2';
     this.buildDimTabs();
     this.buildSettings();
     this.buildFieldTabs();
     this.buildTools();
     this.buildPointer();
+    this.buildReplay();
     this.buildUrl();
     this.standTable = new SolidStandTable(this.$('solid-stand-section'), this.$('solid-stand-results'));
     this.explorer = new Explorer(
@@ -504,7 +522,10 @@ export class SolidMode {
       this.view.resize();
       this.dirty = this.chartsDirty = true;
       this.updateButtons();
-    } else if (this.running) this.pause();
+    } else {
+      if (this.running) this.pause();
+      this.pauseReplay();
+    }
     this.o.onDim(dim);
   }
 
@@ -555,8 +576,10 @@ export class SolidMode {
     this.running = false;
     this.frames = 0;
     this.awaitingReady = true;
+    this.tape.clear();
+    this.stopReplay();
     const solid: SolidSettings = { width: this.settings.width, planeStrain: this.settings.planeStrain };
-    this.send({ type: 'init', params: P, solid, stands: P.rolling.stands ?? 1, handoff: P.rolling.handoff ?? 'done', field: this.field, stopAfter: this.stopAfter });
+    this.send({ type: 'init', params: P, solid, stands: P.rolling.stands ?? 1, handoff: P.rolling.handoff ?? 'done', stopAfter: this.stopAfter });
     this.standTable.update(1, [], 0, false, null, null);
     this.explorer.reset();
     this.updateButtons();
@@ -574,6 +597,7 @@ export class SolidMode {
 
   run(): void {
     if (!this.worker) return;
+    this.stopReplay();
     this.running = true;
     this.send({ type: 'run' });
     this.updateButtons();
@@ -587,8 +611,8 @@ export class SolidMode {
 
   setField(id: SolidFieldName): void {
     this.field = id;
+    this.view.field = id;
     this.markFieldTabs();
-    this.send({ type: 'field', field: id });
     this.dirty = true;
   }
 
@@ -601,11 +625,12 @@ export class SolidMode {
     (this.$('run') as HTMLButtonElement).disabled = this.running || this.finished || this.awaitingReady;
     (this.$('pause') as HTMLButtonElement).disabled = !this.running;
     this.$('run').textContent = this.frames > 1 && !this.finished ? '続ける' : '圧延を始める';
+    this.updateReplayBar();
   }
 
   showClock(): void {
     if (!this.active) return;
-    const d = this.last?.diag;
+    const d = this.shownFrame()?.diag;
     this.$('clock').textContent = `t = ${((d?.t ?? 0) * 1e3).toFixed(2)} ms　${(d?.step ?? 0).toLocaleString()} step`;
     this.$('eta').textContent = etaText(this.eta.seconds, this.frames > 1, this.finished);
   }
@@ -627,19 +652,149 @@ export class SolidMode {
   }
 
   private onFrame(f: SolidFrame): void {
+    // a frame of a step already on the tape (sent on a pause, or at the end) replaces it
+    const prev = this.last;
     this.last = f;
+    if (prev && prev.diag.step === f.diag.step && prev.diag.stand === f.diag.stand) this.tape.replaceLast(f);
+    else this.tape.push(f);
     const roll = this.params?.rolling;
     this.eta.update(performance.now(), f.running, f.diag.progress, f.diag.stand, roll?.stands ?? 1, standGrowth(roll?.reduction ?? 0, roll?.handoff ?? 'done', true));
     this.frames++;
     this.running = f.running;
-    this.view.frame = f;
-    // rolls that follow the pass: the picture's rolls are the ones now
-    const g0 = this.geometry;
-    if (g0 && (g0.gap !== f.diag.gap || g0.rollRadius !== f.diag.rollRadius)) this.view.geometry = { ...g0, gap: f.diag.gap, rollRadius: f.diag.rollRadius };
+    if (!this.replay) this.showFrame(f);
     this.dirty = this.chartsDirty = true;
     this.updateButtons();
     this.updateResults(f);
     if (this.params) this.explorer.update({ tracks: f.tracks, cracks: f.diag.firstCrack ? [f.diag.firstCrack] : [] }, this.params);
+  }
+
+  /** the picture shows this frame: its faces, its followed points, and the rolls as they were then (they follow the pass) */
+  private showFrame(f: SolidFrame): void {
+    this.view.frame = f;
+    const g0 = this.geometries[f.diag.stand] ?? this.geometry;
+    if (g0 && (this.view.geometry?.gap !== f.diag.gap || this.view.geometry?.rollRadius !== f.diag.rollRadius || this.view.geometry?.stand !== g0.stand)) {
+      this.view.geometry = { ...g0, gap: f.diag.gap, rollRadius: f.diag.rollRadius };
+    }
+  }
+
+  /** the frame on show: the tape's while playing back, else the latest */
+  private shownFrame(): SolidFrame | null {
+    return this.replay ? (this.tape.frames[this.replay.at] ?? this.last) : this.last;
+  }
+
+  // ── playback of the recorded frames ────────────────────────────────────────
+  private buildReplay(): void {
+    const bar = this.$('solid-replay');
+    const button = (id: string, label: string, title: string, on: () => void) => {
+      const b = el('button', undefined, label);
+      b.type = 'button';
+      b.id = id;
+      b.title = title;
+      b.addEventListener('click', on);
+      return b;
+    };
+    const rewind = button('solid-rewind', '巻き戻す', '最初の絵に戻る', () => this.seek(0));
+    const play = button('solid-play', '再生', '記録した絵を順に見る（最後まで行ったら止まる）', () => (this.replay?.playing ? this.pauseReplay() : this.play()));
+    const scrub = el('input');
+    scrub.type = 'range';
+    scrub.id = 'solid-scrub';
+    scrub.min = '0';
+    scrub.step = '1';
+    scrub.setAttribute('aria-label', '見る絵（記録の何枚目か）');
+    scrub.addEventListener('input', () => this.seek(+scrub.value));
+    const at = el('span', 'at');
+    at.id = 'solid-replay-at';
+    const speed = el('label');
+    speed.append('速さ');
+    const sel = el('select');
+    sel.id = 'solid-speed';
+    for (const k of SPEEDS) {
+      const o = el('option', undefined, `×${k}`);
+      o.value = String(k);
+      o.selected = k === this.speed;
+      sel.append(o);
+    }
+    sel.addEventListener('change', () => {
+      this.speed = +sel.value;
+      if (this.replay?.playing) this.play();
+    });
+    speed.append(sel);
+    const hint = el('span', undefined, '計算が止まっている間、記録した絵を見直せる。色の量のタブも効く。「続ける」「やり直す」で今の絵に戻る');
+    bar.append(rewind, play, scrub, at, speed, hint);
+  }
+
+  /** the bar is shown while the run is stopped and there is something recorded; its state follows the playback */
+  private updateReplayBar(): void {
+    const bar = this.$('solid-replay');
+    const n = this.tape.length;
+    const show = !this.running && !this.awaitingReady && n > 1;
+    bar.hidden = !show;
+    if (!show) return;
+    const r = this.replay;
+    const at = r ? r.at : n - 1;
+    const scrub = this.$<HTMLInputElement>('solid-scrub');
+    scrub.max = String(n - 1);
+    if (+scrub.value !== at) scrub.value = String(at);
+    const f = this.shownFrame();
+    const d = f?.diag;
+    this.$('solid-replay-at').textContent = d ? `${at + 1} / ${n} 枚目　t = ${(d.t * 1e3).toFixed(2)} ms　${d.step.toLocaleString()} step` : '';
+    this.$('solid-play').textContent = r?.playing ? '一時停止' : '再生';
+    (this.$('solid-rewind') as HTMLButtonElement).disabled = at === 0;
+  }
+
+  /** show the tape's frame i (the latest one leaves playback) */
+  seek(i: number): void {
+    const n = this.tape.length;
+    if (n < 2) return;
+    const at = Math.max(0, Math.min(n - 1, Math.round(i)));
+    // the end of the tape is the live frame: playback is over there
+    if (at === n - 1) {
+      this.stopReplay();
+      this.updateReplayBar();
+      this.showClock();
+      return;
+    }
+    if (!this.replay) this.replay = { at, playing: false, timer: null };
+    else this.replay.at = at;
+    const f = this.tape.frames[at];
+    this.showFrame(f);
+    this.$('solid-phase').textContent = `再生 ${at + 1} / ${n}　${f.diag.stopped ? stopPhrase(f.diag.stopped, this.standResults.length) : phaseText[f.diag.phase]}`;
+    this.dirty = this.chartsDirty = true;
+    this.updateReplayBar();
+    this.showClock();
+  }
+
+  /** play from the frame on show (from the start when it is the last) at the rate the frames came, times the speed */
+  play(): void {
+    const n = this.tape.length;
+    if (n < 2 || this.running) return;
+    if (this.replay?.timer) clearInterval(this.replay.timer);
+    const from = !this.replay || this.replay.at >= n - 1 ? 0 : this.replay.at;
+    this.seek(from);
+    const r = this.replay!;
+    r.playing = true;
+    r.timer = setInterval(() => this.seek(r.at + 1), FRAME_MS / this.speed);
+    this.updateReplayBar();
+  }
+
+  pauseReplay(): void {
+    const r = this.replay;
+    if (!r) return;
+    if (r.timer) clearInterval(r.timer);
+    r.timer = null;
+    r.playing = false;
+    this.updateReplayBar();
+  }
+
+  /** back to the live frame */
+  private stopReplay(): void {
+    this.pauseReplay();
+    this.replay = null;
+    if (this.last) {
+      this.showFrame(this.last);
+      this.updateResults(this.last);
+    }
+    this.dirty = this.chartsDirty = true;
   }
 
   private updateResults(f: SolidFrame): void {
@@ -762,7 +917,11 @@ export class SolidMode {
       series: [{ x: t, y: F, color: INK, label: '3 次元 MPM' }],
       hmarks: [{ y: slabTotal, label: g.stands > 1 ? `スラブ法 × 入側の板幅（#${g.stand + 1}）` : 'スラブ法 × 入側の板幅' }],
       // where a tandem's next stand starts
-      marks: (f?.history.stand ?? []).flatMap((k, i, a) => (i > 0 && k !== a[i - 1] ? [{ x: t[i - 1], label: `#${k + 1}`, color: standColor(k) }] : [])),
+      marks: [
+        ...(f?.history.stand ?? []).flatMap((k, i, a) => (i > 0 && k !== a[i - 1] ? [{ x: t[i - 1], label: `#${k + 1}`, color: standColor(k) }] : [])),
+        // where the playback is
+        ...(this.replay ? [{ x: (this.shownFrame()?.diag.t ?? 0) * 1e3, label: '再生', color: STEEL }] : []),
+      ],
       yRange: [0, Math.max(slabTotal * 1.35, ...F) || 1],
     });
     this.drawWidthCharts();
@@ -1006,6 +1165,22 @@ export class SolidMode {
         return { yaw: v.yaw, pitch: v.pitch, zoom: v.zoom, cut: v.cut, rolls: v.rolls, fit: v.fit, yScale: v.yScale, pan: [v.panX, v.panY], pivot: v.pivot };
       },
       screenOfPoint: (x: number, y: number, z: number) => self.view.screenOfPoint(x, y, z),
+      /** the playback of the recorded frames: how many, which is on show (null: the live frame), and the controls */
+      get replay() {
+        return {
+          length: self.tape.length,
+          at: self.replay?.at ?? null,
+          playing: self.replay?.playing ?? false,
+          shown: self.shownFrame()?.diag ?? null,
+          seek: (i: number) => self.seek(i),
+          play: () => self.play(),
+          pause: () => self.pauseReplay(),
+        };
+      },
+      /** the frame on show (the tape's while playing back): its faces */
+      get frameShown() {
+        return self.shownFrame();
+      },
       setDim: (d: Dim) => self.setDim(d),
       setField: (id: SolidFieldName) => self.setField(id),
       run: () => self.run(),

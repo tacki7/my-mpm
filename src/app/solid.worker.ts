@@ -7,11 +7,10 @@ import { standEndTail, standProgress } from '../mpm/progress.ts';
 import { faces } from '../mpm/solid/surface.ts';
 import { Tracker3 } from './tracker3.ts';
 import { karman } from '../mpm/slab.ts';
-import type { FromSolidWorker, SolidFieldName, SolidFrame, ToSolidWorker } from './solidProtocol.ts';
+import { SOLID_FIELD_IDS, type FromSolidWorker, type SolidFieldName, type SolidFrame, type ToSolidWorker } from './solidProtocol.ts';
 
 let tandem: Tandem3 | null = null;
 let tracker: Tracker3 | null = null;
-let field: SolidFieldName = 'seq';
 let running = false;
 let finished = false;
 let stopAfter: number | null = null;
@@ -101,12 +100,11 @@ function frame(): void {
   if (!tandem) return;
   const T = tandem;
   const s = T.sim;
-  const fs = faces(s, fieldValue(s, field));
+  const fs = faces(s, SOLID_FIELD_IDS.map((f) => fieldValue(s, f)));
   const edge = s.edgeProfile();
   const msg: SolidFrame = {
     type: 'frame',
     faces: fs,
-    field,
     edgeX: Float32Array.from(edge.x),
     edgeHalfWidth: Float32Array.from(edge.halfWidth),
     diag: {
@@ -132,7 +130,7 @@ function frame(): void {
     running,
     msPerStep,
   };
-  post(msg, [...fs.flatMap((f) => [f.pos.buffer, f.val.buffer, f.failed.buffer]), msg.edgeX.buffer, msg.edgeHalfWidth.buffer]);
+  post(msg, [...fs.flatMap((f) => [f.pos.buffer, f.vals.buffer, f.failed.buffer]), msg.edgeX.buffer, msg.edgeHalfWidth.buffer]);
 }
 
 function loop(): void {
@@ -182,7 +180,6 @@ self.onmessage = (e: MessageEvent<ToSolidWorker>) => {
         timer = null;
         running = false;
         finished = false;
-        field = m.field;
         stopAfter = m.stopAfter;
         history = { t: [], force: [], stand: [] };
         tandem = new Tandem3(solidParams(m.params, m.solid), m.stands, m.handoff);
@@ -207,10 +204,6 @@ self.onmessage = (e: MessageEvent<ToSolidWorker>) => {
       case 'pause':
         running = false;
         frame();
-        break;
-      case 'field':
-        field = m.field;
-        if (!running) frame();
         break;
     }
   } catch (err) {

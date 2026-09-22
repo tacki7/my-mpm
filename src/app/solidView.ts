@@ -4,7 +4,7 @@
 // stays visible; the bottom roll is solid steel under it.
 import { css, split, temper, type Rgb } from './colormap.ts';
 import { uiFont } from './font.ts';
-import type { SolidFieldName, SolidFrame, SolidGeometry } from './solidProtocol.ts';
+import { SOLID_FIELD_IDS, type SolidFieldName, type SolidFrame, type SolidGeometry } from './solidProtocol.ts';
 import type { Face } from '../mpm/solid/surface.ts';
 
 export interface SolidFieldInfo {
@@ -31,6 +31,13 @@ export const SOLID_FIELDS: SolidFieldInfo[] = [
 
 export const solidFieldInfo = (id: SolidFieldName) => SOLID_FIELDS.find((f) => f.id === id) ?? SOLID_FIELDS[0];
 
+/** a face's values of one field (a frame carries every field) */
+export function faceValues(face: Face, field: SolidFieldName): Float32Array {
+  const n = face.rows * face.cols;
+  const q = Math.max(0, SOLID_FIELD_IDS.indexOf(field));
+  return face.vals.subarray(q * n, (q + 1) * n);
+}
+
 export type ViewPreset = 'oblique' | 'top' | 'side' | 'front';
 
 const DEG = Math.PI / 180;
@@ -49,6 +56,8 @@ const SHEET = '244,245,243';
 export class SolidView {
   geometry: SolidGeometry | null = null;
   frame: SolidFrame | null = null;
+  /** what the strip's faces are coloured by */
+  field: SolidFieldName = 'seq';
   yaw = PRESETS.oblique[0];
   pitch = PRESETS.oblique[1];
   zoom = 1;
@@ -201,9 +210,10 @@ export class SolidView {
     let lo = Infinity;
     let hi = -Infinity;
     for (const face of f.faces) {
-      for (let v = 0; v < face.val.length; v++) {
+      const val = faceValues(face, this.field);
+      for (let v = 0; v < val.length; v++) {
         if (Number.isNaN(face.pos[3 * v]) || face.failed[v]) continue;
-        const x = face.val[v];
+        const x = val[v];
         if (x < lo) lo = x;
         if (x > hi) hi = x;
       }
@@ -236,7 +246,7 @@ export class SolidView {
   // ── the strip ──────────────────────────────────────────────────────────────
   private drawStrip(project: (x: number, y: number, z: number, out: Float64Array) => void, f: SolidFrame): void {
     const ctx = this.ctx;
-    const info = solidFieldInfo(f.field);
+    const info = solidFieldInfo(this.field);
     this.updateRange(f, info);
     const [lo, hi] = this.range;
     const span = hi - lo || 1;
@@ -274,7 +284,8 @@ export class SolidView {
     let q = 0;
     const pr = new Float64Array(3);
     for (const [face, sy, sz, shade] of shown) {
-      const { rows, cols, pos, val, failed } = face;
+      const { rows, cols, pos, failed } = face;
+      const val = faceValues(face, this.field);
       // project the face's vertices once
       const sx2 = new Float32Array(rows * cols);
       const sy2 = new Float32Array(rows * cols);
