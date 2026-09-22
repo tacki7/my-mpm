@@ -201,7 +201,7 @@ export class Tracker3 {
       damage: s.governingDamage(p),
       failed: s.failed[p] === 1,
       sheetX: (s.NI - 1 - i + 0.5) * s.dp,
-      sheetY: (j + 0.5) * s.dp,
+      sheetY: (j + 0.5 - s.jOff) * s.dp,
       sheetZ: (k + 0.5) * s.dz,
       x: s.px[p],
       y: s.py[p],
