@@ -97,6 +97,7 @@
           <div class="legend" id="solid-legend"></div>
         </div>
         <div class="replay" id="solid-replay" role="group" aria-label="記録した絵の再生" hidden></div>
+        <div class="splitter split-charts" data-size="charts3" aria-label="グラフの高さ（ドラッグか矢印キー、ダブルクリックで元に戻す）"></div>
         <div class="charts solid-charts">
           <figure>
             <figcaption>圧延荷重（ロール 1 本あたり、全幅）</figcaption>
@@ -105,6 +106,14 @@
           <figure>
             <figcaption>板幅方向の荷重の分布（定常）</figcaption>
             <canvas id="solid-chart-width"></canvas>
+          </figure>
+          <figure>
+            <figcaption>板クラウン（板厚 − 端の板厚。入側・出側、定常。3 列で均す）</figcaption>
+            <canvas id="solid-chart-crown"></canvas>
+          </figure>
+          <figure>
+            <figcaption>平坦度（出側、定常、3 列で均す。+ は伸び）</figcaption>
+            <canvas id="solid-chart-flat"></canvas>
           </figure>
           <figure>
             <figcaption>接触圧力（上から見たバイト）<span class="fig-range" id="solid-map-range"></span></figcaption>

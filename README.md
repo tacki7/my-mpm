@@ -384,8 +384,13 @@ Lode パラメータ、塑性ひずみ εp、3 つの損傷（JC・HM・CL。判
   胴の外に張り出したぶん撓みが増える）から選ぶ。板は胴の中央。下のロールも同じだけ撓むので、板は撓みの 2 倍厚く出て、中央が厚い（クラウン）。
   結果の表に「ロールの撓み（板幅の中央 / 板の端）」「クラウン」の行が出る（落ち着くまでは仮の値）。ヤング率は「ロール偏平」のロールのヤング率。
   R 100 mm・板幅 8 mm ではおよそ 1 µm で、細いロールや広い板で効く。初期クラウン・バックアップロールはまだ無い
-- ヘッドレス: `node tools/solid.mjs --W 8 --L 12 --cells 4`（`--length steady`、`--stands 3 --handoff steady`、`--flatten hitchcock --control reduction`）。
-  URL: `?dim=3&W3=8&L3=12&cells3=4&ps3=1&f3=spread`（`&stands=3&handoff=steady&length=steady&flatten=hitchcock&control=reduction` は 2 次元と共通のキー）
+- **入側の板クラウン**（「板と格子（3 次元）」の「入側の板クラウン」、µm）: 入側の板厚を幅方向に 2 次曲線で与える（板幅の中央が h0、端が h0 − クラウン。負なら中央が薄い）。
+  下のグラフに**板クラウン**（入側・出側、定常。板厚 − 端の板厚）と**平坦度**（出側、定常、長手方向。形状計の読みで + が伸び、I 単位 = 10⁻⁵）の図が加わり、
+  結果の表に「入側 / 出側の板クラウン」「平坦度（中央 − 端）」の行が出る。平坦度は計測位置（ロールから 3 h0 先）の列ごとの速度と長手応力から
+  ln(v / v_in) − σ/E で、列の平均を 0 にしたもの。細い板では幅広がりで逃げるので、クラウンの効きは弱い（`docs/model.md`「入側の板クラウンと出側の平坦度」）
+- **絵とグラフの境界**はドラッグで動かせる（絵の下の分割線。矢印キーでも、ダブルクリックで元に戻す。ブラウザに保存される）
+- ヘッドレス: `node tools/solid.mjs --W 8 --L 12 --cells 4`（`--length steady`、`--stands 3 --handoff steady`、`--flatten hitchcock --control reduction`、`--bend 300 [--span 400]`、`--crown 40`）。
+  URL: `?dim=3&W3=8&L3=12&cells3=4&ps3=1&f3=spread&crown3=40`（`&stands=3&handoff=steady&length=steady&flatten=hitchcock&control=reduction` は 2 次元と共通のキー）
 
 ### モデルの限界
 

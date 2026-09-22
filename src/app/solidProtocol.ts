@@ -35,6 +35,8 @@ export interface SolidGeometry {
   contactLength: number;
   xExitProbe: number;
   halfWidth0: number;
+  /** the strip's crown at the entry [m] (Sim3 crownIn: a parabola, h0 at the mid-width) */
+  crownIn: number;
   /** the contact pressure map's first x column [m] */
   mapX0: number;
   /** the plane-strain slab method's roll force per unit width for these conditions [N/m] */

@@ -295,6 +295,8 @@ export function remap3(old: Sim3, base: Solid3Params, h1: number, w1: number, sa
   const rho = P.material.rho * P.numerics.massScale;
   P.rolling.h0 = h1;
   P.defects = [];
+  // the section's shape comes from the old strip (below), not from the entry crown input
+  delete P.solid.crownIn;
   delete P.rolling.lengthMode;
   // the strain the strip brings in: where rolls that follow the pass start from, and what the slab method's line needs
   {

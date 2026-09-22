@@ -42,6 +42,11 @@ export interface SolidSettings {
    * (0 or absent: the barrel's ends). Absent, or a barrel of 0: rigid rolls
    */
   rollBend?: { barrel: number; span?: number };
+  /**
+   * The strip's crown at the entry [m]: the thickness at the mid-width (h0) less the thickness at the edge, as a
+   * parabola across the width, h(z) = h0 − crownIn (z / half width)². Negative: thinner at the middle. Absent: flat
+   */
+  crownIn?: number;
 }
 
 export interface Solid3Params extends SimParams {
@@ -117,6 +122,8 @@ export class Sim3 {
   readonly xHead0: number;
   readonly xExitProbe: number;
   readonly halfWidth0: number;
+  /** the entry thickness by lattice column across the width, as a fraction of h0 (the entry crown; 1 without) */
+  readonly ySize: Float64Array;
   readonly inertiaRatio: number;
   /** the top roll: a cylinder along z through (0, cy); bent, its axis is at cy + bend[iz] over the z column iz */
   readonly roll: { cy: number; R: number; omega: number; vR: number; vcy: number };
@@ -380,19 +387,27 @@ export class Sim3 {
     const rho = P.material.rho * num.massScale;
     // the width is NK points exactly: their spacing across z is hw / NK (dp up to the rounding)
     const dz = hw / NK;
+    // the entry crown: each column's points are packed (or spread) through the thickness by h(z) / h0, with the
+    // volume and the mass to match; F stays I (a stress-free start), so the column's size through the thickness
+    // is dp ySize[k] wherever a point's extent matters (section, exitMeasure, the drawn faces)
+    const crown = P.solid.crownIn ?? 0;
+    if (Math.abs(crown) >= r.h0) throw new Error('the entry crown must be smaller than the thickness');
+    this.ySize = new Float64Array(NK);
+    for (let k = 0; k < NK; k++) this.ySize[k] = 1 - (crown * ((k + 0.5) * dz) ** 2) / (hw * hw * r.h0);
     let p = 0;
     for (let i = 0; i < NI; i++) {
       for (let j = 0; j < NJ; j++) {
         for (let k = 0; k < NK; k++, p++) {
+          const sy = this.ySize[k];
           this.px[p] = xTail0 + (i + 0.5) * dp;
-          this.py[p] = (j + 0.5) * dp;
+          this.py[p] = (j + 0.5) * dp * sy;
           this.pz[p] = (k + 0.5) * dz;
           this.vx[p] = this.vIn;
           this.F[9 * p] = 1;
           this.F[9 * p + 4] = 1;
           this.F[9 * p + 8] = 1;
-          this.vol0[p] = dp * dp * dz;
-          this.mass[p] = rho * dp * dp * dz;
+          this.vol0[p] = dp * sy * dp * dz;
+          this.mass[p] = rho * dp * sy * dp * dz;
           this.temp[p] = P.material.tRoom;
         }
       }
@@ -1372,7 +1387,20 @@ export class Sim3 {
   section(p: number): number {
     const o = 9 * p;
     const { F } = this;
-    return this.dp * this.dz * Math.abs(F[o + 4] * F[o + 8] - F[o + 5] * F[o + 7]);
+    return this.dp * this.ySize[p % this.NK] * this.dz * Math.abs(F[o + 4] * F[o + 8] - F[o + 5] * F[o + 7]);
+  }
+
+  /** the entry half thickness at z [m] (the entry crown's parabola; h0 / 2 without) */
+  entryHalfThickness(z: number): number {
+    const { h0 } = this.params.rolling;
+    const crown = this.params.solid.crownIn ?? 0;
+    return 0.5 * (h0 - (crown * z * z) / (this.halfWidth0 * this.halfWidth0));
+  }
+
+  /** Young's modulus of the strip [Pa] */
+  get youngs(): number {
+    const { K, G } = this.el;
+    return (9 * K * G) / (3 * K + G);
   }
 
   /** In the gripped length of an end while a tension is applied there: damage is shown there but does not fail the point. */
@@ -1531,10 +1559,17 @@ export class Sim3 {
    * half thickness by lattice column across the width (the top points' upper faces), and the mean speed.
    * null until material is there.
    */
-  exitMeasure(x = this.xExitProbe, band = this.h): { halfWidth: number; halfThickness: Float64Array; speed: number } | null {
-    const { active, px, py, pz, vx, F, NI, NJ, NK, dp, dz } = this;
+  exitMeasure(x = this.xExitProbe, band = this.h): { halfWidth: number; halfThickness: Float64Array; speed: number; z: Float64Array; speedByZ: Float64Array; stressByZ: Float64Array } | null {
+    const { active, px, py, pz, vx, sxx, pres, F, NI, NJ, NK, dp, dz, ySize } = this;
     const thick = new Float64Array(NK);
     const count = new Int32Array(NK);
+    // by column across the width: where it is (z of the surface point), the speed and the longitudinal stress
+    // (section-weighted through the thickness) — what the strip's flatness is read from (steady.ts)
+    const zc = new Float64Array(NK);
+    const vc = new Float64Array(NK);
+    const sc = new Float64Array(NK);
+    const ac = new Float64Array(NK);
+    const nc = new Int32Array(NK);
     let w = 0;
     let nw = 0;
     let v = 0;
@@ -1546,10 +1581,20 @@ export class Sim3 {
       for (let k = 0; k < NK; k++) {
         const p = this.lattice(i, NJ - 1, k);
         if (!active[p] || Math.abs(px[p] - x) > band / 2) continue;
-        thick[k] += py[p] + 0.5 * dp * F[9 * p + 4];
+        thick[k] += py[p] + 0.5 * dp * ySize[k] * F[9 * p + 4];
+        zc[k] += pz[p];
         count[k]++;
         v += vx[p];
         nv++;
+        for (let j = 0; j < NJ; j++) {
+          const q = this.lattice(i, j, k);
+          if (!active[q]) continue;
+          const A = this.section(q);
+          vc[k] += vx[q];
+          nc[k]++;
+          sc[k] += (sxx[q] - pres[q]) * A;
+          ac[k] += A;
+        }
       }
       for (let j = 0; j < NJ; j++) {
         const p = this.lattice(i, j, NK - 1);
@@ -1559,8 +1604,13 @@ export class Sim3 {
       }
     }
     if (nw === 0 || nv === 0) return null;
-    for (let k = 0; k < NK; k++) thick[k] = count[k] ? thick[k] / count[k] : NaN;
-    return { halfWidth: w / nw, halfThickness: thick, speed: v / nv };
+    for (let k = 0; k < NK; k++) {
+      thick[k] = count[k] ? thick[k] / count[k] : NaN;
+      zc[k] = count[k] ? zc[k] / count[k] : NaN;
+      vc[k] = nc[k] ? vc[k] / nc[k] : NaN;
+      sc[k] = ac[k] > 0 ? sc[k] / ac[k] : NaN;
+    }
+    return { halfWidth: w / nw, halfThickness: thick, speed: v / nv, z: zc, speedByZ: vc, stressByZ: sc };
   }
 
   /** the half width along the strip: the edge points' outer faces, the mean through the thickness, by lattice column (NaN where none is on the grid) */

@@ -41,6 +41,7 @@ try {
   };
   const painted = () => c.evaluate('new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => r(true))))');
   const visible = (sel) => c.evaluate(`(() => { const e = document.querySelector(${JSON.stringify(sel)}); return !!e && e.getBoundingClientRect().height > 0; })()`);
+  const box = (sel) => c.evaluate(`(() => { const e = document.querySelector(${JSON.stringify(sel)}); if (!e) return null; const r = e.getBoundingClientRect(); return { x: r.x, y: r.y, w: r.width, h: r.height }; })()`);
   const shot = async (name) => {
     if (!shots) return;
     await painted();
@@ -389,7 +390,7 @@ try {
   await c.waitFor('__mpm.solid.diag.phase === "steady"', 600000);
   await c.waitFor('__mpm.solid.done', 600000);
   const bd = await c.evaluate('__mpm.solid.diag');
-  const brow = await c.evaluate(`[...document.querySelectorAll('#solid-results tr')].map((r) => r.textContent).filter((t) => /撓み|クラウン/.test(t))`);
+  const brow = await c.evaluate(`[...document.querySelectorAll('#solid-results tr')].map((r) => r.textContent).filter((t) => /撓み|クラウン 2/.test(t))`);
   ok(bd.steady?.rollBend && bd.steady.rollBend.centre > bd.steady.rollBend.edge && bd.steady.rollBend.edge > 2e-6, 'the roll bent away from the strip, more at the mid-width than at the edge', `${(bd.steady?.rollBend?.centre * 1e6).toFixed(3)} / ${(bd.steady?.rollBend?.edge * 1e6).toFixed(3)} µm`);
   ok(brow.length === 3 && /板幅の中央.*µm/.test(brow[0]) && /板の端.*µm/.test(brow[1]) && /クラウン.*µm/.test(brow[2]) && new RegExp((bd.steady?.rollBend?.centre * 1e6).toFixed(2)).test(brow[0]), 'the results show the deflection at the mid-width and the edge and the crown, in µm, the steady means', JSON.stringify(brow));
   const bendTool = JSON.parse(execFileSync('node', ['tools/solid.mjs', '--W', '2', '--cells', '4', '--R', '10', '--bend', '60', '--span', '80', '--json'], { encoding: 'utf8' }));
@@ -400,6 +401,52 @@ try {
   const bset = await c.evaluate('__mpm.solid.settings');
   ok(bs.on && !bs.span && bset.bend && bset.support === 'bearing' && Math.abs(bset.barrel - 0.06) < 1e-12 && Math.abs(bset.span - 0.08) < 1e-12, 'the URL opened again gives the same bending settings', JSON.stringify(bset));
   await shot('bend');
+
+  // ── the entry crown and the flatness: the panel, the model, the results, the two graphs; the boundary under the drawing
+  await c.navigate(page('?dim=3&W3=2&R=10'));
+  await c.waitFor('__mpm.solid.active && __mpm.solid.ready', 60000);
+  await choose('solid-crown', '40');
+  await click('#reset');
+  await c.waitFor('__mpm.solid.ready && __mpm.solid.settings.crown > 39e-6 && __mpm.solid.geometry && __mpm.solid.geometry.crownIn > 39e-6', 60000);
+  const cUrl = await c.evaluate('__mpm.solid.url');
+  ok(/crown3=40/.test(cUrl), 'the entry crown typed in the panel reaches the model and the conditions URL', cUrl);
+  const chartBlank = (id) => c.evaluate(`(() => { const cv = document.getElementById('${id}'); const d = cv.getContext('2d').getImageData(0, 0, cv.width, cv.height).data; let n = 0; for (let i = 3; i < d.length; i += 4) if (d[i]) n++; return n; })()`);
+  await painted();
+  const blank0 = await chartBlank('solid-chart-flat');
+  await click('#run');
+  await c.waitFor('__mpm.solid.done', 600000);
+  await painted();
+  const cd = await c.evaluate('__mpm.solid.diag');
+  const crow = await c.evaluate(`[...document.querySelectorAll('#solid-results tr')].map((r) => r.textContent).filter((t) => /クラウン|平坦度/.test(t))`);
+  const crownTool = JSON.parse(execFileSync('node', ['tools/solid.mjs', '--W', '2', '--cells', '4', '--R', '10', '--crown', '40', '--json'], { encoding: 'utf8' }));
+  ok(cd.steady && Math.abs(cd.steady.crownIn - 40e-6) < 1e-12 && Math.abs(cd.steady.crownOut) < 4e-6 && rel(cd.steady.force * 1e-3, crownTool.steady.force_kN) < 1e-5, 'the crowned strip comes out flat between rigid rolls (|crown| < 4 µm); page = tool (1e-5)', `crown out ${(cd.steady?.crownOut * 1e6).toFixed(2)} µm, ${(cd.steady?.force * 1e-3).toFixed(4)} vs ${crownTool.steady.force_kN.toFixed(4)} kN`);
+  const fl = cd.steady?.flatness ?? [];
+  const flMean = fl.reduce((a, b) => a + b, 0) / fl.length;
+  ok(fl.length === (await c.evaluate('__mpm.solid.geometry.lattice[2]')), 'the flatness has a value per lattice column', `${fl.length}`);
+  ok(fl.every(Number.isFinite) && Math.abs(flMean) < 1e-6 && Math.abs(cd.steady.flatness[0] - crownTool.steady.flatness_I[0]) < 0.2, 'the flatness is finite, centred on its mean, and the page\'s equals the tool\'s (0.2 I-unit: the tool rounds to 0.1)', `${fl.map((v) => v.toFixed(1)).join(' ')} vs the tool's ${crownTool.steady.flatness_I[0]}`);
+  ok(crow.length === 3 && /入側の板クラウン40\.0µm/.test(crow[0]) && /出側の板クラウン.*µm/.test(crow[1]) && /平坦度（中央 − 端）-?\d+I 単位/.test(crow[2]), 'the results show the crowns and the flatness', JSON.stringify(crow));
+  const blank1 = await chartBlank('solid-chart-flat');
+  const blankC = await chartBlank('solid-chart-crown');
+  ok(blank1 > blank0 + 300 && blankC > 0, 'the crown and the flatness graphs are drawn once steady', `${blank0} → ${blank1} painted pixels, crown ${blankC}`);
+  // the boundary under the drawing: a real drag up makes the graphs taller, double click puts it back
+  const h0 = (await box('#solid-chart-flat')).h;
+  const split = await box('.solid-stage .splitter');
+  ok(split && split.h > 0 && split.w > 200, 'the boundary between the drawing and the graphs is there', JSON.stringify(split));
+  await mouse('mouseMoved', split.x + split.w / 2, split.y + split.h / 2);
+  await mouse('mousePressed', split.x + split.w / 2, split.y + split.h / 2, { buttons: 1 });
+  for (let k = 1; k <= 5; k++) await mouse('mouseMoved', split.x + split.w / 2, split.y + split.h / 2 - 16 * k, { buttons: 1 });
+  await mouse('mouseReleased', split.x + split.w / 2, split.y + split.h / 2 - 80, { buttons: 0 });
+  await painted();
+  const h1 = (await box('#solid-chart-flat')).h;
+  const varH = await c.evaluate(`getComputedStyle(document.documentElement).getPropertyValue('--chart-h3').trim()`);
+  ok(Math.abs(h1 - (h0 + 80)) < 3 && varH === `${Math.round(h0 + 80)}px`, 'dragging the boundary up 80 px makes the graphs 80 px taller (--chart-h3)', `${h0} → ${h1}, ${varH}`);
+  const drawnAfter = await chartBlank('solid-chart-flat');
+  ok(drawnAfter > blank1, 'the graphs are redrawn at the new size', `${blank1} → ${drawnAfter} painted pixels`);
+  await c.evaluate(`document.querySelector('.solid-stage .splitter').dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))`);
+  await painted();
+  const h2 = (await box('#solid-chart-flat')).h;
+  ok(Math.abs(h2 - h0) < 3, 'a double click puts the graphs back to their default height', `${h2} vs ${h0}`);
+  await shot('crown');
 
   // ── a narrow screen
   await c.setViewport(700, 1000);

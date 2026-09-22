@@ -633,6 +633,7 @@ ro.observe($('bite'));
 // the panes' boundaries can be dragged; the charts redraw at their new size (the bite has its observer)
 setupSplitters(() => {
   dirty = true;
+  solid.chartsResized();
 });
 
 // ── test hook (headless checks read this; see CLAUDE.md) ────────────────────
