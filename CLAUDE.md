@@ -136,4 +136,4 @@ push 前に確認すること:
 - 認証情報・トークン・`.env` の類が無い
 - `.claude/settings.local.json` はマシン固有なので `.gitignore` 済み
 
-リポジトリは **private**。コミットのメールは GitHub の noreply アドレス（ローカル git config 済み）。
+リポジトリは **public**（2026-09-23 に公開）。push したものは誰でも読めるので、上の点検は毎回。コミットのメールは GitHub の noreply アドレス（ローカル git config 済み）。
