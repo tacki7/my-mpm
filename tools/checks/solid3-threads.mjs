@@ -2,7 +2,7 @@
 // about a minute in all:
 // - a pass on 3 threads is the pass on 1 thread: the steady means, the strip out, the failed points and the
 //   step count agree to 1e-9 (the sums over a column's points are taken in a different order, so not bit for bit)
-// - the team is faster than the thread alone
+// - the team is faster than the thread alone (where the machine has 4 cores or more)
 // - a tandem of two stands, handoff 'steady', on 2 threads: the team attaches to each stand (the second stand's
 //   Sim3 is made for it by remap3) and both stands agree with the thread alone
 // - the team's serial mode (the workers' shares one after another in one thread, Team serial) is the thread alone
@@ -14,6 +14,7 @@ import { ok, near, done } from './lib.mjs';
 import { defaultParams } from '../../src/mpm/params.ts';
 import { Sim3, solidParams } from '../../src/mpm/solid/sim3.ts';
 import { Tandem3 } from '../../src/mpm/solid/tandem3.ts';
+import { availableParallelism } from 'node:os';
 import { nodeTeam } from '../lib/solid-team.mjs';
 
 const base = (edit = () => {}) => {
@@ -79,7 +80,9 @@ function worst(a, b, floor = 0) {
   near(r3.thicknessOut, r1.thicknessOut, 1e-9, 'the thickness out');
   near(r3.widthOut, r1.widthOut, 1e-9, 'the width out');
   ok(r3.nFailed === r1.nFailed && r3.maxDamage === r1.maxDamage || Math.abs(r3.maxDamage - r1.maxDamage) <= 1e-9 * r1.maxDamage, 'the damage and the failed points', `${r1.maxDamage} / ${r3.maxDamage}, ${r1.nFailed} / ${r3.nFailed}`);
-  ok(three.secs < one.secs, 'the team is faster', `${one.secs.toFixed(1)} s → ${three.secs.toFixed(1)} s`);
+  // the speed only where the three threads have cores of their own (CI's runner has two)
+  if (availableParallelism() >= 4) ok(three.secs < one.secs, 'the team is faster', `${one.secs.toFixed(1)} s → ${three.secs.toFixed(1)} s`);
+  else console.log(`SKIP  the team is faster: ${availableParallelism()} cores here (${one.secs.toFixed(1)} s → ${three.secs.toFixed(1)} s)`);
   const serial = await pass(P, 3, 1, 'done', true);
   const ws = worst(r1, serial.results[0]);
   ok(serial.results.length === 1 && ws.err <= 1e-9, `the team's serial mode is the thread alone as well (${ws.key} ${ws.err.toExponential(2)})`, `${ws.a} / ${ws.b}`);
