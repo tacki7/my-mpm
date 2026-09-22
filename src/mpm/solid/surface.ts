@@ -12,16 +12,18 @@ export interface Face {
   cols: number;
   /** x y z per vertex [m]; NaN for a point that has left the grid */
   pos: Float32Array;
-  val: Float32Array;
+  /** the values, one block of rows × cols per value function, in the functions' order */
+  vals: Float32Array;
   /** 1: the point has failed */
   failed: Uint8Array;
 }
 
-export function faces(sim: Sim3, value: (p: number) => number): Face[] {
+export function faces(sim: Sim3, values: ((p: number) => number)[]): Face[] {
   const { NI, NJ, NK, dp, dz, F, px, py, pz, active, failed } = sim;
   const make = (name: FaceName, rows: number, cols: number, at: (r: number, c: number) => [number, number, number]): Face => {
-    const pos = new Float32Array(3 * rows * cols);
-    const val = new Float32Array(rows * cols);
+    const n = rows * cols;
+    const pos = new Float32Array(3 * n);
+    const vals = new Float32Array(values.length * n);
     const fl = new Uint8Array(rows * cols);
     for (let r = 0; r < rows; r++) {
       for (let c = 0; c < cols; c++) {
@@ -41,11 +43,11 @@ export function faces(sim: Sim3, value: (p: number) => number): Face[] {
         // the symmetry planes stay planes
         pos[3 * v + 1] = j === 0 ? 0 : py[p] + F[o + 3] * a + F[o + 4] * b + F[o + 5] * g;
         pos[3 * v + 2] = k === 0 ? 0 : pz[p] + F[o + 6] * a + F[o + 7] * b + F[o + 8] * g;
-        val[v] = value(p);
+        for (let q = 0; q < values.length; q++) vals[q * n + v] = values[q](p);
         fl[v] = failed[p];
       }
     }
-    return { name, rows, cols, pos, val, failed: fl };
+    return { name, rows, cols, pos, vals, failed: fl };
   };
   return [
     make('top', NI, NK, (r, c) => [r, NJ - 1, c]),

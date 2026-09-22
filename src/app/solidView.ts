@@ -4,7 +4,7 @@
 // stays visible; the bottom roll is solid steel under it.
 import { css, split, temper, type Rgb } from './colormap.ts';
 import { uiFont } from './font.ts';
-import type { SolidFieldName, SolidFrame, SolidGeometry } from './solidProtocol.ts';
+import { SOLID_FIELD_IDS, type SolidFieldName, type SolidFrame, type SolidGeometry } from './solidProtocol.ts';
 import type { Face } from '../mpm/solid/surface.ts';
 
 export interface SolidFieldInfo {
@@ -31,6 +31,13 @@ export const SOLID_FIELDS: SolidFieldInfo[] = [
 
 export const solidFieldInfo = (id: SolidFieldName) => SOLID_FIELDS.find((f) => f.id === id) ?? SOLID_FIELDS[0];
 
+/** a face's values of one field (a frame carries every field) */
+export function faceValues(face: Face, field: SolidFieldName): Float32Array {
+  const n = face.rows * face.cols;
+  const q = Math.max(0, SOLID_FIELD_IDS.indexOf(field));
+  return face.vals.subarray(q * n, (q + 1) * n);
+}
+
 export type ViewPreset = 'oblique' | 'top' | 'side' | 'front';
 
 const DEG = Math.PI / 180;
@@ -49,12 +56,17 @@ const SHEET = '244,245,243';
 export class SolidView {
   geometry: SolidGeometry | null = null;
   frame: SolidFrame | null = null;
+  /** what the strip's faces are coloured by */
+  field: SolidFieldName = 'seq';
   yaw = PRESETS.oblique[0];
   pitch = PRESETS.oblique[1];
   zoom = 1;
   /** pan [CSS px] */
   panX = 0;
   panY = 0;
+  /** the pivot the drawing turns about, as an offset [m] from the picture's own centre (the bite, or the strip's
+   *  middle): moved to whatever is at the middle of the canvas when the drawing is turned, so it turns about that */
+  pivotOff: [number, number, number] = [0, 0, 0];
   /** show the far half only, cut open at the mid-width plane */
   cut = false;
   rolls = true;
@@ -86,6 +98,7 @@ export class SolidView {
   setPreset(p: ViewPreset): void {
     [this.yaw, this.pitch] = PRESETS[p];
     this.panX = this.panY = 0;
+    this.pivotOff = [0, 0, 0];
   }
 
   reset(): void {
@@ -93,9 +106,39 @@ export class SolidView {
     this.zoom = 1;
   }
 
+  /** the pivot in the strip's frame [m] */
+  get pivot(): [number, number, number] {
+    const { xMid } = this.frameOf();
+    const o = this.pivotOff;
+    return [xMid + o[0], o[1], o[2]];
+  }
+
+  /** Turn the drawing about what is at the middle of the canvas now. */
   rotate(dYaw: number, dPitch: number): void {
+    this.recentre();
     this.yaw += dYaw;
     this.pitch = Math.min(90 * DEG, Math.max(0, this.pitch + dPitch));
+  }
+
+  /** Move the pivot to the point of the view plane at the middle of the canvas and drop the pan: the picture does
+   *  not change (the pan is a shift in the view plane, and so is this move), only what it turns about. */
+  private recentre(): void {
+    if (!this.geometry || (this.panX === 0 && this.panY === 0)) return;
+    const { s } = this.frameOf();
+    const cy = Math.cos(this.yaw);
+    const sy = Math.sin(this.yaw);
+    const cp = Math.cos(this.pitch);
+    const sp = Math.sin(this.pitch);
+    // in the turned frame the middle of the canvas is at (-panX/s, panY/s) with the pivot's depth
+    const x1 = -this.panX / s;
+    const a = this.panY / s;
+    const Y = a * cp;
+    const z1 = -a * sp;
+    const X = x1 * cy + z1 * sy;
+    const Z = -x1 * sy + z1 * cy;
+    const o = this.pivotOff;
+    this.pivotOff = [o[0] + X, o[1] + Y / this.yScale, o[2] + Z];
+    this.panX = this.panY = 0;
   }
 
   /** the strip's x range on show (the bite when nothing is drawn yet) */
@@ -114,14 +157,10 @@ export class SolidView {
     return [lo, hi];
   }
 
-  /** world [m] → CSS px and depth (larger is nearer) */
-  private projector() {
+  /** the picture's own centre [m] along the strip and its scale [px/m]: the bite (following the head on its way
+   *  to the rolls), or the whole strip */
+  private frameOf(): { xMid: number; s: number } {
     const g = this.geometry!;
-    const cy = Math.cos(this.yaw);
-    const sy = Math.sin(this.yaw);
-    const cp = Math.cos(this.pitch);
-    const sp = Math.sin(this.pitch);
-    const ys = this.yScale;
     const W = 2 * g.halfWidth0;
     let xMid = -0.5 * g.contactLength;
     // what must fit: the bite with some strip on both sides, or the whole strip
@@ -137,11 +176,24 @@ export class SolidView {
       span = Math.max(span, (hi - lo) * 1.08);
     }
     const s = (Math.min(this.w, this.h * 1.7) / span) * this.zoom;
+    return { xMid, s };
+  }
+
+  /** world [m] → CSS px and depth (larger is nearer) */
+  private projector() {
+    const cy = Math.cos(this.yaw);
+    const sy = Math.sin(this.yaw);
+    const cp = Math.cos(this.pitch);
+    const sp = Math.sin(this.pitch);
+    const ys = this.yScale;
+    const { s } = this.frameOf();
+    const [px, py, pz] = this.pivot;
     const ox = this.w / 2 + this.panX;
     const oy = this.h / 2 + 8 + this.panY;
-    return (x: number, y: number, z: number, out: Float64Array) => {
-      const X = x - xMid;
-      const Y = y * ys;
+    return (x: number, y: number, z0: number, out: Float64Array) => {
+      const X = x - px;
+      const Y = (y - py) * ys;
+      const z = z0 - pz;
       const x1 = X * cy - z * sy;
       const z1 = X * sy + z * cy;
       out[0] = ox + x1 * s;
@@ -158,9 +210,10 @@ export class SolidView {
     let lo = Infinity;
     let hi = -Infinity;
     for (const face of f.faces) {
-      for (let v = 0; v < face.val.length; v++) {
+      const val = faceValues(face, this.field);
+      for (let v = 0; v < val.length; v++) {
         if (Number.isNaN(face.pos[3 * v]) || face.failed[v]) continue;
-        const x = face.val[v];
+        const x = val[v];
         if (x < lo) lo = x;
         if (x > hi) hi = x;
       }
@@ -193,7 +246,7 @@ export class SolidView {
   // ── the strip ──────────────────────────────────────────────────────────────
   private drawStrip(project: (x: number, y: number, z: number, out: Float64Array) => void, f: SolidFrame): void {
     const ctx = this.ctx;
-    const info = solidFieldInfo(f.field);
+    const info = solidFieldInfo(this.field);
     this.updateRange(f, info);
     const [lo, hi] = this.range;
     const span = hi - lo || 1;
@@ -231,7 +284,8 @@ export class SolidView {
     let q = 0;
     const pr = new Float64Array(3);
     for (const [face, sy, sz, shade] of shown) {
-      const { rows, cols, pos, val, failed } = face;
+      const { rows, cols, pos, failed } = face;
+      const val = faceValues(face, this.field);
       // project the face's vertices once
       const sx2 = new Float32Array(rows * cols);
       const sy2 = new Float32Array(rows * cols);
@@ -489,6 +543,15 @@ export class SolidView {
     const r = this.canvas.getBoundingClientRect();
     const pr = new Float64Array(3);
     this.projector()(t.state.x, t.state.y, this.mirrors()[0] * (t.state.z ?? 0), pr);
+    return { x: r.left + pr[0], y: r.top + pr[1] };
+  }
+
+  /** Client coordinates of a point of the strip's frame [m] (headless checks read it), or null when nothing is drawn. */
+  screenOfPoint(x: number, y: number, z: number): { x: number; y: number } | null {
+    if (!this.geometry) return null;
+    const r = this.canvas.getBoundingClientRect();
+    const pr = new Float64Array(3);
+    this.projector()(x, y, z, pr);
     return { x: r.left + pr[0], y: r.top + pr[1] };
   }
 

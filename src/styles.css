@@ -1305,9 +1305,47 @@ body:not([data-dim='3']) .dim3-only {
 
 .solid-stage {
   display: grid;
-  /* tabs, the drawing, the graphs */
-  grid-template-rows: auto minmax(380px, 1fr) auto;
+  /* tabs, the drawing, the playback bar (shown once the run has stopped), the graphs */
+  grid-template-rows: auto minmax(380px, 1fr) auto auto;
   min-width: 0;
+}
+
+/* the playback of the recorded frames: a transport bar under the drawing */
+.replay {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  padding: 6px 18px;
+  border-top: 1px solid var(--rule);
+  font-size: var(--fs-xs);
+  color: var(--ink-soft);
+}
+
+.replay[hidden] {
+  display: none;
+}
+
+.replay button {
+  padding: 3px 10px;
+  font-size: var(--fs-xs);
+}
+
+.replay input[type='range'] {
+  flex: 1 1 160px;
+  min-width: 120px;
+  accent-color: var(--ink);
+}
+
+.replay .at {
+  min-width: 15em;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+
+.replay select {
+  font-size: var(--fs-xs);
+  padding: 2px 4px;
 }
 
 .solid-bite canvas {
