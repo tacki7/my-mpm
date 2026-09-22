@@ -102,7 +102,7 @@ Math.exp・log の最後の 1 ビットが違うのでビット一致はしな�
 ポートは必ず渡す（既定値は無い）。`window.__mpm` は `frames` `eta`（表示中の残り時間 [s]。速さが読めるまでは null。`plan.eta`・`solid.eta` も）`running` `ready` `done` `diag` `cracks`
 `geometry` `params` `history` `slab`（スラブ法の荷重・中立点・方法の外の理由、`delta` = 平均板厚 / 接触長、`steadyForce` = 定常の荷重をステップ数で重み付けした平均 [N/m]、`ratio` = MPM / スラブ法。定常の前と方法の外では null）`forceChart`（荷重のグラフに描いた生の値と移動平均）`explorer`（表示中の点）`tracks`（追っている点と経路）`view`（拡大率・パン・倍率・主応力の向き）
 `plan`（平面図: `active` `ready` `running` `done` `diag`（`steady` が定常の平均、SI）`cracks` `settings` `url` `setMode()` `setField()` `drawMs()`）
-（約 12 分、うちタンデムの節が約 9 分。実クリックでタブを移り、板幅 4 mm を最後まで回して `node tools/solid.mjs` と比べる（相対 1e-5）、巻き戻し再生（実クリックで巻き戻す・再生・一時停止・スライダーの端、再生中の色の量のタブ）、色の量のタブ、実ドラッグ・Shift+ドラッグのあと矢印キーで画面の中央を軸に回る・ホイール・ダブルクリック、見る向き、URL、
+（約 12 分、うちタンデムの節が約 9 分。実クリックでタブを移り、板幅 4 mm を最後まで回して `node tools/solid.mjs` と比べる（相対 1e-5）、巻き戻し再生（実クリックで巻き戻す・再生・一時停止・スライダーの端、再生中の色の量のタブ）、色の量のタブ、実ドラッグで動かす・Shift+ドラッグで回す・動かしたあと矢印キーで画面の中央を軸に回る・ホイール・ダブルクリック、見る向き、URL、
 応力状態の表と `__mpm.solid.explorer` の一致・破断軌跡の描画、亀裂になる条件（`cond` で D2 0.15）で最初の亀裂の点と役のボタンの実クリック・絵の上の丸の印（`__mpm.solid.screenOf(role)` の周りの画素の色）、
 `stand` `stands` `standResults` `standFrames` `stopped`（タンデム: 表示中のスタンド（0 始まり）・スタンド数・済んだスタンドの結果・並んだ枠の状態・最後のスタンドまで行かずに止まった理由 'stalled' | 'separated' | 'lost'、ふだんは null）と
 `run()` `restart()` `setField(id)` `screenOf(id)`（粒子の画面座標）`drawMs(n)`（今のフレームを n 回描いた 1 回の ms）、
