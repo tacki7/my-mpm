@@ -20,7 +20,7 @@ import { radioGroup } from './radioGroup.ts';
 import type { FromSolidWorker, SolidFieldName, SolidFrame, SolidGeometry, ToSolidWorker } from './solidProtocol.ts';
 import { SolidStandTable } from './solidStandTable.ts';
 import { stopPhrase } from './standTable.ts';
-import { standColor } from './explorer.ts';
+import { Explorer, standColor } from './explorer.ts';
 import { SOLID_FIELDS, SolidView, solidFieldInfo, type ViewPreset } from './solidView.ts';
 
 export type Dim = '2' | '3';
@@ -120,6 +120,8 @@ export class SolidMode {
   private geometries: SolidGeometry[] = [];
   private standResults: Stand3Result[] = [];
   private standTable!: SolidStandTable;
+  /** the stress state and the fracture locus of the first crack's and the most damaged point */
+  private explorer!: Explorer;
   private last: SolidFrame | null = null;
   private params: SimParams | null = null;
   private field: SolidFieldName;
@@ -154,6 +156,15 @@ export class SolidMode {
     this.buildPointer();
     this.buildUrl();
     this.standTable = new SolidStandTable(this.$('solid-stand-section'), this.$('solid-stand-results'));
+    this.explorer = new Explorer(
+      this.$('solid-explorer'),
+      this.$('solid-locus'),
+      () => {},
+      () => {
+        this.chartsDirty = true;
+      },
+      { roles: ['first-crack', 'max-damage'], hint: '最初に亀裂になった点と、損傷がいちばん大きい点。3 次元では点は選べない' },
+    );
     for (const id of ['solid-chart-force', 'solid-chart-width', 'solid-chart-map']) {
       const p = el('p', 'sr-only solid-chart-summary');
       this.$(id).parentElement!.append(p);
@@ -543,6 +554,7 @@ export class SolidMode {
     const solid: SolidSettings = { width: this.settings.width, planeStrain: this.settings.planeStrain };
     this.send({ type: 'init', params: P, solid, stands: P.rolling.stands ?? 1, handoff: P.rolling.handoff ?? 'done', field: this.field, stopAfter: this.stopAfter });
     this.standTable.update(1, [], 0, false, null, null);
+    this.explorer.reset();
     this.updateButtons();
     this.$('solid-results').replaceChildren();
     this.summaryMoment = '';
@@ -623,6 +635,7 @@ export class SolidMode {
     this.dirty = this.chartsDirty = true;
     this.updateButtons();
     this.updateResults(f);
+    if (this.params) this.explorer.update({ tracks: f.tracks, cracks: f.diag.firstCrack ? [f.diag.firstCrack] : [] }, this.params);
   }
 
   private updateResults(f: SolidFrame): void {
@@ -730,6 +743,7 @@ export class SolidMode {
     const g = this.geometry;
     if (!g) return;
     const f = this.last;
+    this.explorer.draw();
     const W0 = 2 * g.halfWidth0;
     // roll force over time, with the plane-strain slab method × the entry width for scale
     const t = (f?.history.t ?? []).map((v) => v * 1e3);
@@ -969,6 +983,12 @@ export class SolidMode {
       },
       get stopped() {
         return self.last?.diag.stopped ?? null;
+      },
+      get tracks() {
+        return self.last?.tracks ?? [];
+      },
+      get explorer() {
+        return self.explorer.shown;
       },
       get url() {
         return self.query().toString();

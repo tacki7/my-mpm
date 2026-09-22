@@ -7,7 +7,7 @@ import type { DamageModel, SimParams } from '../mpm/params.ts';
 import { drawChart, type Series } from './charts.ts';
 import { radioGroup } from './radioGroup.ts';
 import type { Frame, Track, TrackRole } from './protocol.ts';
-import { clFractureStrainPlaneStrain, lodeParameter, principal } from './stress.ts';
+import { clFractureStrainPlaneStrain, lodeParameter, principal, principal3 } from './stress.ts';
 
 const ROLES: { role: TrackRole; label: string; color: string }[] = [
   { role: 'selected', label: '選んだ点', color: '#1d2a3a' },
@@ -31,7 +31,19 @@ function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls?: string, text?: 
   return e;
 }
 
+/** how the explorer is set up for its model */
+export interface ExplorerOptions {
+  /** the roles offered (the section model's all three; the three-dimensional model has no picked point) */
+  roles?: TrackRole[];
+  /** the hint under the role buttons */
+  hint?: string;
+}
+
+/** the first crack's stress state at failure (the section's CrackView has σ1, the 3D model's SolidCrack does not) */
+export type AtFailure = Pick<Frame['cracks'][number], 'eta' | 'seq' | 'ep'> & { s1?: number };
+
 export class Explorer {
+  private readonly roles: TrackRole[];
   private readonly onSelect: (id: number | null) => void;
   private readonly onChange: () => void;
   private readonly buttons = new Map<TrackRole, HTMLButtonElement>();
@@ -42,14 +54,15 @@ export class Explorer {
   private role: TrackRole = 'max-damage';
   private chosen = false; // the user picked a role or a point
   private tracks: Track[] = [];
-  private firstCrack: Frame['cracks'][number] | null = null;
+  private firstCrack: AtFailure | null = null;
   private params: SimParams | null = null;
 
   /**
    * root: the section for the state table; figure: holds the locus canvas (#chart-locus).
    * onSelect: follow this point in the worker; onChange: the chart needs a redraw.
    */
-  constructor(root: HTMLElement, figure: HTMLElement, onSelect: (id: number | null) => void, onChange: () => void) {
+  constructor(root: HTMLElement, figure: HTMLElement, onSelect: (id: number | null) => void, onChange: () => void, options: ExplorerOptions = {}) {
+    this.roles = options.roles ?? ROLES.map((r) => r.role);
     this.onSelect = onSelect;
     this.onChange = onChange;
     root.append(el('h2', undefined, '応力状態'));
@@ -57,6 +70,7 @@ export class Explorer {
     roles.setAttribute('role', 'radiogroup');
     roles.setAttribute('aria-label', '表示する点');
     for (const r of ROLES) {
+      if (!this.roles.includes(r.role)) continue;
       const b = el('button', undefined, r.label);
       b.type = 'button';
       b.setAttribute('role', 'radio');
@@ -71,9 +85,9 @@ export class Explorer {
     }
     radioGroup(roles);
     root.append(roles);
-    root.append(el('p', 'explorer-hint', 'ロールバイトの粒子をクリックすると、その点を追う'));
+    root.append(el('p', 'explorer-hint', options.hint ?? 'ロールバイトの粒子をクリックすると、その点を追う'));
     this.table = el('table', 'explorer-state');
-    this.table.id = 'explorer-state';
+    this.table.id = `${root.id}-state`; // explorer-state on the section's page, solid-explorer-state on the 3D one
     root.append(this.table);
     this.canvas = figure.querySelector('canvas')!;
     this.legend = el('div', 'locus-legend');
@@ -113,13 +127,14 @@ export class Explorer {
     return this.tracks.map((t) => ({ id: t.id, kind: t.role }));
   }
 
-  update(f: Frame, params: SimParams): void {
+  /** cracks: the first crack's record (the section's CrackView, or the 3D model's SolidCrack) first, for the state at failure */
+  update(f: { tracks: Track[]; cracks: AtFailure[] }, params: SimParams): void {
     this.tracks = f.tracks;
     this.firstCrack = f.cracks[0] ?? null;
     this.params = params;
     // until the user chooses, show the first crack as soon as there is one
     if (!this.chosen && this.role !== 'first-crack' && this.tracks.some((t) => t.role === 'first-crack')) this.setRole('first-crack');
-    for (const r of ROLES) this.buttons.get(r.role)!.disabled = !this.tracks.some((t) => t.role === r.role);
+    for (const [role, b] of this.buttons) b.disabled = !this.tracks.some((t) => t.role === role);
     this.renderTable();
   }
 
@@ -141,17 +156,24 @@ export class Explorer {
       return;
     }
     const s = t.state;
-    const pr = principal(s.sxx, s.syy, s.sxy, s.szz);
+    const solid = s.syz !== undefined && s.szx !== undefined;
+    const pr = solid ? principal3(s.sxx, s.syy, s.szz, s.sxy, s.syz!, s.szx!) : principal(s.sxx, s.syy, s.sxy, s.szz);
     const model = this.params?.damage.model;
     // the criterion that fails the point; with none, the indicator the damage D shows (the largest)
     const most = Math.max(s.dJC, s.dHM, s.dCL);
     const mark = (m: DamageModel, v: number) => (model === m ? '判定' : model === 'none' && most > 0 && v === most ? '最大' : '');
     const rows: [string, string, number, string, string][] = [
-      ['position', '位置', s.sheetX, `先端から ${(s.sheetX * 1e3).toFixed(2)} mm、中心から ${(s.sheetY * 1e3).toFixed(3)} mm`, ''],
+      ['position', '位置', s.sheetX, `先端から ${(s.sheetX * 1e3).toFixed(2)} mm、中心から ${(s.sheetY * 1e3).toFixed(3)} mm${s.sheetZ !== undefined ? `、板幅の中央から ${(s.sheetZ * 1e3).toFixed(3)} mm` : ''}`, ''],
       ['sxx', '圧延方向 σxx', s.sxx, (s.sxx * MPa).toFixed(0), 'MPa'],
       ['syy', '板厚方向 σyy', s.syy, (s.syy * MPa).toFixed(0), 'MPa'],
       ['sxy', 'せん断 σxy', s.sxy, (s.sxy * MPa).toFixed(0), 'MPa'],
       ['szz', '板幅方向 σzz', s.szz, (s.szz * MPa).toFixed(0), 'MPa'],
+      ...(solid
+        ? ([
+            ['syz', 'せん断 σyz', s.syz!, (s.syz! * MPa).toFixed(0), 'MPa'],
+            ['szx', 'せん断 σzx', s.szx!, (s.szx! * MPa).toFixed(0), 'MPa'],
+          ] as [string, string, number, string, string][])
+        : []),
       ['seq', '相当応力 σeq', s.seq, (s.seq * MPa).toFixed(0), 'MPa'],
       ['pres', '静水圧 p', s.pres, (s.pres * MPa).toFixed(0), 'MPa'],
       ['s1', '最大主応力 σ1', s.s1, (s.s1 * MPa).toFixed(0), 'MPa'],
@@ -177,7 +199,7 @@ export class Explorer {
       const n = t.path.length;
       const c = t.role === 'first-crack' ? this.firstCrack : null;
       const at = c
-        ? `η ${c.eta.toFixed(3)}、σ1 ${(c.s1 * MPa).toFixed(0)} MPa、σeq ${(c.seq * MPa).toFixed(0)} MPa、εp ${c.ep.toFixed(4)}`
+        ? `η ${c.eta.toFixed(3)}、${c.s1 !== undefined ? `σ1 ${(c.s1 * MPa).toFixed(0)} MPa、` : ''}σeq ${(c.seq * MPa).toFixed(0)} MPa、εp ${c.ep.toFixed(4)}`
         : n >= 3
           ? `η ${t.path[n - 3].toFixed(3)}、εp ${t.path[n - 2].toFixed(4)}`
           : '';

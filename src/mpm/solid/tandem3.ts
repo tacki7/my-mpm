@@ -324,6 +324,7 @@ export function remap3(old: Sim3, base: Solid3Params, h1: number, w1: number, sa
   const mass = M / n;
   const cell = sim.dp * sim.dp * sim.dz;
   let nFailed = 0;
+  const parentOf = new Int32Array(n);
   // the old column's shape at a continuous lattice index (jf, kf): bilinear between the four centres around it,
   // linear past the outermost ones (a new point nearer the surface than any old centre)
   const at = (arr: Float64Array, io: number, jf: number, kf: number): number => {
@@ -351,6 +352,7 @@ export function remap3(old: Sim3, base: Solid3Params, h1: number, w1: number, sa
     const jo = Math.max(0, Math.min(old.NJ - 1, Math.round(jf)));
     const ko = Math.max(0, Math.min(old.NK - 1, Math.round(kf)));
     const p = old.lattice(io, jo, ko);
+    parentOf[q] = p;
     // the shape: y and z where the old column has them; the symmetry planes are not crossed
     sim.py[q] = Math.max(0.25 * sim.dp, at(old.py, io, jf, kf));
     sim.pz[q] = Math.max(0.25 * sim.dz, at(old.pz, io, jf, kf));
@@ -381,5 +383,6 @@ export function remap3(old: Sim3, base: Solid3Params, h1: number, w1: number, sa
   }
   sim.nFailed = nFailed;
   sim.firstCrack = old.firstCrack;
+  sim.parentOf = parentOf;
   return sim;
 }

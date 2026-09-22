@@ -1351,7 +1351,7 @@ body:not([data-dim='3']) .dim3-only {
 }
 
 .solid-charts {
-  grid-template-columns: 1fr 1.1fr 1fr;
+  grid-template-columns: 1fr 1fr 1fr 1fr;
 }
 
 .solid-charts figure + figure {

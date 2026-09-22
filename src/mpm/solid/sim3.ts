@@ -51,6 +51,8 @@ export interface SolidCrack {
   sheetX: number;
   sheetY: number;
   sheetZ: number;
+  /** the point that failed (the index in the stand it failed in; a later stand's copy keeps it, tracker3.ts) */
+  point: number;
   eta: number;
   seq: number;
   ep: number;
@@ -161,6 +163,8 @@ export class Sim3 {
   plasticWork = 0;
   nFailed = 0;
   firstCrack: SolidCrack | null = null;
+  /** a tandem's later stand: point q was copied from the stand before's point parentOf[q] (remap3); null in the first */
+  parentOf: Int32Array | null = null;
 
   readonly px: Float64Array;
   readonly py: Float64Array;
@@ -1234,6 +1238,12 @@ export class Sim3 {
   }
 
   /** the damage indicator of the chosen criterion (Johnson-Cook's where the criterion has none of its own) */
+  /** the largest principal Cauchy stress of point p [Pa] */
+  maxPrincipal(p: number): number {
+    const pr = this.pres[p];
+    return maxPrincipal(this.sxx[p] - pr, this.syy[p] - pr, this.szz[p] - pr, this.sxy[p], this.syz[p], this.szx[p]);
+  }
+
   governingDamage(p: number): number {
     const m = this.params.damage.model;
     return m === 'hancock-mackenzie' ? this.dHM[p] : m === 'cockcroft-latham' ? this.dCL[p] : this.dJC[p];
@@ -1257,6 +1267,7 @@ export class Sim3 {
       sheetX: (this.NI - 1 - i + 0.5) * this.dp,
       sheetY: (j + 0.5) * this.dp,
       sheetZ: (k + 0.5) * this.dz,
+      point: p,
       eta: this.eta[p],
       seq: this.seq[p],
       ep: this.ep[p],
