@@ -949,6 +949,7 @@ export class Sim3 {
       bending: this.beam ? 1 : 0, gripCols: this.gripCols, NI: this.NI, dz: this.dz,
       dmgModel: dmg.model === 'none' ? 0 : dmg.model === 'hancock-mackenzie' ? 2 : dmg.model === 'cockcroft-latham' ? 3 : 1,
       etaCutoff: dmg.etaCutoff, D1: dmg.D1, D2: dmg.D2, D3: dmg.D3, D4: dmg.D4, D5: dmg.D5, clCrit: dmg.clCrit,
+      full: this.fullThickness ? 1 : 0, gyOff: this.gyOff,
     };
     for (const [k, i] of Object.entries(U)) {
       if (!(k in v)) continue;
