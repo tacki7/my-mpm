@@ -1,5 +1,6 @@
 // The 3D model with the whole thickness solved (SolidSettings.fullThickness: both rolls, no plane of symmetry
-// at the mid-thickness; docs/model.md「3 次元モデル」「板厚の全体」), W 2 mm, L 8 mm, 4 cells, about a minute in all:
+// at the mid-thickness; docs/model.md「3 次元モデル」「板厚の全体」), W 2 mm, L 8 mm, 4 cells, about 2 minutes on M2 (the full
+// model's pass has twice the points; the gate's own limit below for CI's slower cores):
 // - the grid and the lattice: rows of nodes both ways about y = 0, twice the lattice rows, the points from
 //   −h0/2 to h0/2, the bottom face drawn
 // - a whole pass in the full model is the quarter model's pass (the conditions are symmetric about the
@@ -13,7 +14,7 @@
 // force, the torque and the thickness come out doubled and FAIL; with the bottom roll's mirror removed (sr = 1
 // in p2g, gridNodes and followNodes) the lower half is not rolled, the pass never reaches steady and the step
 // count and the results FAIL.
-// @check
+// @check 480s
 import { ok, near, done } from './lib.mjs';
 import { defaultParams } from '../../src/mpm/params.ts';
 import { Sim3, solidParams } from '../../src/mpm/solid/sim3.ts';
