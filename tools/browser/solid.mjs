@@ -11,7 +11,9 @@
 //   CDP_PORT=<cdp> node tools/browser/solid.mjs <url> [out-prefix]
 //
 // Writes <out-prefix>-solid.png, -locus.png, -top.png, -cut.png, -narrow.png when a prefix is given; look at them.
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { existsSync, statSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { connect } from './cdp.mjs';
 import { ok, near, done } from '../checks/lib.mjs';
 
@@ -109,6 +111,38 @@ try {
   const rp4 = await c.evaluate('JSON.parse(JSON.stringify({ at: __mpm.solid.replay.at, same: __mpm.solid.frameShown.diag.step === __mpm.solid.diag.step, phase: document.getElementById("solid-phase").textContent, slider: +document.getElementById("solid-scrub").value, n: __mpm.solid.replay.length }))');
   ok(rp4.at === null && rp4.same && rp4.slider === rp4.n - 1 && rp4.phase === '圧延が終わった', 'the slider\'s end is the live frame: playback is left and the status is the run\'s', `${rp4.phase}, slider ${rp4.slider} / ${rp4.n - 1}`);
   ok(c.errors.length === 0, 'no exceptions in the playback', c.errors.join(' | '));
+
+  // ── the tape as a video file: the real button, a real download, read back by ffprobe when it is at hand
+  const dlDir = shots ? dirname(shots) : null;
+  if (dlDir) await c.send('Page.setDownloadBehavior', { behavior: 'allow', downloadPath: dlDir });
+  await c.evaluate(`(() => { const s = document.getElementById('solid-speed'); s.value = '2'; s.dispatchEvent(new Event('change')); })()`);
+  const nTape = await c.evaluate('__mpm.solid.replay.length');
+  await click('#solid-video');
+  await c.waitFor('__mpm.solid.videoBusy', 5000);
+  await c.waitFor('!__mpm.solid.videoBusy', 120000);
+  const vMsg = await c.evaluate(`document.getElementById('solid-replay-at').textContent`);
+  const vName = /^(rolling-3d-seq-\d+frames\.(mp4|webm)) を保存した/.exec(vMsg)?.[1];
+  ok(!!vName && vMsg.includes(`${nTape}frames`), 'a click on 動画に保存 writes the tape to a video file, one frame per recorded frame', vMsg);
+  if (dlDir && vName) {
+    const f = join(dlDir, vName);
+    const t0 = Date.now();
+    let size = -1;
+    while (Date.now() - t0 < 20000) {
+      const n = existsSync(f) ? statSync(f).size : 0;
+      if (n > 0 && n === size) break;
+      size = n;
+      await c.sleep(200);
+    }
+    ok(existsSync(f) && statSync(f).size > 100000, 'the file is downloaded', `${f}: ${existsSync(f) ? statSync(f).size : 0} bytes`);
+    const probe = spawnSync('ffprobe', ['-v', 'error', '-count_frames', '-select_streams', 'v:0', '-show_entries', 'stream=codec_name,width,height,nb_read_frames:format=duration', '-of', 'json', f], { encoding: 'utf8' });
+    if (probe.status === 0) {
+      const j = JSON.parse(probe.stdout);
+      const s = j.streams[0];
+      // ×2: the frames came every 80 ms (FRAME_MS), the video shows them every 40
+      ok(['h264', 'vp9'].includes(s.codec_name) && s.width === 1280 && s.height % 2 === 0 && +s.nb_read_frames === nTape && Math.abs(+j.format.duration - nTape * 0.04) < 0.01 && probe.stderr === '', 'ffprobe decodes every frame: 1280 px wide, one per recorded frame, at ×2 (40 ms each)', `${s.codec_name} ${s.width}×${s.height}, ${s.nb_read_frames} frames, ${j.format.duration} s${probe.stderr ? `, ${probe.stderr.trim()}` : ''}`);
+    } else console.log('SKIP  ffprobe not found: the video was not decoded');
+  }
+  await c.evaluate(`(() => { const s = document.getElementById('solid-speed'); s.value = '1'; s.dispatchEvent(new Event('change')); })()`);
 
   // ── the fracture locus and the stress state of the followed points (explorer.ts on the 3D page)
   const cell = (key) => c.evaluate(`(() => { const r = document.querySelector('#solid-explorer-state tr[data-key="${key}"]'); return r && { value: +r.dataset.value, text: (r.children[1] ?? r).textContent }; })()`);

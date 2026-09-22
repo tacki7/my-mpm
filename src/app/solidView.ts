@@ -95,6 +95,32 @@ export class SolidView {
     this.canvas.height = Math.round(this.h * this.dpr);
   }
 
+  /** a fixed size [CSS px] for a canvas off the page (a video's frames), instead of the canvas' layout size */
+  setSize(w: number, h: number, dpr = 1): void {
+    this.w = Math.max(1, Math.round(w));
+    this.h = Math.max(1, Math.round(h));
+    this.dpr = dpr;
+    this.canvas.width = Math.round(this.w * this.dpr);
+    this.canvas.height = Math.round(this.h * this.dpr);
+  }
+
+  /** the look of another view: its angles, zoom, pivot, cut, rolls, fit, y scale and field, and its pan scaled to this size */
+  sameLook(v: SolidView): void {
+    this.yaw = v.yaw;
+    this.pitch = v.pitch;
+    this.zoom = v.zoom;
+    this.pivotOff = [...v.pivotOff];
+    this.cut = v.cut;
+    this.rolls = v.rolls;
+    this.fit = v.fit;
+    this.yScale = v.yScale;
+    this.field = v.field;
+    // the projection's scale is min(w, 1.7 h) / span (frameOf): the pan [px] follows it
+    const k = Math.min(this.w, this.h * 1.7) / Math.min(v.w, v.h * 1.7);
+    this.panX = v.panX * k;
+    this.panY = v.panY * k;
+  }
+
   setPreset(p: ViewPreset): void {
     [this.yaw, this.pitch] = PRESETS[p];
     this.panX = this.panY = 0;

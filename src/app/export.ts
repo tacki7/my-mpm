@@ -66,7 +66,7 @@ export function cracksCsv(f: Frame): string {
   );
 }
 
-function download(name: string, data: Blob): void {
+export function download(name: string, data: Blob): void {
   const a = document.createElement('a');
   a.href = URL.createObjectURL(data);
   a.download = name;
