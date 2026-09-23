@@ -17,7 +17,7 @@ import { Eta, etaText, standGrowth } from './eta.ts';
 import { edited, showNumber } from './numberInput.ts';
 import { conditionsQuery } from './query.ts';
 import { radioGroup } from './radioGroup.ts';
-import type { FromSolidWorker, SolidFieldName, SolidFrame, SolidGeometry, ToSolidWorker } from './solidProtocol.ts';
+import type { Compute, FromSolidWorker, SolidFieldName, SolidFrame, SolidGeometry, ToSolidWorker } from './solidProtocol.ts';
 import { SolidStandTable } from './solidStandTable.ts';
 import { stopPhrase } from './standTable.ts';
 import { Explorer, standColor } from './explorer.ts';
@@ -71,6 +71,8 @@ export interface SolidPageSettings {
   barrel: number;
   support: BendSupport;
   span: number;
+  /** where the step runs: the worker's CPU, or the GPU through WebGPU (the CPU where the browser has none) */
+  compute: Compute;
 }
 
 export type BendSupport = 'barrel' | 'bearing';
@@ -101,7 +103,10 @@ const NUMBERS: NumberField[] = [
 const BARREL_OVER = 1.5;
 const FIELD = Object.fromEntries(NUMBERS.map((f) => [f.key, f])) as Record<NumberField['key'], NumberField>;
 
-const DEFAULTS: SolidPageSettings = { width: 8 * mm, length: 12 * mm, cells: 4, planeStrain: false, crown: 0, bend: false, barrel: 300 * mm, support: 'barrel', span: 400 * mm };
+const DEFAULTS: SolidPageSettings = { width: 8 * mm, length: 12 * mm, cells: 4, planeStrain: false, crown: 0, bend: false, barrel: 300 * mm, support: 'barrel', span: 400 * mm, compute: 'cpu' };
+
+/** the browser has WebGPU (the worker asks for the device; here only for the select) */
+export const HAS_WEBGPU = typeof navigator !== 'undefined' && !!(navigator as Navigator & { gpu?: unknown }).gpu;
 
 function checked(s: SolidPageSettings): SolidPageSettings {
   const clamp = (v: number, f: NumberField, lo = f.min * f.scale) => Math.min(f.max * f.scale, Math.max(lo, v));
@@ -110,7 +115,7 @@ function checked(s: SolidPageSettings): SolidPageSettings {
   // the strip fits on the barrel with room for its spread (a tandem's later stands are wider), and the bearings are beyond the barrel's ends
   const barrel = clamp(s.barrel, FIELD.barrel, BARREL_OVER * width);
   const span = clamp(s.span, FIELD.span, barrel);
-  return { width, length: clamp(s.length, FIELD.length), cells, planeStrain: s.planeStrain, crown: clamp(s.crown, FIELD.crown), bend: s.bend, barrel, support: s.support === 'bearing' ? 'bearing' : 'barrel', span };
+  return { width, length: clamp(s.length, FIELD.length), cells, planeStrain: s.planeStrain, crown: clamp(s.crown, FIELD.crown), bend: s.bend, barrel, support: s.support === 'bearing' ? 'bearing' : 'barrel', span, compute: s.compute === 'gpu' ? 'gpu' : 'cpu' };
 }
 
 /** what the solver is told about the roll's bending: nothing with a rigid roll */
@@ -127,6 +132,7 @@ function settingsOf(q: URLSearchParams): SolidPageSettings {
   s.planeStrain = q.get('ps3') === '1';
   s.bend = q.get('bend3') === '1';
   s.support = q.get('support3') === 'bearing' ? 'bearing' : 'barrel';
+  s.compute = q.get('gpu3') === '1' ? 'gpu' : 'cpu';
   return checked(s);
 }
 
@@ -187,6 +193,9 @@ export class SolidMode {
   private readonly stopAfter: number | null;
   private readonly inputs = new Map<NumberField['key'], HTMLInputElement>();
   private planeStrainBox!: HTMLInputElement;
+  private computeSelect!: HTMLSelectElement;
+  /** under the select: what the GPU is, or why the run is on the CPU after all */
+  private computeNote!: HTMLElement;
   private bendBox!: HTMLInputElement;
   private supportSelect!: HTMLSelectElement;
   private readonly checks: (() => void)[] = [];
@@ -345,6 +354,26 @@ export class SolidMode {
     ps.append(this.planeStrainBox, el('span', undefined, '板幅方向を止めて解く（平面ひずみ）'));
     ps.title = '板幅方向の速度を 0 にする。2 次元の断面と同じ問題になるので、3 次元の計算の確かめに使う';
     fs.append(ps);
+    const computeRow = el('label', 'field');
+    computeRow.append(el('span', 'field-label', '計算'));
+    const computeBox = el('span', 'field-input');
+    this.computeSelect = el('select');
+    this.computeSelect.name = 'solid-compute';
+    for (const [v, t] of [
+      ['cpu', 'CPU'],
+      ['gpu', 'GPU（WebGPU）'],
+    ] as [Compute, string][]) {
+      const o = el('option', undefined, t);
+      o.value = v;
+      this.computeSelect.append(o);
+    }
+    this.computeSelect.disabled = !HAS_WEBGPU;
+    this.computeSelect.addEventListener('change', () => this.o.onEdit());
+    computeBox.append(this.computeSelect);
+    computeRow.append(computeBox, el('span', 'hint', HAS_WEBGPU ? 'GPU は 1 ステップを WebGPU で解く（単精度）。板幅 8 mm・4 セルで CPU の約 8 倍、狭い板では 3 倍ほど。結果は CPU と荷重で 0.1 % ほど違い、同じ条件でもビット一致はしない' : 'このブラウザには WebGPU が無いので CPU だけ'));
+    this.computeNote = el('p', 'hint compute-note');
+    this.computeNote.hidden = true;
+    fs.append(computeRow, this.computeNote);
     fs.append(el('p', 'hint', 'スタンド数（タンデム）・ロール偏平・圧下率一定・板の長さの取り方は「板とロール」の欄で、2 次元と共通。張力（「潤滑と張力」の欄）も効く: 後方張力は最初から、前方張力は頭端が出てから立ち上げ、定常はそれを待つ。GTN・亀裂の面は 3 次元には無い（亀裂になった点は応力を失うだけで、面は開かない）'));
     bendFs.append(el('p', 'hint', 'ロールの径はロール半径、ヤング率は「ロール偏平」のロールのヤング率。片側だけの撓み（曲げ + せん断）を板の中央と端で結果に出す。R 100 mm・板幅 8 mm ではおよそ 1 µm で、細いロールや広い板で効く'));
     const note = this.o.panelRoot.querySelector('.note-more') ?? this.o.panelRoot.querySelector('.preset-note');
@@ -385,12 +414,21 @@ export class SolidMode {
     this.inputs.get('span')!.closest('label')?.classList.toggle('off', !on || !bearing);
   }
 
+  /** what the worker got: the GPU's kind, or the reason it is on the CPU (nothing for a plain CPU run) */
+  private showCompute(g: SolidGeometry): void {
+    const text = g.gpuNote ?? (g.compute === 'gpu' ? `GPU で計算する（${[g.gpu?.vendor, g.gpu?.architecture].filter(Boolean).join(' ') || 'WebGPU'}）` : '');
+    this.computeNote.textContent = text;
+    this.computeNote.hidden = !text;
+    this.computeNote.classList.toggle('warn', !!g.gpuNote);
+  }
+
   private showSettings(s: SolidPageSettings): void {
     this.shown = { ...s };
     for (const f of NUMBERS) showNumber(this.inputs.get(f.key)!, s[f.key] / f.scale);
     this.planeStrainBox.checked = s.planeStrain;
     this.bendBox.checked = s.bend;
     this.supportSelect.value = s.support;
+    this.computeSelect.value = s.compute;
     this.lockLength();
     this.lockBend();
     for (const c of this.checks) c();
@@ -407,6 +445,7 @@ export class SolidMode {
     s.planeStrain = this.planeStrainBox.checked;
     s.bend = this.bendBox.checked;
     s.support = this.supportSelect.value === 'bearing' ? 'bearing' : 'barrel';
+    s.compute = this.computeSelect.value === 'gpu' ? 'gpu' : 'cpu';
     return checked(s);
   }
 
@@ -591,6 +630,7 @@ export class SolidMode {
     if (s.planeStrain) q.set('ps3', '1');
     if (s.bend) q.set('bend3', '1');
     if (s.bend && s.support === 'bearing') q.set('support3', 'bearing');
+    if (s.compute === 'gpu') q.set('gpu3', '1');
     if (this.field !== 'seq') q.set('f3', this.field);
     return q;
   }
@@ -638,6 +678,7 @@ export class SolidMode {
         // a tandem's next stand: the run goes on
         if (m.geometry.stand > 0) return;
         this.awaitingReady = false;
+        this.showCompute(m.geometry);
         if (this.params?.rolling.lengthMode === 'steady') showNumber(this.inputs.get('length')!, m.geometry.sheetLength / mm);
         this.updateIdle();
         if (this.o.query.get('autorun') === '1' && this.frames === 0 && this.active) this.run();
@@ -673,7 +714,7 @@ export class SolidMode {
     this.stopReplay();
     const crown = Math.max(-0.5 * P.rolling.h0, Math.min(0.5 * P.rolling.h0, this.settings.crown));
     const solid: SolidSettings = { width: this.settings.width, planeStrain: this.settings.planeStrain, rollBend: rollBendOf(this.settings), ...(crown !== 0 ? { crownIn: crown } : {}) };
-    this.send({ type: 'init', params: P, solid, stands: P.rolling.stands ?? 1, handoff: P.rolling.handoff ?? 'done', stopAfter: this.stopAfter });
+    this.send({ type: 'init', params: P, solid, stands: P.rolling.stands ?? 1, handoff: P.rolling.handoff ?? 'done', stopAfter: this.stopAfter, compute: this.settings.compute });
     this.standTable.update(1, [], 0, false, null, null);
     this.explorer.reset();
     this.updateButtons();
@@ -741,7 +782,7 @@ export class SolidMode {
   private updateIdle(): void {
     const g = this.geometry!;
     this.updateButtons();
-    say(this.$('solid-phase'), `用意ができた（${g.stands > 1 ? `${g.stands} スタンドの #1、` : ''}${g.n.toLocaleString()} 点）。「圧延を始める」で計算する`);
+    say(this.$('solid-phase'), `用意ができた（${g.stands > 1 ? `${g.stands} スタンドの #1、` : ''}${g.n.toLocaleString()} 点${g.compute === 'gpu' ? '、GPU' : ''}）。「圧延を始める」で計算する`);
     this.$('solid-results-note').textContent = NOTE;
   }
 
@@ -1042,6 +1083,7 @@ export class SolidMode {
       ['粒子数（1/4 モデル）', g.n.toLocaleString(), '個', false],
       ['時間刻み', (g.dt * 1e9).toFixed(1), 'ns', false],
       ['1 ステップの計算時間', f.msPerStep ? f.msPerStep.toFixed(2) : '—', 'ms', false],
+      ['計算', g.compute === 'gpu' ? `GPU（${[g.gpu?.vendor, g.gpu?.architecture].filter(Boolean).join(' ') || 'WebGPU'}）` : 'CPU', '', false],
     ];
     this.$('solid-results').replaceChildren(
       ...rows.map(([k, v, u, provisional]) => {
@@ -1401,6 +1443,10 @@ export class SolidMode {
       },
       get settings() {
         return { ...self.settings };
+      },
+      /** where the worker runs the step (the init's choice, or the CPU where the GPU is not there), and the GPU it got */
+      get compute() {
+        return self.geometry ? { compute: self.geometry.compute, gpu: self.geometry.gpu, note: self.geometry.gpuNote } : null;
       },
       get params() {
         return self.params ? cloneParams(self.params) : null;

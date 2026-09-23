@@ -1,0 +1,14 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <title>GPU check</title>
+</head>
+<body>
+  <pre id="out">__gpucheck.sync('plain') / .passes('plain')</pre>
+  <script type="module">
+    import './check.ts';
+    window.__ready = true;
+  </script>
+</body>
+</html>

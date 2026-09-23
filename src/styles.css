@@ -322,6 +322,15 @@ button.pending {
   line-height: 1.35;
 }
 
+/* under the 3D tab's 計算 select: the GPU the worker got, or (a warning) why it fell back to the CPU */
+.compute-note {
+  margin: 2px 0 0;
+}
+
+.compute-note.warn {
+  color: var(--stamp);
+}
+
 /* ── stage ────────────────────────────────────────────────────────────── */
 .stage {
   display: grid;

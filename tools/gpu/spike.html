@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <title>WebGPU spike</title>
+</head>
+<body>
+  <pre id="out">__spike.run(W, cells, steps) を呼ぶ</pre>
+  <script type="module">
+    import './spike.ts';
+    const q = new URLSearchParams(location.search);
+    if (q.has('run')) {
+      const W = +(q.get('W') ?? 8), cells = +(q.get('cells') ?? 4), steps = +(q.get('steps') ?? 1500);
+      const cpuSteps = q.has('cpu') ? +q.get('cpu') : steps;
+      window.__result = null;
+      window.__spike.run(W, cells, steps, cpuSteps, q.has('f32'), q.has('sync')).then((r) => { window.__result = r; document.getElementById('out').textContent = JSON.stringify(r, null, 2); },
+        (e) => { window.__result = { error: String(e), stack: e.stack }; document.getElementById('out').textContent = String(e); });
+    }
+  </script>
+</body>
+</html>

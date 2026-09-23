@@ -5,6 +5,7 @@ import type { SolidLook, SolidSteady } from '../mpm/solid/steady.ts';
 import type { Stand3Result } from '../mpm/solid/tandem3.ts';
 import type { Handoff, TandemStop } from '../mpm/tandem.ts';
 import type { Face } from '../mpm/solid/surface.ts';
+import type { GpuInfo } from '../mpm/solid/gpu/stepper.ts';
 import type { Track } from './protocol.ts';
 
 /** what the strip's faces can be coloured by */
@@ -14,12 +15,19 @@ export type SolidFieldName = 'seq' | 'ep' | 'pres' | 'eta' | 'sxx' | 'syy' | 'sz
 export const SOLID_FIELD_IDS: readonly SolidFieldName[] = ['seq', 'ep', 'pres', 'eta', 'sxx', 'syy', 'szz', 'damage', 'spread'];
 
 export type ToSolidWorker =
-  | { type: 'init'; params: SimParams; solid: SolidSettings; stands: number; handoff: Handoff; stopAfter: number | null }
+  | { type: 'init'; params: SimParams; solid: SolidSettings; stands: number; handoff: Handoff; stopAfter: number | null; compute: Compute }
   | { type: 'run' }
   | { type: 'pause' };
 
+/** where the step runs: the CPU (advance, f64), or a WebGPU device (Sim3.advanceBatch, f32, batches of steps) */
+export type Compute = 'cpu' | 'gpu';
+
 /** Fixed facts of a stand, sent after init and again when a tandem's next stand starts. Lengths in m. */
 export interface SolidGeometry {
+  /** where the step runs, and the device; `gpuNote`: why it is the CPU although the GPU was asked for */
+  compute: Compute;
+  gpu: GpuInfo | null;
+  gpuNote: string | null;
   /** the stand (0 first) of `stands` */
   stand: number;
   stands: number;
