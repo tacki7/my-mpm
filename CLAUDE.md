@@ -110,11 +110,12 @@ Math.exp・log の最後の 1 ビットが違うのでビット一致はしな�
 画面で `?dim=3&W3=4&L3=12&cells3=4&autorun=1&threads3=3` を最後まで回して `__mpm.solid.compute.threads === 3`・荷重が `node tools/solid.mjs --W 4` と 1e-9 で合うこと。
 `solid.mjs` の節にも入っている。
 
+レイアウトの密度（タブの行の右端の「レイアウト」標準 / コンパクト、`src/app/density.ts`・`styles.css` の「density」・`--masthead-h` の実測）を触ったら `CDP_PORT=<cdp> node tools/browser/density.mjs http://localhost:<dev>/ <作業用ディレクトリ>/dn`（約 40 秒。属性・マストヘッドの高さとトークン・罫線の上のタブ・説明文の表示・字の大きさ・グラフの高さ・再読み込み・3 次元・700 px・定常の荷重が同じ。`dn-*.png` を自分で見る）。
 描画の更新（時計の下の「描画の更新」、`src/app/frameRate.ts`・ワーカーの `frame-ms`）を触ったら `CDP_PORT=<cdp> node tools/browser/frame-rate.mjs http://localhost:<dev>/`（約 1 分。断面・3 次元・平面図で実際の選択を変えて 2 秒の枚数を数え、再読み込みで残ること）。
 残り時間の表示（時計の上の「残り 約 …」、`src/app/eta.ts`・`src/mpm/progress.ts`・ワーカーの `progress`）を触ったら `CDP_PORT=<cdp> node tools/browser/eta.mjs http://localhost:<dev>/ <作業用ディレクトリ>/eta`
 （約 5 分。表示した残り時間を、実際に掛かった残り時間と比べる: 断面・一時停止・タンデム 2 スタンド（`handoff` 2 通り）・平面図・3 次元。`eta-section.png` を自分で見る）。
 
-ポートは必ず渡す（既定値は無い）。`window.__mpm` は `frames` `eta`（表示中の残り時間 [s]。速さが読めるまでは null。`plan.eta`・`solid.eta` も）`running` `ready` `done` `diag` `steady`（表示中のスタンドの定常の平均、`TandemSim` の読み。無ければ null）`cracks`
+ポートは必ず渡す（既定値は無い）。`window.__mpm` は `frames` `density`（レイアウトの密度 'standard' | 'compact'。読み書き）`eta`（表示中の残り時間 [s]。速さが読めるまでは null。`plan.eta`・`solid.eta` も）`running` `ready` `done` `diag` `steady`（表示中のスタンドの定常の平均、`TandemSim` の読み。無ければ null）`cracks`
 `geometry` `params` `history` `slab`（スラブ法の荷重・中立点・方法の外の理由、`delta` = 平均板厚 / 接触長、`steadyForce` = 定常の荷重をステップ数で重み付けした平均 [N/m]、`ratio` = MPM / スラブ法。定常の前と方法の外では null）`forceChart`（荷重のグラフに描いた生の値と移動平均）`explorer`（表示中の点）`tracks`（追っている点と経路）`view`（拡大率・パン・倍率・主応力の向き）
 `plan`（平面図: `active` `ready` `running` `done` `diag`（`steady` が定常の平均、SI）`cracks` `settings` `url` `setMode()` `setField()` `drawMs()`）
 （約 12 分、うちタンデムの節が約 9 分。実クリックでタブを移り、板幅 4 mm を最後まで回して `node tools/solid.mjs` と比べる（相対 1e-5）、巻き戻し再生（実クリックで巻き戻す・再生・一時停止・スライダーの端、再生中の色の量のタブ）、「動画に保存」で実際にダウンロードした MP4 を ffprobe で読む（枚数・幅・長さ。ffprobe が無ければ飛ばす）、色の量のタブ、実ドラッグで動かす・Shift+ドラッグで回す・動かしたあと矢印キーで画面の中央を軸に回る・ホイール・ダブルクリック、見る向き、URL、

@@ -27,6 +27,7 @@ import { PresetNote } from './app/presetNote.ts';
 import { radioGroup } from './app/radioGroup.ts';
 import { say } from './app/liveText.ts';
 import { frameMs, mountFrameRate, onFrameMs, setFrameMs } from './app/frameRate.ts';
+import { density, mountDensity, onDensity, setDensity, trackMasthead, type Density } from './app/density.ts';
 import { Eta, etaText, standGrowth } from './app/eta.ts';
 import { SteadyForce, SteadyProfile, drawForceChart, drawHillChart, slabRatio, type HillStand, type HillChartData, type Profile, slabReference, type ForceChartData, type StandStart } from './app/slabOverlay.ts';
 
@@ -655,6 +656,13 @@ window.__mpm = {
   set frameMs(ms: number) {
     setFrameMs(ms);
   },
+  /** the page's density ('standard' | 'compact'; src/app/density.ts). Settable: as the masthead's select */
+  get density() {
+    return density();
+  },
+  set density(d: Density) {
+    setDensity(d);
+  },
   /** the time left [s] the section view shows (null before there is a rate to go by) */
   get eta() {
     return eta.seconds;
@@ -797,6 +805,13 @@ window.__mpm = {
 startWorker();
 // the frame interval: the masthead's select, sent to every worker as it changes (each mode sends it to its own worker as well when it starts one)
 mountFrameRate(document.getElementById('frame-rate') as HTMLSelectElement);
+// the density: the masthead's select; the charts redraw at their new height (the bite and the 3D view watch their own size)
+mountDensity(document.getElementById('density') as HTMLSelectElement);
+trackMasthead(document.querySelector('.masthead') as HTMLElement);
+onDensity(() => {
+  dirty = true;
+  solid.chartsResized();
+});
 onFrameMs((ms) => {
   send({ type: 'frame-ms', ms });
   plan.frameMs(ms);
