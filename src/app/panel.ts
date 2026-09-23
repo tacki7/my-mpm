@@ -204,10 +204,11 @@ export function buildPanel(root: HTMLElement, onEdit: () => void): Panel {
   const handoff = select('handoff', 'スタンドの引き継ぎ', [
     ['done', '板が全部抜けてから'],
     ['steady', '定常になったらすぐ（速い）'],
+    ['crop', '中央部を切り出す（次の定常に要る長さ）'],
   ]);
   handoff.classList.add('section-only');
   handoff.title =
-    'タンデムで、次のスタンドへ移るとき。「定常になったらすぐ」は、出側の定常に圧延された部分を繰り返して次のスタンドの板を作る（板の残りは圧延しない。頭端・尾端の非定常な部分は引き継がない）';
+    'タンデムで、次のスタンドへ移るとき。「定常になったらすぐ」は、出側の定常に圧延された部分を繰り返して次のスタンドの板を作る（板の残りは圧延しない。頭端・尾端の非定常な部分は引き継がない）。「中央部を切り出す」は、板の長手の中央から、次のスタンドが定常になるのに要る長さを切り出して次の板にする（その部分が抜けたら次へ。尾端は圧延しない。板がスタンドごとに長くならない）';
 
   // under the reduction and the roll radius they act on
   const control = select('control', '圧下率の取り方', [
@@ -332,7 +333,8 @@ export function buildPanel(root: HTMLElement, onEdit: () => void): Panel {
       p.damage.failure = selects.get('failure')!.value as SimParams['damage']['failure'];
       p.numerics.crackFields = selects.get('crack')!.value as NonNullable<SimParams['numerics']['crackFields']>;
       // 'done' is written as no handoff at all (as the presets have it), so that it is not a difference
-      if (selects.get('handoff')!.value === 'steady') p.rolling.handoff = 'steady';
+      const handoff = selects.get('handoff')!.value;
+      if (handoff === 'steady' || handoff === 'crop') p.rolling.handoff = handoff;
       else delete p.rolling.handoff;
       if (selects.get('control')!.value === 'reduction') p.rolling.gapControl = 'reduction';
       else delete p.rolling.gapControl;

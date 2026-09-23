@@ -8,8 +8,10 @@
 // share of the way across the width, and along x by the material (handoff 'done': the whole strip, mass
 // kept) or from the steadily rolled stretch repeated (handoff 'steady': the next stand starts as soon as this
 // one has STEADY_LOOKS steady looks and enough steady strip out, with a strip only as long as it needs itself).
-// The new strip is a rectangular block: the exit section's shape (the edge's bulge, the thickness falling or
-// rising toward the edge) is not carried, its mean thickness and width are.
+// or the middle of the strip cut out (handoff 'crop': as long as the next stand needs to get steady, handed on as soon
+// as that stretch is out of the rolls, the tail not rolled). The strip's shape goes with it (remap3): with 'done' and
+// 'crop' column by column along x (the plan view's outline, the crown, the edge's barrel, the ends), with 'steady'
+// the steady section's.
 //
 // One stand is a plain pass: the same steps and looks as Sim3 with a SolidSampler.
 import { elasticConstants } from '../material.ts';
@@ -34,8 +36,9 @@ export interface Stand3Result {
   particles: number;
   steps: number;
   t: number;
-  /** how it ended: 'done', 'steady' (handed on while it rolled steadily), or 'stalled' */
-  phase: 'done' | 'steady' | 'stalled';
+  /** how it ended: 'done', 'steady' (handed on while it rolled steadily), 'cropped' (handed on once the middle stretch
+   *  the next stand takes was out: handoff 'crop'), or 'stalled' */
+  phase: 'done' | 'steady' | 'cropped' | 'stalled';
   /** means over the steady looks (steady.ts); null without one */
   steady: SolidSteady | null;
   /** the strip that came out: volume over length and width, and the edge's mean half width doubled (the next stand's entry) */
@@ -111,6 +114,9 @@ export class Tandem3 {
   private team: Team | null = null;
   /** how every stand's Sim3 is made (a team's coordinator: `{ shared: true, size }`) */
   private readonly simOpts: Sim3Options;
+  /** handoff 'crop': the current stand's middle stretch the next stand takes (lattice columns [first, last]); null otherwise,
+   *  or when the strip is no longer than that (it is carried whole) */
+  crop: [number, number] | null = null;
 
   constructor(params: Solid3Params, stands = 1, handoff: Handoff = 'done', simOpts: Sim3Options = {}) {
     if (!(Number.isInteger(stands) && stands >= 1 && stands <= MAX_STANDS)) throw new Error(`stands must be 1 to ${MAX_STANDS}`);
@@ -119,6 +125,11 @@ export class Tandem3 {
     this.base = withSteadyLength3(params);
     this.simOpts = simOpts;
     this.sim = new Sim3(this.base, simOpts);
+    this.crop = this.cropOf(this.sim);
+  }
+
+  private cropOf(sim: Sim3): [number, number] | null {
+    return this.handoff === 'crop' && this.stand + 1 < this.stands ? cropColumns3(sim) : null;
   }
 
   /** true once the last stand has ended, or the tandem stopped */
@@ -186,20 +197,20 @@ export class Tandem3 {
     else if (this.handoff === 'steady' && look.phase === 'steady' && this.stand + 1 < this.stands && this.sampler.count >= STEADY_LOOKS) {
       const sample = steadySample3(sim);
       if (sample) this.endStand('steady', sample);
-    }
+    } else if (this.crop && cropOut3(sim, this.crop)) this.endStand('cropped', null, this.crop);
     return look;
   }
 
-  private endStand(phase: 'done' | 'steady' | 'stalled', sample: [number, number] | null = null): void {
+  private endStand(phase: 'done' | 'steady' | 'cropped' | 'stalled', sample: [number, number] | null = null, crop: [number, number] | null = null): void {
     const old = this.sim;
-    const result = close(old, this.stand, phase, this.sampler.means(old), sample);
+    const result = close(old, this.stand, phase, this.sampler.means(old), sample ?? crop);
     this.results.push(result);
     const more = this.stand + 1 < this.stands;
     if (more) {
       const whole = result.thicknessOut > 0 && result.widthOut > 0;
       this.stopped = phase === 'stalled' ? 'stalled' : result.separated ? 'separated' : result.massLost > 0 || !whole ? 'lost' : null;
     }
-    const next = more && !this.stopped ? remap3(old, this.base, result.thicknessOut, result.widthOut, sample, this.simOpts) : null;
+    const next = more && !this.stopped ? remap3(old, this.base, result.thicknessOut, result.widthOut, sample, this.simOpts, crop) : null;
     this.onStandDone?.({ stand: this.stand, sim: old, next, result });
     if (!next) {
       this.finished = true;
@@ -210,10 +221,11 @@ export class Tandem3 {
     this.sim = next;
     this.sampler = new SolidSampler();
     this.stand++;
+    this.crop = this.cropOf(next);
   }
 }
 
-function close(sim: Sim3, stand: number, phase: 'done' | 'steady' | 'stalled', steady: SolidSteady | null, sample: [number, number] | null): Stand3Result {
+function close(sim: Sim3, stand: number, phase: 'done' | 'steady' | 'cropped' | 'stalled', steady: SolidSteady | null, sample: [number, number] | null): Stand3Result {
   let mass = 0;
   let lost = 0;
   for (let p = 0; p < sim.n; p++) {
@@ -328,22 +340,61 @@ export function separated3(sim: Sim3): boolean {
 }
 
 /**
+ * Handoff 'crop': the middle of the strip the next stand takes, as lattice columns [first, last] of `sim` (the stand
+ * about to roll it), or null when the strip is not longer than that (it is carried whole, as with 'done'). As long
+ * as the next stand needs to get steady (steadyLength3 at the entry thickness h0 (1 − r)): a column's pitch grows from
+ * dp to dp / (1 − r) through the pass, less the spread (a tenth over for it), and a column over at each end.
+ */
+export function cropColumns3(sim: Sim3): [number, number] | null {
+  const P = sim.params;
+  const r = P.rolling;
+  const next: Solid3Params = { ...cloneParams(P), solid: { ...P.solid } };
+  next.rolling.h0 = r.h0 * (1 - r.reduction);
+  delete next.rolling.lengthMode;
+  const need = steadyLength3(next);
+  const cols = Math.ceil(((need * (1 - r.reduction)) / sim.dp) * 1.1) + 2;
+  if (cols >= sim.NI - 2) return null;
+  const first = Math.floor((sim.NI - cols) / 2);
+  return [first, first + cols - 1];
+}
+
+/** the crop is out of the rolls: every point of its columns on the grid and its tail end past the exit probe */
+export function cropOut3(sim: Sim3, crop: [number, number]): boolean {
+  for (let i = crop[0]; i <= crop[1]; i++) if (Number.isNaN(columnX(sim, i))) return false;
+  return columnX(sim, crop[0]) >= sim.xExitProbe;
+}
+
+/**
  * The next stand's Sim3 with the strip that came out of `old` (tandem.ts remap, a dimension up): entry thickness
  * h1 and width w1 (measured), a new regular lattice; with the whole strip its length is what the mass gives,
- * with a `sample` what the next stand needs to get steady (steadyLength3), the sample's columns repeated along x,
- * each old column with as many new ones as the masses' ratio. A new point's parent: the same row through the
- * thickness, the same share of the way across the width, along x by the material. It takes the parent's stresses,
- * pressure, εp, temperature, damage indicators and failure, and starts undeformed up to its volume
- * (F = ∛J I with ln J = −p / K, so the pressure stays what it was).
- * The strip's shape comes along: a new point's y and z are the old column's, read at the new point's place in the
+ * with a `crop` (handoff 'crop') what the mass of the crop's columns gives, with a `sample` what the next stand
+ * needs to get steady (steadyLength3), the sample's columns repeated along x, each old column with as many new
+ * ones as the masses' ratio. A new point's parent: the same row through the thickness, the same share of the way
+ * across the width, along x by the material. It takes the parent's stresses, pressure, εp, temperature, damage
+ * indicators and failure, and starts undeformed up to its volume (F = ∛J I with ln J = −p / K, so the pressure
+ * stays what it was).
+ * The strip's shape comes along: a new point's y and z are the old strip's, read at the new point's place in the
  * lattice (bilinear in the old lattice's indices, extrapolated past the outermost centres), so the crown and the
- * edge's barrel go into the next stand instead of a rectangular block (which lost 8–16 µm of shape at W 6 mm). The
- * shape is the old strip's section averaged along x (over the steady sample, or the middle half of a whole strip):
- * the lattice-period stripes of the old pass (±2 µm at 4 cells) are not carried, since they would make the next
- * stand's gauge hunt and rolls that follow the pass never settle. Along x the new lattice is regular; the head's
- * and the tail's shapes are not carried.
+ * edge's barrel go into the next stand instead of a rectangular block (which lost 8–16 µm of shape at W 6 mm).
+ * - with a `sample` the shape is the old strip's section averaged along x over the sample: the steady section,
+ *   the same all along the new strip
+ * - with the whole strip or a crop it is column by column along x: the section averaged over the middle half, and
+ *   each column's own departure from it (in y, z and x: the plan view's outline, the thickness and the width
+ *   along the strip, the ends' faces) smoothed along x over about 2 h1 (two running means of 2w + 1 columns). The
+ *   lattice-period stripes of the old pass (±2 µm at 4 cells) are not carried (they made the next stand's gauge hunt
+ *   and rolls that follow the pass never settle); what varies over millimetres is. A new point's volume is its
+ *   share of the section where it sits (the spacing of the carried y and z against the new lattice's), scaled so
+ *   that the strip's volume is the lattice's, and its mass is the strip's over the points (equal).
  */
-export function remap3(old: Sim3, base: Solid3Params, h1: number, w1: number, sample: [number, number] | null = null, simOpts: Sim3Options = {}): Sim3 {
+export function remap3(
+  old: Sim3,
+  base: Solid3Params,
+  h1: number,
+  w1: number,
+  sample: [number, number] | null = null,
+  simOpts: Sim3Options = {},
+  crop: [number, number] | null = null,
+): Sim3 {
   const P: Solid3Params = { ...cloneParams(base), solid: { ...base.solid, width: w1 } };
   const rho = P.material.rho * P.numerics.massScale;
   P.rolling.h0 = h1;
@@ -351,14 +402,18 @@ export function remap3(old: Sim3, base: Solid3Params, h1: number, w1: number, sa
   // the section's shape comes from the old strip (below), not from the entry crown input
   delete P.solid.crownIn;
   delete P.rolling.lengthMode;
+  const m = old.NJ * old.NK;
+  // the old columns the new strip is made of (tail to head)
+  const c0 = crop ? crop[0] : 0;
+  const c1 = crop ? crop[1] : old.NI - 1;
+  const range = sample ?? crop;
   // the strain the strip brings in: where rolls that follow the pass start from, and what the slab method's line needs
   {
-    const m = old.NJ * old.NK;
     let ep = 0;
     let c = 0;
     for (let p = 0; p < old.n; p++) {
       const i = Math.floor(p / m);
-      if (!old.active[p] || (sample && (i < sample[0] || i > sample[1]))) continue;
+      if (!old.active[p] || (range && (i < range[0] || i > range[1]))) continue;
       ep += old.ep[p];
       c++;
     }
@@ -371,7 +426,7 @@ export function remap3(old: Sim3, base: Solid3Params, h1: number, w1: number, sa
     P.rolling.sheetLength = steadyLength3(P);
     M = (rho * h1 * w1 * P.rolling.sheetLength) / parts;
   } else {
-    for (let p = 0; p < old.n; p++) if (old.active[p]) M += old.mass[p];
+    for (let p = c0 * m; p < (c1 + 1) * m; p++) if (old.active[p]) M += old.mass[p];
     P.rolling.sheetLength = (parts * M) / (rho * h1 * w1);
   }
   const sim = new Sim3(P, simOpts);
@@ -380,29 +435,28 @@ export function remap3(old: Sim3, base: Solid3Params, h1: number, w1: number, sa
   // new columns per old column: the ratio of the masses of a lattice column, old to new
   const share = (old.dp * old.params.rolling.h0 * old.halfWidth0) / (sim.dp * h1 * sim.halfWidth0);
   const len = sample ? sample[1] - sample[0] + 1 : 0;
+  const nc = c1 - c0 + 1;
   const mass = M / n;
   const cell = sim.dp * sim.dp * sim.dz;
   let nFailed = 0;
   const parentOf = new Int32Array(n);
-  // the old strip's section: y and z of each (row, column) averaged over the sampled columns along x
-  const meanY = new Float64Array(old.NJ * old.NK);
-  const meanZ = new Float64Array(old.NJ * old.NK);
+  // the old strip's section: y and z of each (row, column) averaged over the sample, or the middle half of the columns
+  const meanY = new Float64Array(m);
+  const meanZ = new Float64Array(m);
   {
-    const i0 = sample ? sample[0] : Math.floor(old.NI / 4);
-    const i1 = sample ? sample[1] : Math.ceil((3 * old.NI) / 4) - 1;
-    const cnt = new Int32Array(old.NJ * old.NK);
+    const i0 = sample ? sample[0] : c0 + Math.floor(nc / 4);
+    const i1 = sample ? sample[1] : Math.max(i0, c0 + Math.ceil((3 * nc) / 4) - 1);
+    const cnt = new Int32Array(m);
     for (let io = i0; io <= i1; io++) {
-      for (let j = 0; j < old.NJ; j++) {
-        for (let k = 0; k < old.NK; k++) {
-          const p = old.lattice(io, j, k);
-          if (!old.active[p]) continue;
-          meanY[j * old.NK + k] += old.py[p];
-          meanZ[j * old.NK + k] += old.pz[p];
-          cnt[j * old.NK + k]++;
-        }
+      for (let q = 0; q < m; q++) {
+        const p = io * m + q;
+        if (!old.active[p]) continue;
+        meanY[q] += old.py[p];
+        meanZ[q] += old.pz[p];
+        cnt[q]++;
       }
     }
-    for (let q = 0; q < meanY.length; q++) {
+    for (let q = 0; q < m; q++) {
       const c = cnt[q];
       const j = Math.floor(q / old.NK);
       const k = q % old.NK;
@@ -411,9 +465,9 @@ export function remap3(old: Sim3, base: Solid3Params, h1: number, w1: number, sa
       meanZ[q] = c ? meanZ[q] / c : (k + 0.5) * old.dz;
     }
   }
-  // the mean section's shape at a continuous lattice index (jf, kf): bilinear between the four centres around it,
-  // linear past the outermost ones (a new point nearer the surface than any old centre)
-  const at = (arr: Float64Array, jf: number, kf: number): number => {
+  // the shape at a continuous lattice index (jf, kf) of a section (m values from `o`): bilinear between the four
+  // centres around it, linear past the outermost ones (a new point nearer the surface than any old centre)
+  const at = (arr: Float64Array, o: number, jf: number, kf: number): number => {
     const j0 = Math.max(0, Math.min(old.NJ - 2, Math.floor(jf)));
     const k0 = Math.max(0, Math.min(old.NK - 2, Math.floor(kf)));
     const tj = old.NJ > 1 ? jf - j0 : 0;
@@ -421,28 +475,104 @@ export function remap3(old: Sim3, base: Solid3Params, h1: number, w1: number, sa
     const j1 = Math.min(old.NJ - 1, j0 + 1);
     const k1 = Math.min(old.NK - 1, k0 + 1);
     return (
-      (1 - tj) * (1 - tk) * arr[j0 * old.NK + k0] +
-      (1 - tj) * tk * arr[j0 * old.NK + k1] +
-      tj * (1 - tk) * arr[j1 * old.NK + k0] +
-      tj * tk * arr[j1 * old.NK + k1]
+      (1 - tj) * (1 - tk) * arr[o + j0 * old.NK + k0] +
+      (1 - tj) * tk * arr[o + j0 * old.NK + k1] +
+      tj * (1 - tk) * arr[o + j1 * old.NK + k0] +
+      tj * tk * arr[o + j1 * old.NK + k1]
     );
   };
+  // column by column (the whole strip or a crop): each old column's departure from the mean section in y, z and x
+  // (x from the column's mean), smoothed along x
+  const along = !sample;
+  const dY = along ? new Float64Array(nc * m) : null;
+  const dZ = along ? new Float64Array(nc * m) : null;
+  const dX = along ? new Float64Array(nc * m) : null;
+  if (dY && dZ && dX) {
+    for (let c = 0; c < nc; c++) {
+      const io = c0 + c;
+      let sx = 0;
+      let cx = 0;
+      for (let q = 0; q < m; q++) {
+        const p = io * m + q;
+        if (!old.active[p]) continue;
+        sx += old.px[p];
+        cx++;
+      }
+      if (!cx) continue;
+      const xm = sx / cx;
+      for (let q = 0; q < m; q++) {
+        const p = io * m + q;
+        if (!old.active[p]) continue;
+        dY[c * m + q] = old.py[p] - meanY[q];
+        dZ[c * m + q] = old.pz[p] - meanZ[q];
+        dX[c * m + q] = old.px[p] - xm;
+      }
+    }
+    // two running means of 2w + 1 columns (a triangle about 4w columns wide, 2 h1 of the rolled strip), cut short at the ends
+    const pitch = old.dp / (1 - old.params.rolling.reduction);
+    const w = Math.max(1, Math.round(h1 / (2 * pitch)));
+    const tmp = new Float64Array(nc);
+    for (const arr of [dY, dZ, dX]) {
+      for (let q = 0; q < m; q++) {
+        for (let pass = 0; pass < 2; pass++) {
+          for (let c = 0; c < nc; c++) {
+            let s = 0;
+            let cn = 0;
+            for (let d = Math.max(0, c - w); d <= Math.min(nc - 1, c + w); d++) {
+              s += arr[d * m + q];
+              cn++;
+            }
+            tmp[c] = s / cn;
+          }
+          for (let c = 0; c < nc; c++) arr[c * m + q] = tmp[c];
+        }
+      }
+    }
+  }
+  // the carried shape at (continuous old column iof, jf, kf): the mean section and, along, the column's departure
+  // (linear between the two columns around iof)
+  const shapeAt = (mean: Float64Array, dev: Float64Array | null, iof: number, jf: number, kf: number): number => {
+    let v = at(mean, 0, jf, kf);
+    if (dev) {
+      const f = Math.max(0, Math.min(nc - 1, iof - c0));
+      const a = Math.min(nc - 1, Math.floor(f));
+      const b = Math.min(nc - 1, a + 1);
+      const t = f - a;
+      v += (1 - t) * at(dev, a * m, jf, kf) + t * at(dev, b * m, jf, kf);
+    }
+    return v;
+  };
+  const zeros = new Float64Array(m);
+  // a new point's share of the section (along only): the carried rows' and columns' spacing against the new lattice's
+  const cellShare = along ? new Float64Array(n) : null;
+  let shareSum = 0;
   for (let q = 0; q < n; q++) {
     const i = Math.floor(q / (sim.NJ * sim.NK));
     const j = Math.floor(q / sim.NK) % sim.NJ;
     const k = q % sim.NK;
     const fromHead = sim.NI - 1 - i + 0.5;
-    const io = sample ? sample[1] - (Math.floor(fromHead / share) % len) : old.NI - 1 - Math.min(old.NI - 1, Math.floor((fromHead / sim.NI) * old.NI));
+    const s = (fromHead / sim.NI) * nc;
+    const io = sample ? sample[1] - (Math.floor(fromHead / share) % len) : c1 - Math.min(nc - 1, Math.floor(s));
+    const iof = c1 + 0.5 - s;
     const jf = ((j + 0.5) / sim.NJ) * old.NJ - 0.5;
     const kf = ((k + 0.5) / sim.NK) * old.NK - 0.5;
     const jo = Math.max(0, Math.min(old.NJ - 1, Math.round(jf)));
     const ko = Math.max(0, Math.min(old.NK - 1, Math.round(kf)));
     const p = old.lattice(io, jo, ko);
     parentOf[q] = p;
-    // the shape: y and z where the old column has them; the symmetry planes are not crossed
-    const yq = at(meanY, jf, kf);
+    // the shape: y and z where the old strip has them; the symmetry planes are not crossed
+    const yq = shapeAt(meanY, dY, iof, jf, kf);
     sim.py[q] = sim.fullThickness ? yq : Math.max(0.25 * sim.dp, yq);
-    sim.pz[q] = Math.max(0.25 * sim.dz, at(meanZ, jf, kf));
+    sim.pz[q] = Math.max(0.25 * sim.dz, shapeAt(meanZ, dZ, iof, jf, kf));
+    if (dX) sim.px[q] += shapeAt(zeros, dX, iof, jf, kf);
+    if (cellShare) {
+      const hj = (0.5 * old.NJ) / sim.NJ;
+      const hk = (0.5 * old.NK) / sim.NK;
+      const fy = (shapeAt(meanY, dY, iof, jf + hj, kf) - shapeAt(meanY, dY, iof, jf - hj, kf)) / sim.dp;
+      const fz = (shapeAt(meanZ, dZ, iof, jf, kf + hk) - shapeAt(meanZ, dZ, iof, jf, kf - hk)) / sim.dz;
+      cellShare[q] = Math.max(0.5, Math.min(2, fy)) * Math.max(0.5, Math.min(2, fz));
+      shareSum += cellShare[q];
+    }
     sim.sxx[q] = old.sxx[p];
     sim.syy[q] = old.syy[p];
     sim.szz[q] = old.szz[p];
@@ -461,13 +591,15 @@ export function remap3(old: Sim3, base: Solid3Params, h1: number, w1: number, sa
     sim.failed[q] = i === 0 ? 0 : old.failed[p];
     if (sim.failed[q]) nFailed++;
     const J = Math.exp(-old.pres[p] / K);
-    const s = Math.cbrt(J);
-    sim.F[9 * q] = s;
-    sim.F[9 * q + 4] = s;
-    sim.F[9 * q + 8] = s;
+    const sc = Math.cbrt(J);
+    sim.F[9 * q] = sc;
+    sim.F[9 * q + 4] = sc;
+    sim.F[9 * q + 8] = sc;
     sim.vol0[q] = cell / J;
     sim.mass[q] = mass;
   }
+  // the points' volumes by their share of the section, the strip's volume the lattice's
+  if (cellShare) for (let q = 0; q < n; q++) sim.vol0[q] *= (cellShare[q] * n) / shareSum;
   sim.nFailed = nFailed;
   sim.firstCrack = old.firstCrack;
   sim.parentOf = parentOf;

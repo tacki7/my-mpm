@@ -12,7 +12,9 @@
 //
 // A stand need not roll its whole sheet (handoff 'steady'): once it rolls steadily and enough steadily rolled
 // sheet is out, the next stand starts at once, with a sheet made of that stretch of sheet repeated along x
-// and only as long as the next stand needs to get steady itself.
+// and only as long as the next stand needs to get steady itself. Or the middle of the sheet is cut out (handoff
+// 'crop'): as long as the next stand needs to get steady, handed on once that stretch is out of the rolls (the
+// tail is not rolled), carried as it came out (not repeated), so a tandem's sheet does not grow 1/(1 − r) a stand.
 import { cloneParams, type SimParams } from './params.ts';
 import { Sim, type Crack, type Diagnostics } from './solver.ts';
 
@@ -27,9 +29,10 @@ export const READ_STEPS = 2000;
 /**
  * When a stand with another after it hands its sheet on: 'done' once the whole sheet is through (the sheet is
  * carried whole, mass kept), 'steady' as soon as it rolls steadily and STEADY_READS steady readings and a
- * steadily rolled stretch of sheet (steadySample) are there. A sheet too short for that is carried as in 'done'.
+ * steadily rolled stretch of sheet (steadySample) are there, 'crop' once the middle stretch the next stand needs
+ * (cropColumns) is out of the rolls, that stretch carried (mass kept). A sheet too short for that is carried as in 'done'.
  */
-export type Handoff = 'done' | 'steady';
+export type Handoff = 'done' | 'steady' | 'crop';
 /** steady readings a stand takes before a 'steady' handoff */
 export const STEADY_READS = 2;
 
@@ -53,7 +56,7 @@ export interface StandResult {
   t: number;
   /** how it ended: 'done', 'steady' (handed on while it rolled steadily, the rest of its sheet not rolled), or
    *  'stalled' (the rolls could not draw the sheet in; no stand after it) */
-  phase: 'done' | 'steady' | 'stalled';
+  phase: 'done' | 'steady' | 'cropped' | 'stalled';
   /** means over the steady readings, as tools/run.mjs takes them over its reads; null without one */
   steadyForce: number | null;
   steadyTorque: number | null;
@@ -135,6 +138,8 @@ export class TandemSim {
   stopped: TandemStop | null = null;
   private steady: Reading[] = [];
   private finished = false;
+  /** handoff 'crop': the current stand's middle stretch the next stand takes (lattice columns [first, last]); null otherwise */
+  crop: [number, number] | null = null;
   /** per crack id, the mass of its failed points when the current stand started (after the remap) */
   private crackBase: Float64Array = new Float64Array(0);
 
@@ -146,6 +151,11 @@ export class TandemSim {
     this.handoff = handoff;
     this.base = withSteadyLength(params, every);
     this.sim = new Sim(this.base);
+    this.crop = this.cropOf(this.sim);
+  }
+
+  private cropOf(sim: Sim): [number, number] | null {
+    return this.handoff === 'crop' && this.stand + 1 < this.stands ? cropColumns(sim, this.every) : null;
   }
 
   /**
@@ -178,7 +188,7 @@ export class TandemSim {
     else if (this.handoff === 'steady' && phase === 'steady' && read && this.stand + 1 < this.stands && this.steady.length >= STEADY_READS) {
       const sample = steadySample(sim);
       if (sample) this.endStand('steady', sample);
-    }
+    } else if (read && this.crop && cropOut(sim, this.crop)) this.endStand('cropped', null, this.crop);
   }
 
   /** the current stand's Sim.diagnostics() with the stand: read it as often as you like, the results do not depend on it */
@@ -196,9 +206,9 @@ export class TandemSim {
     return this.sim.cracks.map((c) => ({ ...c, stand: c.stand ?? this.stand }));
   }
 
-  private endStand(phase: 'done' | 'steady' | 'stalled', sample: [number, number] | null = null): void {
+  private endStand(phase: 'done' | 'steady' | 'cropped' | 'stalled', sample: [number, number] | null = null, crop: [number, number] | null = null): void {
     const old = this.sim;
-    const { growth, ...result } = this.close(old, phase, sample);
+    const { growth, ...result } = this.close(old, phase, sample ?? crop);
     this.results.push(result);
     // a tandem of more than one stand marks its records with the stand and the area; a single stand leaves them as the
     // single pass has them
@@ -216,7 +226,7 @@ export class TandemSim {
       this.stopped =
         phase === 'stalled' ? 'stalled' : result.separated ? 'separated' : result.massLost > 0 || !(result.thicknessOut > 0) ? 'lost' : null;
     }
-    const [next, parentOf] = more && !this.stopped ? remap(old, this.base, result.thicknessOut, sample, this.every) : [null, null];
+    const [next, parentOf] = more && !this.stopped ? remap(old, this.base, result.thicknessOut, sample, this.every, crop) : [null, null];
     if (next) this.crackBase = crackMass(next);
     this.onStandDone?.({ stand: this.stand, sim: old, next, parentOf, result });
     if (!next) {
@@ -229,6 +239,7 @@ export class TandemSim {
     this.parentOf = parentOf;
     this.stand++;
     this.steady = [];
+    this.crop = this.cropOf(next);
   }
 
   /**
@@ -249,7 +260,7 @@ export class TandemSim {
     };
   }
 
-  private close(sim: Sim, phase: 'done' | 'steady' | 'stalled', sample: [number, number] | null): StandResult & { growth: number[] } {
+  private close(sim: Sim, phase: 'done' | 'steady' | 'cropped' | 'stalled', sample: [number, number] | null): StandResult & { growth: number[] } {
     const m = this.steadyMeans();
     let maxDamage = 0;
     let nFailed = 0;
@@ -381,6 +392,43 @@ export function steadySample(sim: Sim): [number, number] | null {
   return last - first >= 2 && xLast - xFirst >= 2 * x0 ? [first, last] : null;
 }
 
+/**
+ * Handoff 'crop': the middle of the sheet the next stand takes, as lattice columns [first, last] of `sim` (the stand
+ * about to roll it), or null when the sheet is not longer than that (it is carried whole, as with 'done'): as long as
+ * the next stand needs to get steady (steadyLength at the entry thickness h0 (1 − r)), a column's pitch growing from
+ * dp to dp / (1 − r) through the pass, and a column over at each end.
+ */
+export function cropColumns(sim: Sim, every = READ_STEPS): [number, number] | null {
+  const P = cloneParams(sim.params);
+  const r = P.rolling;
+  const red = r.reduction;
+  r.h0 *= 1 - red;
+  delete r.lengthMode;
+  const cols = Math.ceil((steadyLength(P, every) * (1 - red)) / sim.dp) + 2;
+  if (cols >= sim.NI - 2) return null;
+  const first = Math.floor((sim.NI - cols) / 2);
+  return [first, first + cols - 1];
+}
+
+/** the crop is out of the rolls: every column of it with a point on the grid, and its tail end past the exit probe */
+export function cropOut(sim: Sim, crop: [number, number]): boolean {
+  const { NJ, lattice, px, active } = sim;
+  let tail = NaN;
+  for (let i = crop[0]; i <= crop[1]; i++) {
+    let s = 0;
+    let c = 0;
+    for (let j = 0; j < NJ; j++) {
+      const p = lattice[i * NJ + j];
+      if (p < 0 || !active[p]) continue;
+      s += px[p];
+      c++;
+    }
+    if (!c) return false;
+    if (i === crop[0]) tail = s / c;
+  }
+  return tail >= sim.xExitProbe;
+}
+
 /** A crack through the thickness: three neighbouring lattice columns that have a failed point in every row between them. */
 export function separated(sim: Sim): boolean {
   const { NI, NJ, lattice, failed } = sim;
@@ -419,8 +467,10 @@ export function separated(sim: Sim): boolean {
  *   ones (the masses' ratio), so that what varies along the sheet (the grid's period in the damage, cracks)
  *   keeps its length and its share of the sheet. Its length is what the next stand needs to get to a 'steady'
  *   handoff itself (steadyLength), not the mass's
+ * - with `crop` (a 'crop' handoff): the new sheet is the crop's columns, as they came out (mass kept), shared out as
+ *   the whole sheet's are
  */
-export function remap(old: Sim, base: SimParams, h1: number, sample: [number, number] | null = null, every = READ_STEPS): [Sim, Int32Array] {
+export function remap(old: Sim, base: SimParams, h1: number, sample: [number, number] | null = null, every = READ_STEPS, crop: [number, number] | null = null): [Sim, Int32Array] {
   const P = cloneParams(base);
   const rho = P.material.rho * P.numerics.massScale;
   P.rolling.h0 = h1;
@@ -430,7 +480,8 @@ export function remap(old: Sim, base: SimParams, h1: number, sample: [number, nu
     let ep = 0;
     let c = 0;
     for (let p = 0; p < old.n; p++) {
-      if (!old.active[p] || (sample && (old.li[p] < sample[0] || old.li[p] > sample[1]))) continue;
+      const range = sample ?? crop;
+      if (!old.active[p] || (range && (old.li[p] < range[0] || old.li[p] > range[1]))) continue;
       ep += old.ep[p];
       c++;
     }
@@ -443,7 +494,7 @@ export function remap(old: Sim, base: SimParams, h1: number, sample: [number, nu
     P.rolling.sheetLength = steadyLength(P, every);
     M = rho * hOn * P.rolling.sheetLength;
   } else {
-    for (let p = 0; p < old.n; p++) if (old.active[p]) M += old.mass[p];
+    for (let p = 0; p < old.n; p++) if (old.active[p] && (!crop || (old.li[p] >= crop[0] && old.li[p] <= crop[1]))) M += old.mass[p];
     P.rolling.sheetLength = M / (rho * hOn);
   }
   const sim = new Sim(P);
@@ -453,7 +504,8 @@ export function remap(old: Sim, base: SimParams, h1: number, sample: [number, nu
   // the old points by lattice row, head first (in the lattice's order: the order of the material along the row)
   const rows: number[][] = Array.from({ length: old.NJ }, () => []);
   for (let p = 0; p < old.n; p++) {
-    if (old.active[p] && (!sample || (old.li[p] >= sample[0] && old.li[p] <= sample[1]))) rows[old.lj[p]].push(p);
+    const range = sample ?? crop;
+    if (old.active[p] && (!range || (old.li[p] >= range[0] && old.li[p] <= range[1]))) rows[old.lj[p]].push(p);
   }
   for (const r of rows) r.sort((a, b) => old.li[b] - old.li[a]);
   // new points per old point along a row: the ratio of the masses of a lattice column's point, old to new

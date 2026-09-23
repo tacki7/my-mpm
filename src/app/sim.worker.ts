@@ -7,7 +7,7 @@ import type { SimParams } from '../mpm/params.ts';
 import type { Sim, FieldName, Diagnostics } from '../mpm/solver.ts';
 import type { FromWorker, ToWorker, Frame, Geometry } from './protocol.ts';
 import { READ_STEPS, TandemSim, steadyLength, type StandDone } from '../mpm/tandem.ts';
-import { standEndTail, standProgress } from '../mpm/progress.ts';
+import { cropEndTail, standEndTail, standProgress } from '../mpm/progress.ts';
 import { Tracker } from './tracker.ts';
 import { FIELDS } from './fields.ts';
 import { windowCentre, windowWidth } from './biteWindow.ts';
@@ -128,7 +128,9 @@ function progressOf(s: Sim, t: TandemSim): number {
     // reading needs, the later ones are made that long
     const handsOn = t.handoff === 'steady' && t.stand < t.stands - 1;
     const need = !handsOn ? null : t.stand === 0 ? steadyLength(s.params, EVERY) : length;
-    span = [tail0, standEndTail(s.params.rolling.h0, s.contactLength, length, need)];
+    // a stand that hands on its middle stretch (handoff 'crop') ends when the stretch's tail end is out
+    const r = s.params.rolling;
+    span = [tail0, t.crop ? cropEndTail(s.contactLength, s.xExitProbe, r.reduction, t.crop[0] * s.dp) : standEndTail(r.h0, s.contactLength, length, need)];
     tailSpan.set(s, span);
   }
   return standProgress(s.tailX(), span[0], span[1], s.contactLength, s.params.rolling.reduction);

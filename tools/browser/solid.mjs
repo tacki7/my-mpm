@@ -4,7 +4,8 @@
 // its steady values compared with `node tools/solid.mjs` (relative 1e-5: Chrome's and Node's V8 differ in the
 // last bit of a few Math functions); the playback bar (巻き戻す, 再生, the slider, a field tab while paused); every field tab redraws; a real drag turns the drawing, the wheel zooms, a
 // double click puts it back; the view buttons; the conditions URL opens the same 3D condition; back on 2 次元 the
-// section still runs, and showing 3 次元 pauses it; the stress state and the fracture locus (a standard strip: the
+// section still runs, and showing 3 次元 pauses it; a tandem of two stands (against the tool; the width, crown and
+// flatness graphs draw both stands in their colours with legends; the handoff 'crop' from the panel); the stress state and the fracture locus (a standard strip: the
 // most damaged point; a strip that cracks: the first crack's point, the role buttons by real clicks); a narrow
 // screen (700 px). Not a `@check`. About 12 minutes.
 //
@@ -29,7 +30,7 @@ try {
   c = await connect(process.env.CDP_PORT);
   await c.setViewport(1600, 1000);
   const centre = async (selector) => {
-    const r = await c.evaluate(`(() => { const e = document.querySelector(${JSON.stringify(selector)}); if (!e) return null; const b = e.getBoundingClientRect(); return { x: b.x + b.width / 2, y: b.y + b.height / 2 }; })()`);
+    const r = await c.evaluate(`(() => { const e = document.querySelector(${JSON.stringify(selector)}); if (!e) return null; e.scrollIntoView({ block: 'nearest' }); const b = e.getBoundingClientRect(); return { x: b.x + b.width / 2, y: b.y + b.height / 2 }; })()`);
     if (!r) throw new Error(`no element ${selector}`);
     return r;
   };
@@ -164,7 +165,7 @@ try {
     await click(`#solid-tabs button[data-field="${id}"]`);
     await c.waitFor(`document.getElementById('solid-legend').dataset.field === ${JSON.stringify(id)}`, 10000);
   }
-  ok(tabs.length === 9 && c.errors.length === 0, `every field tab redraws the strip (${tabs.join(', ')})`, c.errors.join(' | '));
+  ok(tabs.length === 10 && c.errors.length === 0, `every field tab redraws the strip (${tabs.join(', ')})`, c.errors.join(' | '));
   await click('#solid-whole');
   await painted();
   const ms = await c.evaluate('__mpm.solid.drawMs(10)');
@@ -341,6 +342,32 @@ try {
   ok(rel(res[0].thicknessOut, 0.75e-3) < 2e-3 && rel(res[1].thicknessOut, target2) < 2e-3, 'a constant reduction: each stand\'s strip comes out at 75 % of what came in', `${(res[0].thicknessOut * 1e3).toFixed(4)}, ${(res[1].thicknessOut * 1e3).toFixed(4)} mm`);
   const tUrl = await c.evaluate('__mpm.solid.url');
   ok(/stands=2/.test(tUrl) && /handoff=steady/.test(tUrl) && /length=steady/.test(tUrl) && /flatten=hitchcock/.test(tUrl) && /control=reduction/.test(tUrl) && /dim=3/.test(tUrl), 'the conditions URL carries the tandem and the rolls', tUrl);
+  // the width, crown and flatness graphs: both stands one over the other, each in its stand's colour, with a legend
+  const over = await c.evaluate(`(() => {
+    const hex = (h) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16));
+    const cols = ['#4b5a68', '#387262'].map(hex);
+    const count = (id) => {
+      const cv = document.getElementById(id);
+      const d = cv.getContext('2d').getImageData(0, 0, cv.width, cv.height).data;
+      const n = [0, 0];
+      for (let i = 0; i < d.length; i += 4) cols.forEach((c, k) => { if (Math.abs(d[i] - c[0]) + Math.abs(d[i + 1] - c[1]) + Math.abs(d[i + 2] - c[2]) < 24) n[k]++; });
+      return n;
+    };
+    const legend = (id) => [...document.getElementById(id).parentElement.querySelectorAll('.chart-legend .item')].map((e) => e.textContent);
+    return { overlaid: __mpm.solid.overlaid, px: ['solid-chart-width', 'solid-chart-crown', 'solid-chart-flat'].map(count), legends: ['solid-chart-width', 'solid-chart-crown', 'solid-chart-flat'].map(legend) };
+  })()`);
+  ok(JSON.stringify(over.overlaid) === '[0,1]', 'the width graphs draw both stands', JSON.stringify(over.overlaid));
+  ok(over.px.every(([a, b]) => a > 30 && b > 30), '  … each in its stand\'s colour (pixels of #1\'s and #2\'s colours on the load, crown and flatness graphs)', JSON.stringify(over.px));
+  ok(over.legends.every((l) => l.includes('#1') && l.includes('#2')) && over.legends[1][0] === '入側（#1）', '  … with a legend under each (the crown\'s with the entry)', JSON.stringify(over.legends));
+
+  // ── the handoff 'crop' from the panel: the 3D model's params and the URL
+  await c.navigate(page('?dim=3&W3=2'));
+  await c.waitFor('__mpm.solid.active && __mpm.solid.ready', 60000);
+  await choose('stands', '2');
+  await choose('handoff', 'crop');
+  await click('#reset');
+  await c.waitFor('__mpm.solid.ready && __mpm.solid.stands === 2', 60000);
+  ok((await c.evaluate('__mpm.solid.params.rolling.handoff')) === 'crop' && /handoff=crop/.test(await c.evaluate('__mpm.solid.url')), "the handoff 'crop' chosen in the panel is the 3D model's, and the URL carries it");
 
   // ── the tensions: set in the panel, reach the 3D model, show in the results and the URL
   await c.navigate(page('?dim=3&W3=2'));
