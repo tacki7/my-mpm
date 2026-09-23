@@ -18,6 +18,12 @@
 //
 // World frame: x along rolling (the exit plane of the rigid rolls is x = 0),
 // y through the thickness (mid-plane y = 0). Everything per unit width.
+//
+// With rolling.halfThickness only the top half is solved (docs/model.md「板厚方向の対称モデル（2 次元）」): the grid
+// starts one ghost row under the mid-plane (iy = 0 at y = −h, the plane's own nodes at iy = 1), the ghost row is
+// folded onto its mirror image (iy = 2, vy negated) before the grid update, the plane's nodes get vy = 0, and the
+// ghosts take the mirrored velocity back for the transfer to the points (as the 3D model's symmetry planes,
+// src/mpm/solid/sim3.ts). Only the top roll exists; the force, torque and profile it reads are the whole sheet's.
 import { ROLL_E, startOffset, tailMargin, biteGeometry, cloneParams, hitchcockRadius, type DamageModel, type MaterialParams, type RollingParams, type SimParams } from './params.ts';
 import { druckerWork, localization } from './bifurcation.ts';
 import { karmanFlattened, karman } from './slab.ts';
@@ -101,9 +107,9 @@ export interface Diagnostics {
   phase: Phase;
   headX: number;
   tailX: number;
-  /** roll separating force per unit width, mean of both rolls, averaged since the last read [N/m] */
+  /** roll separating force per unit width, mean of both rolls (half: the top roll's), averaged since the last read [N/m] */
   rollForce: number;
-  /** roll torque per unit width, mean of both rolls (driving = positive) [N·m/m] */
+  /** roll torque per unit width, mean of both rolls (half: the top roll's; driving = positive) [N·m/m] */
   rollTorque: number;
   /** force the pusher applied to the tail since the last read [N/m] */
   pusherForce: number;
@@ -192,7 +198,10 @@ export class Sim {
   readonly nxN: number; // nodes along x
   readonly nyN: number;
   readonly dt: number;
+  /** the top roll, and the bottom one unless halfThickness (then y = 0 is a symmetry plane) */
   readonly rolls: Roll[];
+  /** rolling.halfThickness: only the top half of the sheet is on the grid (rolls has the top roll alone) */
+  readonly half: boolean;
   /** the roll gap and the contact length now (they change while the rolls are adjusted: adjustRolls) */
   gap: number;
   contactLength: number;
@@ -433,10 +442,19 @@ export class Sim {
     const elongated = r.sheetLength / (1 - r.reduction);
     const xEnd = 2 * r.h0 + 2 * h + elongated * 1.1 + 8 * h;
     const yHalf = r.h0 / 2 + 4 * h;
+    const half = r.halfThickness === true;
+    this.half = half;
     this.ox = xTail0 - tailMargin(h, offset);
-    this.oy = -yHalf;
     this.nxN = Math.ceil((xEnd - this.ox) / h) + 1;
-    this.nyN = Math.ceil((2 * yHalf) / h) + 1;
+    if (half) {
+      // one ghost row under the mid-plane (iy = 0 at y = −h), the plane's own nodes at iy = 1: with an even number
+      // of cells these are the rows of the whole grid from y = −h up (the points coincide with the whole model's)
+      this.oy = -h;
+      this.nyN = Math.ceil(yHalf / h) + 2;
+    } else {
+      this.oy = -yHalf;
+      this.nyN = Math.ceil((2 * yHalf) / h) + 1;
+    }
     const nNodes = this.nxN * this.nyN;
     // 'dfg': the second velocity field of the crack faces sits in the node arrays after the first, at nNodes + node
     const NN = (num.crackFields ?? 'none') === 'dfg' ? 2 * nNodes : nNodes;
@@ -444,7 +462,7 @@ export class Sim {
     this.gm = new Float64Array(NN);
     this.gvx = new Float64Array(NN);
     this.gvy = new Float64Array(NN);
-    this.gpen = [new Float64Array(NN), new Float64Array(NN)];
+    this.gpen = half ? [new Float64Array(NN)] : [new Float64Array(NN), new Float64Array(NN)];
     this.gpush = new Uint8Array(NN);
     this.gcon = new Uint8Array(NN);
     this.gslipX = new Float64Array(2 * NN);
@@ -470,7 +488,7 @@ export class Sim {
     const omega = r.rollSpeed / R;
     this.rolls = [
       { cx: 0, cy, R, omega }, // top: counter-clockwise → bottom surface moves +x
-      { cx: 0, cy: -cy, R, omega: -omega },
+      ...(half ? [] : [{ cx: 0, cy: -cy, R, omega: -omega }]),
     ];
     // 3 h0 past the exit, but not more than 2 contact lengths: on a thick plate (h0 10 mm, Lc 2.7 mm) 3 h0 is
     // 30 mm and the head never got there before the tail entered the bite (no steady phase, no exit gauge).
@@ -496,7 +514,10 @@ export class Sim {
 
     // Material points on a regular lattice.
     const NI = Math.round(r.sheetLength / dp);
-    const NJ = Math.round(r.h0 / dp);
+    // half: the rows from the mid-plane up (row 0 next to the plane); the defects keep their sheet coordinates, so
+    // only the part of a defect on this side of the plane is in
+    const NJ = Math.round((half ? r.h0 / 2 : r.h0) / dp);
+    const yBottom = half ? 0 : -r.h0 / 2;
     this.NI = NI;
     // h0 of strip at each end, but never more than half the strip
     this.gripCols = Math.max(1, Math.min(Math.round(r.h0 / dp), Math.floor(NI / 2)));
@@ -507,7 +528,7 @@ export class Sim {
     for (let i = 0; i < NI; i++) {
       for (let j = 0; j < NJ; j++) {
         const X = xTail0 + (i + 0.5) * dp;
-        const Y = -r.h0 / 2 + (j + 0.5) * dp;
+        const Y = yBottom + (j + 0.5) * dp;
         const sx = this.xHead0 - X; // sheet coordinate from the head
         let inVoid = false;
         let duct = 1;
@@ -588,7 +609,7 @@ export class Sim {
       this.li[k] = i;
       this.lj[k] = j;
       const X = xTail0 + (i + 0.5) * dp;
-      const Y = -r.h0 / 2 + (j + 0.5) * dp;
+      const Y = yBottom + (j + 0.5) * dp;
       this.px[k] = X;
       this.py[k] = Y;
       this.x0[k] = X;
@@ -637,15 +658,13 @@ export class Sim {
   /** Advance one explicit step. */
   advance(): void {
     const { gm, gvx, gvy, gpush } = this;
-    const [gpen0, gpen1] = this.gpen;
     // clear what last step wrote (the whole grid at the first step)
     const lo = this.gPrevLo;
     const hi = this.gPrevHi;
     gm.fill(0, lo, hi);
     gvx.fill(0, lo, hi);
     gvy.fill(0, lo, hi);
-    gpen0.fill(INF, lo, hi);
-    gpen1.fill(INF, lo, hi);
+    for (const gpen of this.gpen) gpen.fill(INF, lo, hi);
     gpush.fill(0, lo, hi);
     this.gcon.fill(0, lo, hi);
     this.contactJn.fill(0, lo, hi);
@@ -659,8 +678,7 @@ export class Sim {
       gm.fill(0, lo2, hi2);
       gvx.fill(0, lo2, hi2);
       gvy.fill(0, lo2, hi2);
-      gpen0.fill(INF, lo2, hi2);
-      gpen1.fill(INF, lo2, hi2);
+      for (const gpen of this.gpen) gpen.fill(INF, lo2, hi2);
       gpush.fill(0, lo2, hi2);
       this.gcon.fill(0, lo2, hi2);
       this.contactJn.fill(0, lo2, hi2);
@@ -762,15 +780,20 @@ export class Sim {
     const r = this.params.rolling;
     const dh = r.h0 - this.gap;
     const cy = R + this.gap / 2;
-    const [top, bottom] = this.rolls;
-    top.vR = bottom.vR = moving ? (R - top.R) / this.dt : 0;
+    const top = this.rolls[0];
+    top.vR = moving ? (R - top.R) / this.dt : 0;
     top.vcy = moving ? (cy - top.cy) / this.dt : 0;
-    bottom.vcy = -top.vcy;
-    top.R = bottom.R = R;
+    top.R = R;
     top.cy = cy;
-    bottom.cy = -cy;
     top.omega = r.rollSpeed / R;
-    bottom.omega = -top.omega;
+    if (!this.half) {
+      const bottom = this.rolls[1];
+      bottom.vR = top.vR;
+      bottom.vcy = -top.vcy;
+      bottom.R = R;
+      bottom.cy = -cy;
+      bottom.omega = -top.omega;
+    }
     this.contactLength = Math.sqrt(R * dh - (dh * dh) / 4);
   }
 
@@ -779,8 +802,11 @@ export class Sim {
     const nNodes = this.nxN * nyN;
     const { f00, f01, f10, f11, sxx, syy, sxy, pres, c00, c01, c10, c11, touch } = this;
     const halfDp = 0.5 * this.dp;
-    const [gpen0, gpen1] = this.gpen;
-    const [r0, r1] = this.rolls;
+    const gpen0 = this.gpen[0];
+    const r0 = this.rolls[0];
+    // half: no bottom roll (in1 stays false, so gpen1 is never written: gpen0 stands in for the type)
+    const r1 = this.half ? null : this.rolls[1];
+    const gpen1 = this.half ? gpen0 : this.gpen[1];
     const k4 = 4 * invH * invH;
     this.updateTension();
     // force per gripped point [N/m] per unit of its current height and of its grip weight (see gripScale):
@@ -839,11 +865,8 @@ export class Sim {
       // relative margin far above rounding, cannot penetrate that roll: no square roots for it.
       const e0x = xp - r0.cx;
       const e0y = yp - r0.cy;
-      const e1x = xp - r1.cx;
-      const e1y = yp - r1.cy;
       const rpMax = halfDp * (Math.abs(F01) + Math.abs(F11));
       const reach0 = (r0.R + rpMax) * (r0.R + rpMax) * (1 + 1e-9);
-      const reach1 = (r1.R + rpMax) * (r1.R + rpMax) * (1 + 1e-9);
       let pen0 = INF;
       let pen1 = INF;
       let n0x = 0;
@@ -851,7 +874,15 @@ export class Sim {
       let n1x = 0;
       let n1y = 0;
       const near0 = e0x * e0x + e0y * e0y <= reach0;
-      const near1 = e1x * e1x + e1y * e1y <= reach1;
+      let e1x = 0;
+      let e1y = 0;
+      let near1 = false;
+      if (r1 !== null) {
+        e1x = xp - r1.cx;
+        e1y = yp - r1.cy;
+        const reach1 = (r1.R + rpMax) * (r1.R + rpMax) * (1 + 1e-9);
+        near1 = e1x * e1x + e1y * e1y <= reach1;
+      }
       if (near0 || near1) {
         const rp = halfDp * Math.hypot(F01, F11);
         if (near0) {
@@ -862,7 +893,7 @@ export class Sim {
         }
         if (near1) {
           const d1 = Math.hypot(e1x, e1y);
-          pen1 = d1 - r1.R - rp;
+          pen1 = d1 - r1!.R - rp;
           n1x = e1x / d1;
           n1y = e1y / d1;
         }
@@ -986,6 +1017,11 @@ export class Sim {
       this.fLo = this.fHi = 0;
       return null;
     }
+    // half: a box that comes within reach of the plane's fold (a failed point's stencil on iy ≤ 2) is widened down to
+    // the ghost row, so that the ghosts' mirrored G and C are inside it (cleared, filled, and read by the points whose
+    // stencils reach them)
+    const half = this.half;
+    if (half && r0 <= 2) r0 = 0;
     // every node of the box lies in [c0 nyN + r0, (c1 + 2) nyN + r1 + 3)
     this.gGLo = this.fLo = c0 * nyN + r0;
     this.gGHi = this.fHi = (c1 + 2) * nyN + r1 + 3;
@@ -1031,6 +1067,28 @@ export class Sim {
         }
       }
     }
+    // half: the failed points' mirror images count too (as the plan view does across its mid-width plane): the
+    // ghosts' G and C are folded onto their mirrors (y negated), the plane's own nodes have G_y = C_y = 0, and the
+    // ghosts take the mirrored values back, so a point near the plane is on the same side at a ghost node as its
+    // mirror image is at the real one
+    if (half && r0 === 0) {
+      for (let c = c0; c < c1 + 3; c++) {
+        const g = c * nyN;
+        const m = g + 2;
+        gGx[m] += gGx[g];
+        gGy[m] -= gGy[g];
+        gCx[m] += gCx[g];
+        gCy[m] -= gCy[g];
+        gCw[m] += gCw[g];
+        gGy[g + 1] = 0;
+        gCy[g + 1] = 0;
+        gGx[g] = gGx[m];
+        gGy[g] = -gGy[m];
+        gCx[g] = gCx[m];
+        gCy[g] = -gCy[m];
+        gCw[g] = gCw[m];
+      }
+    }
     const byCentroid = (this.params.numerics.crackSide ?? 'centroid') === 'centroid';
     let any = false;
     for (let p = 0; p < n; p++) {
@@ -1051,7 +1109,14 @@ export class Sim {
             let f = 0;
             if (Gx !== 0 || Gy !== 0) {
               const w = gCw[idx];
-              f = (px[p] - gCx[idx] / w) * Gx + (py[p] - gCy[idx] / w) * Gy > 0 ? 1 : 0;
+              const ex = px[p] - gCx[idx] / w;
+              const d = ex * Gx + (py[p] - gCy[idx] / w) * Gy;
+              // half: on the plane's nodes (G_y = 0) a point over the centroid (the crack's own column: its failed
+              // point and the points above it, |x − C_x| within rounding) is a tie, which the whole model leaves to
+              // rounding; here it counts as beyond C along x, the same side at every node, so that the crack's
+              // column is not torn between the two sides of the tip (it was: the failed point dilated, and the
+              // plane's split then locked it)
+              f = half && Gy === 0 && Math.abs(ex) <= 1e-9 * this.h ? (Gx > 0 ? 1 : 0) : d > 0 ? 1 : 0;
             }
             pf[9 * p + 3 * i + j] = f;
             far |= f;
@@ -1155,6 +1220,9 @@ export class Sim {
     const proj = this.projBuf;
     const NN = this.NN;
     const two = this.pf !== null;
+    const sym = this.half;
+    // half: the ghost row onto its mirror image before anything acts on the nodes (each field on its own nodes)
+    if (sym) this.foldGhosts(two);
     // every step, so a step with no second field reads 0 (not the last step that had one)
     this.fieldContacts = 0;
     this.fieldApart = 0;
@@ -1175,13 +1243,22 @@ export class Sim {
       let vx = gvx[idx] / m;
       let vy = gvy[idx] / m;
       const col = Math.floor(node / nyN);
+      const iy = node % nyN;
       const xi = ox + col * h;
-      const yi = oy + (node % nyN) * h;
+      const yi = oy + iy * h;
+      // half: the plane's own nodes move along it. 'dfg': a plane node that a failed point's stencil reaches is on a
+      // crack in the plane; there the material and its mirror image are the two fields of the crack, meeting by
+      // the same frictionless contact as fieldContact's (their normal velocities are opposite, the common one is
+      // 0): held on the plane while they approach, free while they separate, so the crack opens (the whole
+      // model has no such node: on it the mirror images' G_y cancel, and their split is left by rounding)
+      const onPlane = sym && iy === 1;
+      const open = onPlane && two && node >= this.fLo && node < this.fHi && this.gCw[node] > 0;
+      if (onPlane) vy = open ? Math.max(vy, 0) : 0;
       // Each roll projects the velocity before contact. A node both rolls would hold (a gap of a cell or
       // two) takes the nearer roll only, or the mean of the two at the same distance (on the mid-plane):
       // one after the other favoured the roll projected last and broke the pass's symmetry.
       const on0 = this.gpen[0][idx] < 0 && this.projectRoll(0, vx, vy, xi, yi, mu, proj, 0);
-      const on1 = this.gpen[1][idx] < 0 && this.projectRoll(1, vx, vy, xi, yi, mu, proj, 1);
+      const on1 = !sym && this.gpen[1][idx] < 0 && this.projectRoll(1, vx, vy, xi, yi, mu, proj, 1);
       let w0 = on0 ? 1 : 0;
       let w1 = on1 ? 1 : 0;
       if (on0 && on1) {
@@ -1231,7 +1308,7 @@ export class Sim {
           }
         }
         vx = nvx;
-        vy = nvy;
+        vy = onPlane ? (open ? Math.max(nvy, 0) : 0) : nvy;
       }
       if (pushing && gpush[idx] && vx < vPush) {
         pushImpulse += m * (vPush - vx);
@@ -1242,6 +1319,8 @@ export class Sim {
     }
     }
     if (this.params.numerics.contact === 'surface') this.followRoll(fyAcc, tqAcc);
+    // half: the mirrored velocity back to the ghost row, so the points read a whole stencil
+    if (sym) this.mirrorGhosts(two);
     this.accSteps++;
     this.binSteps++;
     this.accFy[0] += fyAcc[0];
@@ -1254,8 +1333,67 @@ export class Sim {
     win.fy[1] += fyAcc[1];
     win.tq[0] += tqAcc[0];
     win.tq[1] += tqAcc[1];
-    if (!this.rollsSettled) this.ctlForce += ((Math.abs(fyAcc[0]) + Math.abs(fyAcc[1])) / 2 - this.ctlForce) * Math.min(1, this.dt / this.ctlTauF);
+    if (!this.rollsSettled) this.ctlForce += (this.rollForceOf(fyAcc) - this.ctlForce) * Math.min(1, this.dt / this.ctlTauF);
     this.accPush += pushImpulse * invDt;
+  }
+
+  /** the roll separating force [N/m] from the per-roll sums: the mean of the two rolls, or the top roll's alone (half) */
+  private rollForceOf(fy: number[]): number {
+    return this.half ? Math.abs(fy[0]) : (Math.abs(fy[0]) + Math.abs(fy[1])) / 2;
+  }
+
+  /** the driving torque [N·m/m] from the per-roll sums (the top roll turns counter-clockwise, ω > 0: driving opposes the sheet's) */
+  private rollTorqueOf(tq: number[]): number {
+    return this.half ? -tq[0] : (-tq[0] + tq[1]) / 2;
+  }
+
+  /**
+   * half: the ghost nodes (iy = 0) of field `half` that lie in this step's node range (the stencils' for the first
+   * field, the failed points' box for the second), as [first, to, stride]: only those are written this step and
+   * cleared next step, so only those may be touched (a ghost outside it is never read, and must keep its cleared
+   * value). The mirror of a ghost in the range, two nodes up, is in the range too (a stencil ends on a row ≥ 2).
+   */
+  private ghostRange(half: number): [number, number, number] {
+    const nyN = this.nyN;
+    const off = half * this.nxN * nyN;
+    const lo = half === 0 ? this.gLo : Math.max(this.gLo, this.fLo);
+    const hi = half === 0 ? this.gHi : Math.min(this.gHi, this.fHi);
+    return [Math.ceil(lo / nyN) * nyN + off, hi + off, nyN];
+  }
+
+  /**
+   * half: the ghost row (iy = 0, y = −h) onto its mirror image (iy = 2): the sums, the y-momentum negated, the
+   * penetration and the pusher's mark; the ghost is left empty (the update skips it, mirrorGhosts fills it). With
+   * two fields each field's ghosts go onto its own mirrors.
+   */
+  private foldGhosts(two: boolean): void {
+    const { gm, gvx, gvy, gpush } = this;
+    const gpen = this.gpen[0];
+    for (let half = 0; half < (two ? 2 : 1); half++) {
+      const [g0, to, stride] = this.ghostRange(half);
+      for (let g = g0; g < to; g += stride) {
+        if (gm[g] === 0) continue;
+        const m = g + 2;
+        gm[m] += gm[g];
+        gvx[m] += gvx[g];
+        gvy[m] -= gvy[g];
+        if (gpen[g] < gpen[m]) gpen[m] = gpen[g];
+        if (gpush[g]) gpush[m] = 1;
+        gm[g] = 0;
+      }
+    }
+  }
+
+  /** half: the ghost row takes the mirrored velocity of iy = 2 (vy negated), each field its own */
+  private mirrorGhosts(two: boolean): void {
+    const { gvx, gvy } = this;
+    for (let half = 0; half < (two ? 2 : 1); half++) {
+      const [g0, to, stride] = this.ghostRange(half);
+      for (let g = g0; g < to; g += stride) {
+        gvx[g] = gvx[g + 2];
+        gvy[g] = -gvy[g + 2];
+      }
+    }
   }
 
   /**
@@ -1276,8 +1414,10 @@ export class Sim {
     const rate = num.volumetric !== 'total';
     const cIn = num.volRelax ?? 1;
     const cContact = num.volRelaxContact ?? 1;
-    // contact band: within 2h of a roll surface, i.e. |x − c| < R + 2h (squared, no sqrt per point)
-    const [r0, r1] = this.rolls;
+    // contact band: within 2h of a roll surface, i.e. |x − c| < R + 2h (squared, no sqrt per point). Half: the top
+    // roll alone (the bottom one stands at the top roll's place, so that its test is the same test)
+    const r0 = this.rolls[0];
+    const r1 = this.half ? r0 : this.rolls[1];
     const b0 = (r0.R + 2 * h) * (r0.R + 2 * h);
     const b1 = (r1.R + 2 * h) * (r1.R + 2 * h);
     const invK = 1 / this.el.K;
@@ -1418,6 +1558,24 @@ export class Sim {
     if (!jbar) return;
     const gMa = rate ? gMv : gm;
     const halves = pf !== null ? 2 : 1;
+    // half: the ghosts' sums onto their mirror images before the means (the momentum's fold took the mass already;
+    // 'rate' keeps its own mass gMv), and the means back to the ghosts after
+    if (this.half) {
+      for (let half = 0; half < halves; half++) {
+        const [g0, to, stride] = this.ghostRange(half);
+        for (let g = g0; g < to; g += stride) {
+          const m = g + 2;
+          gJ[m] += gJ[g];
+          gJ[g] = 0;
+          if (rate) {
+            gJe[m] += gJe[g];
+            gB[m] += gB[g];
+            gMv[m] += gMv[g];
+            gJe[g] = gB[g] = gMv[g] = 0;
+          }
+        }
+      }
+    }
     for (let half = 0; half < halves; half++) {
       const from = half === 0 ? this.gLo : nNodes + Math.max(this.gLo, this.fLo);
       const to = half === 0 ? this.gHi : nNodes + Math.min(this.gHi, this.fHi);
@@ -1443,6 +1601,18 @@ export class Sim {
         }
       }
     }
+    if (this.half) {
+      for (let half = 0; half < halves; half++) {
+        const [g0, to, stride] = this.ghostRange(half);
+        for (let g = g0; g < to; g += stride) {
+          gJ[g] = gJ[g + 2];
+          if (rate) {
+            gJe[g] = gJe[g + 2];
+            gB[g] = gB[g + 2];
+          }
+        }
+      }
+    }
   }
 
   /**
@@ -1458,6 +1628,7 @@ export class Sim {
   private followRoll(fyAcc: number[], tqAcc: number[]): void {
     const { n, active, touch, px, py, gvx, gvy, gm, gcon, gfolN, gfolD, mass, h, invH, ox, oy, nyN, dt, pf, pfAny, NN } = this;
     const nNodes = this.nxN * nyN;
+    const nRolls = this.rolls.length;
     const mu = this.params.rolling.mu;
     const k4 = 4 * invH * invH;
     const w = [0, 0, 0, 0, 0, 0, 0, 0, 0];
@@ -1477,7 +1648,10 @@ export class Sim {
       for (let a = 0; a < 3; a++) for (let c = 0; c < 3; c++) w[a * 3 + c] = wx[a] * wy[c];
       // 'dfg': the point's nodes on the second field sit at nNodes + node
       const fb = pf !== null && pfAny[p] ? 9 * p : -1;
-      for (let k = 0; k < 2; k++) {
+      // half: a stencil on the ghost row (a roll within a cell of the plane) reads the mirror image (vy negated) and
+      // asks of it; the ghost holds its mirror's velocity only after mirrorGhosts, and it carries no mass
+      const ghost = this.half && by === 0;
+      for (let k = 0; k < nRolls; k++) {
         if (!(touch[p] & (1 << k))) continue;
         const roll = this.rolls[k];
         const rx = px[p] - roll.cx;
@@ -1497,11 +1671,13 @@ export class Sim {
         let dnn = 0; // n·L·n, L the APIC velocity gradient (4/h²) Σ w v ⊗ (x_i − x_p)
         for (let a = 0; a < 3; a++) {
           for (let c = 0; c < 3; c++) {
-            const idx = (bx + a) * nyN + by + c + (fb >= 0 && pf![fb + 3 * a + c] ? nNodes : 0);
+            const mirror = ghost && c === 0;
+            const idx = (bx + a) * nyN + by + (mirror ? 2 : c) + (fb >= 0 && pf![fb + 3 * a + c] ? nNodes : 0);
             const wi = w[a * 3 + c];
-            const vn = (gvx[idx] - ux) * nx + (gvy[idx] - uy) * ny;
+            const vyi = mirror ? -gvy[idx] : gvy[idx];
+            const vn = (gvx[idx] - ux) * nx + (vyi - uy) * ny;
             e += wi * vn;
-            dnn += wi * (gvx[idx] * nx + gvy[idx] * ny) * ((a - fx) * nx + (c - fy) * ny) * h;
+            dnn += wi * (gvx[idx] * nx + vyi * ny) * ((a - fx) * nx + (c - fy) * ny) * h;
             if (gcon[idx] & (1 << k)) W += wi;
           }
         }
@@ -1511,7 +1687,7 @@ export class Sim {
         const want = -edge / W;
         for (let a = 0; a < 3; a++) {
           for (let c = 0; c < 3; c++) {
-            const idx = (bx + a) * nyN + by + c + (fb >= 0 && pf![fb + 3 * a + c] ? nNodes : 0);
+            const idx = (bx + a) * nyN + by + (ghost && c === 0 ? 2 : c) + (fb >= 0 && pf![fb + 3 * a + c] ? nNodes : 0);
             if (!(gcon[idx] & (1 << k))) continue;
             const wm = w[a * 3 + c] * mass[p];
             // a node the point does not weigh (fx or fy exactly 0.5) gets no request: 0/0 otherwise
@@ -1585,7 +1761,7 @@ export class Sim {
     for (const kIdx of touched) {
       const idx = kIdx < NN ? kIdx : kIdx - NN;
       let slides = 0;
-      for (let k = 0; k < 2; k++) {
+      for (let k = 0; k < nRolls; k++) {
         const j = k * NN + idx;
         if (gcon[idx] & (1 << k) && (this.gslipX[j] !== 0 || this.gslipY[j] !== 0)) slides = 1;
       }
@@ -1612,7 +1788,9 @@ export class Sim {
     const xMax = (nxN - 3) * h + ox;
     const yMax = (nyN - 3) * h + oy;
     const xMin = ox + 2 * h;
-    const yMin = oy + 2 * h;
+    // half: a point that crosses the plane is folded back onto it, and only the top edge of the grid loses points
+    const half = this.half;
+    const yMin = half ? -Infinity : oy + 2 * h;
     for (let p = 0; p < n; p++) {
       if (!active[p]) continue;
       const xp = px[p];
@@ -1680,7 +1858,8 @@ export class Sim {
         }
       }
       const nx = xp + dt * vx[p];
-      const ny = yp + dt * vy[p];
+      let ny = yp + dt * vy[p];
+      if (half && ny < 0) ny = -ny;
       px[p] = nx;
       py[p] = ny;
       if (nx < xMin || nx > xMax || ny < yMin || ny > yMax) {
@@ -1909,9 +2088,19 @@ export class Sim {
           }
         }
       }
+      // half: the ghost row's sums onto the mirror images, and the means back to the ghosts (the scalars are even)
+      if (this.half) {
+        for (let g = 0; g < nNodes; g += nyN) {
+          gm[g + 2] += gm[g];
+          for (let c = 0; c < k; c++) gv[(g + 2) * k + c] += gv[g * k + c];
+        }
+      }
       for (let idx = 0; idx < nNodes; idx++) {
         const m = gm[idx];
         if (m > 0) for (let c = 0; c < k; c++) gv[idx * k + c] /= m;
+      }
+      if (this.half) {
+        for (let g = 0; g < nNodes; g += nyN) for (let c = 0; c < k; c++) gv[g * k + c] = gv[(g + 2) * k + c];
       }
       for (let p = 0; p < n; p++) {
         if (!active[p] || failed[p]) continue;
@@ -2206,7 +2395,8 @@ export class Sim {
       const area = this.areaThickness(x, band);
       return area === null ? null : { thickness: area, speed: sv / c };
     }
-    return { thickness: top - bot, speed: sv / c };
+    // half: the whole sheet is twice the top half (the plane is its bottom)
+    return { thickness: this.half ? 2 * top : top - bot, speed: sv / c };
   }
 
   /**
@@ -2225,7 +2415,8 @@ export class Sim {
       if (u <= -1 || u >= 1) continue;
       sum += 0.5 * (1 + Math.cos(Math.PI * u)) * vol0[p] * (f00[p] * f11[p] - f01[p] * f10[p]);
     }
-    return sum / w;
+    // half: the whole sheet's area is twice the top half's
+    return (this.half ? 2 * sum : sum) / w;
   }
 
   /**
@@ -2237,8 +2428,8 @@ export class Sim {
     const w = this.win;
     const steps = w.steps;
     if (steps === 0) return null;
-    const force = (Math.abs(w.fy[0]) + Math.abs(w.fy[1])) / 2 / steps;
-    const torque = (-w.tq[0] + w.tq[1]) / 2 / steps;
+    const force = this.rollForceOf(w.fy) / steps;
+    const torque = this.rollTorqueOf(w.tq) / steps;
     w.steps = 0;
     w.fy[0] = w.fy[1] = w.tq[0] = w.tq[1] = 0;
     return { force, torque, steps };
@@ -2248,9 +2439,9 @@ export class Sim {
   diagnostics(): Diagnostics {
     if (this.accSteps > 0) {
       const steps = this.accSteps;
-      this.lastForce = (Math.abs(this.accFy[0]) + Math.abs(this.accFy[1])) / 2 / steps;
+      this.lastForce = this.rollForceOf(this.accFy) / steps;
       // top roll turns counter-clockwise (ω > 0): driving torque opposes the resisting torque of the sheet
-      this.lastTorque = (-this.accTorque[0] + this.accTorque[1]) / 2 / steps;
+      this.lastTorque = this.rollTorqueOf(this.accTorque) / steps;
       this.lastPush = this.accPush / steps;
       [this.lastNeutral, this.lastNeutralState] = this.neutralPoint(this.accTau, this.accN);
     }
@@ -2276,12 +2467,14 @@ export class Sim {
     const phase = this.phase();
     let kineticRatio: number | null = null;
     const dt = this.t - this.lastWorkT;
+    // half: the whole sheet's plastic work is twice the top half's (the mass flow below is the whole sheet's)
+    const work = this.half ? 2 : 1;
     if (phase === 'steady' && ex && dt > 0 && this.plasticWork > this.lastWork) {
       const r = this.params.rolling;
       const v1 = ex.speed;
       const v0 = (v1 * ex.thickness) / r.h0; // mass flow
       const mdot = this.params.material.rho * this.params.numerics.massScale * r.h0 * v0;
-      kineticRatio = (0.5 * mdot * (v1 * v1 - v0 * v0)) / ((this.plasticWork - this.lastWork) / dt);
+      kineticRatio = (0.5 * mdot * (v1 * v1 - v0 * v0)) / ((work * (this.plasticWork - this.lastWork)) / dt);
     }
     this.lastWork = this.plasticWork;
     this.lastWorkT = this.t;
@@ -2309,7 +2502,7 @@ export class Sim {
       maxDamage: maxD,
       nFailed,
       cracks: this.cracks.length,
-      plasticWork: this.plasticWork,
+      plasticWork: work * this.plasticWork,
       inertiaRatio: this.inertiaRatio,
       kineticRatio,
     };
@@ -2386,9 +2579,11 @@ export class Sim {
   pressureProfile(): PressureProfile {
     const { nBins, binW, binSteps, lastP, lastTau } = this;
     if (binSteps > 0) {
+      // the mean over the rolls (the bins hold both rolls' sums; half: the top roll's alone)
+      const per = this.rolls.length * binSteps * binW;
       for (let b = 0; b < nBins; b++) {
-        lastP[b] = this.binN[b] / (2 * binSteps * binW);
-        lastTau[b] = this.binT[b] / (2 * binSteps * binW);
+        lastP[b] = this.binN[b] / per;
+        lastTau[b] = this.binT[b] / per;
       }
       this.binN.fill(0);
       this.binT.fill(0);

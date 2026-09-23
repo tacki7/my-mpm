@@ -18,7 +18,7 @@ Hancock-MacKenzie、破壊した粒子の応力の扱い）。式と出典の対
 | `src/mpm/solid/` | 3 次元モデル（`Sim3`: x・y・z を解く 1/4 モデル、幅広がり・板幅方向の荷重分布）。画面の「3 次元」のタブ（`src/app/solidMode.ts`・`solidView.ts`・`solid.worker.ts`。止まったあとの巻き戻し再生は `tape.ts`、その動画ファイルは `solidVideo.ts`（WebCodecs）と `mux.ts`（MP4・WebM を自前で書く。`tools/checks/mux.mjs` が ffmpeg の本物のフレームで検証））。タンデム・定常になるまでの板長は `tandem3.ts`（`Tandem3`）、ロール偏平・圧下率一定は `Sim3.adjustRolls`。`node tools/solid.mjs --W 8 --L 12 --cells 4 [--plane-strain] [--length steady] [--stands 3 --handoff steady] [--flatten hitchcock --control reduction] [--bend <バレル mm> [--span <mm>]] [--crown <µm>]`（4 セルで約 2.5 分）。ロールの撓みは `rollBend.ts`（梁）+ `Sim3.updateBend`。入側の板クラウン・出側のクラウンと平坦度は `Sim3.ySize`・`exitMeasure`・`steady.ts`。GPU は `solid/gpu/`（`kernels.ts` WGSL・`stepper.ts`）+ `Sim3.advanceBatch`、比較の頁は `tools/gpu/check.html`。CPU の複数スレッドは `team.ts`（`Team`: 調整役 + 貼り付けた `Sim3` の段ごとの関門）+ `grid3.ts`（格子の写し・同期の塊・部分和の配置）、入口は `src/app/solid.helper.worker.ts`（ブラウザ）と `tools/lib/solid-helper.mjs`・`solid-team.mjs`（node）。`node tools/solid.mjs --threads 4`。`SharedArrayBuffer` のため `vite.config.ts` が COOP / COEP を付ける |
 | `src/app/` | ワーカー（`sim.worker.ts`）、描画（`view.ts`）、グラフ、条件パネル |
 | `tools/check.mjs` | 回帰関門。`// @check` の付いたスクリプトを集めて回す |
-| `tools/run.mjs` | ヘッドレスで 1 回圧延して数値を出す（`npm run sim -- --cells 6 --L 8`） |
+| `tools/run.mjs` | ヘッドレスで 1 回圧延して数値を出す（`npm run sim -- --cells 6 --L 8`。`--half` = 板厚方向の対称モデル、上半分だけ） |
 | `tools/browser/` | 自分専用のヘッドレス Chrome（CDP）を操作する道具 |
 | `docs/` | モデル（`model.md`）、検証値（`validation.md`）、デザイン（`design.md`）、条件（`presets.md`） |
 
@@ -79,6 +79,8 @@ tools/browser/browser.sh stop <cdp>; tools/browser/browser.sh stop <dev>
 ロールバイトの表示（ズーム・パン・倍率・俯瞰・主応力の向き）を触ったら `CDP_PORT=<cdp> node tools/browser/view.mjs http://localhost:<dev>/ <作業用ディレクトリ>/v`
 （ホイール・ダブルクリック・ドラッグ・キーは CDP の実イベント。`v-*.png` を自分で見る）。
 条件パネル（材料の定数・欠陥・入力の検証）を触ったら `CDP_PORT=<cdp> node tools/browser/panel.mjs http://localhost:<dev>/ <作業用ディレクトリ>/p.png`。
+板厚方向の対称モデル（`rolling.halfThickness`、`src/mpm/solver.ts` のゴースト行・`view.ts` の鏡像・条件パネルの「板厚方向」）を触ったら `node tools/checks/half-thickness.mjs`（`@check`、約 25 s: 全厚と 1e-9 で一致・速い・中心割れの面が対称面の上で開く・タンデム 2 スタンド・既定の荷重をビットで留める）と
+`CDP_PORT=<cdp> node tools/browser/half.mjs http://localhost:<dev>/ <作業用ディレクトリ>/dl-half <作業用ディレクトリ>/half.png`（約 40 s。選んで反映 → 最後まで回して node の `TandemSim` と 1e-5 → 継ぎ目の上下の描画 → 鏡像の実クリック → URL `sym=1` → CSV → URL を開き直す。`half.png` を自分で見る）。
 結果の書き出し（CSV・PNG・条件の URL）を触ったら `CDP_PORT=<cdp> node tools/browser/export.mjs http://localhost:<dev>/ <作業用ディレクトリ>/dl-<時刻>`
 （実際にダウンロードしたファイルを読んで `__mpm.history` と比べ、条件の URL を開き直して `__mpm.params` を比べる）。
 平面図の画面（切り替え・平面図のワーカー・描画・結果・URL）を触ったら `CDP_PORT=<cdp> node tools/browser/planview.mjs http://localhost:<dev>/ <作業用ディレクトリ>/pv`
@@ -112,13 +114,13 @@ Math.exp・log の最後の 1 ビットが違うのでビット一致はしな�
 残り時間の表示（時計の上の「残り 約 …」、`src/app/eta.ts`・`src/mpm/progress.ts`・ワーカーの `progress`）を触ったら `CDP_PORT=<cdp> node tools/browser/eta.mjs http://localhost:<dev>/ <作業用ディレクトリ>/eta`
 （約 5 分。表示した残り時間を、実際に掛かった残り時間と比べる: 断面・一時停止・タンデム 2 スタンド（`handoff` 2 通り）・平面図・3 次元。`eta-section.png` を自分で見る）。
 
-ポートは必ず渡す（既定値は無い）。`window.__mpm` は `frames` `eta`（表示中の残り時間 [s]。速さが読めるまでは null。`plan.eta`・`solid.eta` も）`running` `ready` `done` `diag` `cracks`
+ポートは必ず渡す（既定値は無い）。`window.__mpm` は `frames` `eta`（表示中の残り時間 [s]。速さが読めるまでは null。`plan.eta`・`solid.eta` も）`running` `ready` `done` `diag` `steady`（表示中のスタンドの定常の平均、`TandemSim` の読み。無ければ null）`cracks`
 `geometry` `params` `history` `slab`（スラブ法の荷重・中立点・方法の外の理由、`delta` = 平均板厚 / 接触長、`steadyForce` = 定常の荷重をステップ数で重み付けした平均 [N/m]、`ratio` = MPM / スラブ法。定常の前と方法の外では null）`forceChart`（荷重のグラフに描いた生の値と移動平均）`explorer`（表示中の点）`tracks`（追っている点と経路）`view`（拡大率・パン・倍率・主応力の向き）
 `plan`（平面図: `active` `ready` `running` `done` `diag`（`steady` が定常の平均、SI）`cracks` `settings` `url` `setMode()` `setField()` `drawMs()`）
 （約 12 分、うちタンデムの節が約 9 分。実クリックでタブを移り、板幅 4 mm を最後まで回して `node tools/solid.mjs` と比べる（相対 1e-5）、巻き戻し再生（実クリックで巻き戻す・再生・一時停止・スライダーの端、再生中の色の量のタブ）、「動画に保存」で実際にダウンロードした MP4 を ffprobe で読む（枚数・幅・長さ。ffprobe が無ければ飛ばす）、色の量のタブ、実ドラッグで動かす・Shift+ドラッグで回す・動かしたあと矢印キーで画面の中央を軸に回る・ホイール・ダブルクリック、見る向き、URL、
 応力状態の表と `__mpm.solid.explorer` の一致・破断軌跡の描画、亀裂になる条件（`cond` で D2 0.15）で最初の亀裂の点と役のボタンの実クリック・絵の上の丸の印（`__mpm.solid.screenOf(role)` の周りの画素の色）、
 `stand` `stands` `standResults` `standFrames` `stopped`（タンデム: 表示中のスタンド（0 始まり）・スタンド数・済んだスタンドの結果・並んだ枠の状態・最後のスタンドまで行かずに止まった理由 'stalled' | 'separated' | 'lost'、ふだんは null）と
-`run()` `restart()` `setField(id)` `screenOf(id)`（粒子の画面座標）`drawMs(n)`（今のフレームを n 回描いた 1 回の ms）、
+`run()` `restart()` `setField(id)` `screenOf(id)`（粒子の画面座標）`screenOfPoint(x, y)`（板の座標 [m] の画面座標）`drawMs(n)`（今のフレームを n 回描いた 1 回の ms）、
 `pressing`（亀裂の印が押されている最中）`pressAgain()`（印をもう一度押す。瞬間を撮る用）を持つ。
 凡例の `data-field` が今の色の量（タブの名前は短いことがあるので、待つならこちら）。
 
@@ -136,6 +138,7 @@ Math.exp・log の最後の 1 ビットが違うのでビット一致はしな�
 `&length=fixed|steady`（板の長さの取り方。`steady` = 1 スタンド目の板を、定常の読みが揃うのに要る長さに自動で（`L` は使わない。決めた長さは `__mpm.params.rolling.sheetLength`）。ツールは `--length steady`）
 `&flatten=none|hitchcock&rollE=206&control=gap|reduction`（ロール偏平を計算した荷重と連立・ロールのヤング率 GPa・圧下率一定 = 出側板厚が h0(1−r) になるようロールギャップを調整。既定は剛体・ギャップ一定。落ち着くまで `diag.phase === 'adjusting'`（前方・後方張力が立ち上がりきるまでも 'adjusting'）、`diag.rollRadius`・`diag.gap`・`diag.rollsSettled`）
 `&handoff=done|steady`（タンデムの引き継ぎ。既定は `done` = 板が抜けてから。`steady` = 定常になったらすぐ次のスタンドへ、定常の部分を繰り返した板で。数倍速い）
+`&sym=1`（板厚方向の対称モデル: y = 0 を対称面にして上半分だけ解く、ロール 1 本、点が半分で約 2 倍速い。読みは板全体の値。`__mpm.params.rolling.halfThickness`・`__mpm.geometry.halfThickness`、`__mpm.screenOfPoint(x, y)` で継ぎ目の画面座標。断面だけ。既定は全厚）
 `&crack=none|dfg`（亀裂の面。既定は `dfg` = 亀裂の近くの節点で点を両側の 2 つの速度場に分け、面が開く。`none` は 1 つの速度場で、T74 より前の既定）
 `&cond=<base64url JSON>`（「条件の URL をコピー」が書く。読みやすいキーに無い条件を、プリセットとの差分で。範囲外・型の合わないもの・知らないキーは無視）
 — 長さは mm、張力は MPa、`r` は %。不正な値は黙って無視される（`h0`・`r`・`R` はロールが噛めない組み合わせなら 3 つとも）。

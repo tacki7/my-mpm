@@ -4,7 +4,7 @@
 //                      [--mat spcc|s4340|al6061] [--damage johnson-cook|hancock-mackenzie|cockcroft-latham|gtn|localization|none]
 //                      [--yield von-mises|gtn] [--preset <id>] [--chi 0.9] [--nonlocal <ℓ mm>]
 //                      [--tb 0] [--tf 0] [--every 2000] [--max 400000] [--contact surface|stencil] [--vrc 1]
-//                      [--crack none|dfg] [--json]
+//                      [--crack none|dfg] [--half] [--json]
 //
 // Lengths in mm, tensions in MPa. An option left out keeps the preset's value (or the
 // default): `--preset front-tension` runs with its front tension. Prints a line every

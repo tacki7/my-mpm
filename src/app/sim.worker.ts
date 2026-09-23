@@ -72,8 +72,10 @@ function geometryOf(s: Sim): Geometry {
     dt: s.dt,
     contactLength: s.contactLength,
     xExitProbe: s.xExitProbe,
-    rolls: s.rolls.map((r) => ({ ...r })),
+    // half: the top roll and its mirror image (the bottom roll the whole model would have)
+    rolls: s.half ? [{ ...s.rolls[0] }, { ...s.rolls[0], cy: -s.rolls[0].cy, omega: -s.rolls[0].omega }] : s.rolls.map((r) => ({ ...r })),
     rollSpeed: s.params.rolling.rollSpeed,
+    halfThickness: s.half,
   };
 }
 

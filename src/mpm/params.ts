@@ -130,6 +130,13 @@ export interface RollingParams {
    * the pass runs until the thickness measured just past the rolls is h0 (1 − r)
    */
   gapControl?: 'gap' | 'reduction';
+  /**
+   * The section model solves only the top half of the thickness (docs/model.md「板厚方向の対称モデル（2 次元）」): the
+   * mid-plane y = 0 is a symmetry plane and only the top roll exists, so half the points, about twice as fast. The
+   * readings (force, torque, thickness, profile) are the whole sheet's. Absent or false: the whole thickness with
+   * two rolls. The plan view and the 3D model do not read it (the 3D model is a quarter model already)
+   */
+  halfThickness?: boolean;
   /** mean equivalent plastic strain the sheet brings in (a tandem's later stands; remap sets it): only where rolls
    *  that follow the pass start from (Sim presetRolls). Default 0 */
   entryStrain?: number;

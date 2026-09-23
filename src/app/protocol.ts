@@ -29,6 +29,12 @@ export interface Geometry {
   xExitProbe: number;
   rolls: { cx: number; cy: number; R: number; omega: number }[];
   rollSpeed: number;
+  /**
+   * the half-thickness model (rolling.halfThickness): the points are the top half only (y ≥ 0), and the view
+   * draws their mirror image below the plane; rolls holds the top roll and its mirror image, so that the picture
+   * and the rolls that follow the pass need no other case
+   */
+  halfThickness: boolean;
 }
 
 export interface CrackView extends Crack {

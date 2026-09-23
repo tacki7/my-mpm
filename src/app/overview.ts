@@ -68,6 +68,8 @@ export class Overview {
       const y = f.pos[2 * p + 1];
       if (y > top[c]) top[c] = y;
       if (y < bot[c]) bot[c] = y;
+      // half: the mirror image is the bottom
+      if (g.halfThickness && -y < bot[c]) bot[c] = -y;
     }
     ctx.fillStyle = 'rgba(244,245,243,0.82)';
     ctx.fillRect(0, 0, W, H);
