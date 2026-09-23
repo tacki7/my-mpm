@@ -227,7 +227,7 @@ export class SweepMode {
     hRow.append(hBox);
     fs.append(hRow);
     this.jobsInput = number('sweep-jobs', '同時に回す数', 1, CORES, `/ ${CORES}`, `条件をいくつ並べて回すか（1 つに 1 スレッド）。この機械は ${CORES} コア`);
-    fs.append(el('p', 'hint', '板の長さは条件ごとに「定常状態になるまで」。板幅（振らないとき）・セル数・入側の板クラウン・ロールの撓みは「板と格子（3 次元）」「ロールの撓み（3 次元）」の欄、材料・圧下率・張力・ロール偏平は共通の欄。計算は CPU（GPU・コア数の欄は使わない）。4 セル・板幅 4 mm・4 パスで 1 条件に数分'));
+    fs.append(el('p', 'hint', '板の長さは条件ごとに「定常状態になるまで」。板幅（振らないとき）・セル数・入側の板クラウン・ロールの撓みは「板と格子（3 次元）」「ロールの撓み（3 次元）」の欄、材料・圧下率・張力・ロール偏平は共通の欄。計算は CPU（GPU・コア数の欄は使わない）。4 セル・板幅 4 mm・4 パスの 10 条件は 5 つ同時で約 50 分（M2）'));
     const note = this.o.panelRoot.querySelector('.note-more') ?? this.o.panelRoot.querySelector('.preset-note');
     if (note) note.after(fs);
     else this.o.panelRoot.prepend(fs);
