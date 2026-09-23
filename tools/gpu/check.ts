@@ -8,7 +8,7 @@ import { defaultParams, type SimParams } from '../../src/mpm/params.ts';
 import { Sim3, solidParams, type Solid3Params } from '../../src/mpm/solid/sim3.ts';
 import { CTL_EVERY } from '../../src/mpm/solver.ts';
 import { READ_STEPS, SolidSampler, type SolidSteady } from '../../src/mpm/solid/steady.ts';
-import { requestGpu } from '../../src/mpm/solid/gpu/stepper.ts';
+import { requestGpu, requestGpuPool } from '../../src/mpm/solid/gpu/stepper.ts';
 
 export type Variant = 'plain' | 'tension' | 'adjust' | 'bend' | 'damage';
 
@@ -251,6 +251,23 @@ const api = {
     const out = await passes(r.device, v, W, cells);
     r.device.destroy();
     return out;
+  },
+  /** the devices the pool offers (their infos) */
+  async pool() {
+    const pool = await requestGpuPool();
+    const out = pool.map((r) => r.info);
+    for (const r of pool) r.device.destroy();
+    return out;
+  },
+  /** several passes at once, the jobs round the pool's devices (job k on device k mod size) */
+  async passesAll(vs: Variant[], W?: number, cells?: number) {
+    const pool = await requestGpuPool();
+    if (!pool.length) throw new Error('no WebGPU');
+    try {
+      return await Promise.all(vs.map((v, k) => passes(pool[k % pool.length].device, v, W, cells)));
+    } finally {
+      for (const r of pool) r.device.destroy();
+    }
   },
   async noise(v: Variant, W?: number, cells?: number, d2?: number) {
     if (d2 !== undefined) D2 = d2;

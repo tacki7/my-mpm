@@ -20,6 +20,8 @@ let stopAfter: number | null = null;
 let timer: ReturnType<typeof setTimeout> | null = null;
 let msPerStep = 0;
 let history: { t: number[]; force: number[]; stand: number[] } = { t: [], force: [], stand: [] };
+/** rows of the history the frames have carried so far */
+let historySent = 0;
 /** where the step runs (the init's choice, or the CPU where the GPU was asked for but is not there), and why */
 let compute: Compute = 'cpu';
 let gpuInfo: GpuInfo | null = null;
@@ -150,11 +152,12 @@ function frame(): void {
       backTension: s.backNow,
       frontTension: s.frontNow,
     },
-    history: { t: history.t.slice(), force: history.force.slice(), stand: history.stand.slice() },
+    history: { from: historySent, t: history.t.slice(historySent), force: history.force.slice(historySent), stand: history.stand.slice(historySent) },
     tracks: tracker ? tracker.tracks() : [],
     running,
     msPerStep,
   };
+  historySent = history.t.length;
   post(msg, [...fs.flatMap((f) => [f.pos.buffer, f.vals.buffer, f.failed.buffer]), msg.edgeX.buffer, msg.edgeHalfWidth.buffer]);
 }
 
@@ -407,6 +410,7 @@ self.onmessage = (e: MessageEvent<ToSolidWorker>) => {
         initSeq++;
         stopAfter = m.stopAfter;
         history = { t: [], force: [], stand: [] };
+        historySent = 0;
         tandem?.sim.detachGpu();
         threads = m.compute === 'cpu' ? threadsFor(m.threads) : 1;
         if (threads === 1 && team) {

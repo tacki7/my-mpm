@@ -92,8 +92,12 @@ export interface SolidFrame {
   edgeX: Float32Array;
   edgeHalfWidth: Float32Array;
   diag: SolidDiag;
-  /** t [s] (the running clock), roll force [N] and stand of every look so far */
-  history: { t: number[]; force: number[]; stand: number[] };
+  /**
+   * t [s] (the running clock), roll force [N] and stand of the looks since the frame before: rows `from` onward
+   * of the run's history, which the page keeps whole (a frame carrying it all would grow with the run, and the
+   * tape keeps hundreds of frames)
+   */
+  history: { from: number; t: number[]; force: number[]; stand: number[] };
   /** the points on the fracture locus: the first to fail and the most damaged (tracker3.ts) */
   tracks: Track[];
   running: boolean;

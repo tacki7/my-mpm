@@ -25,6 +25,12 @@ export class Tape<T> {
     return this.latest ? [...this.kept, this.latest] : this.kept;
   }
 
+  /** frame i of the tape (frames[i], without building the array) */
+  at(i: number): T | undefined {
+    if (i < this.kept.length) return this.kept[i];
+    return i === this.kept.length ? (this.latest ?? undefined) : undefined;
+  }
+
   get length(): number {
     return this.kept.length + (this.latest ? 1 : 0);
   }

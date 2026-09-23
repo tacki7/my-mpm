@@ -1462,6 +1462,8 @@ export class Sim {
     const k4 = 4 * invH * invH;
     const w = [0, 0, 0, 0, 0, 0, 0, 0, 0];
     const touched: number[] = [];
+    // the weights in the step's own buffers (two arrays per touching point per step added up to a lot of garbage)
+    const { swx: wx, swy: wy } = this;
     for (let p = 0; p < n; p++) {
       if (!active[p] || !touch[p]) continue;
       const gx = (px[p] - ox) * invH;
@@ -1470,8 +1472,8 @@ export class Sim {
       const by = Math.floor(gy - 0.5);
       const fx = gx - bx;
       const fy = gy - by;
-      const wx = [0.5 * (1.5 - fx) * (1.5 - fx), 0.75 - (fx - 1) * (fx - 1), 0.5 * (fx - 0.5) * (fx - 0.5)];
-      const wy = [0.5 * (1.5 - fy) * (1.5 - fy), 0.75 - (fy - 1) * (fy - 1), 0.5 * (fy - 0.5) * (fy - 0.5)];
+      wx[0] = 0.5 * (1.5 - fx) * (1.5 - fx); wx[1] = 0.75 - (fx - 1) * (fx - 1); wx[2] = 0.5 * (fx - 0.5) * (fx - 0.5);
+      wy[0] = 0.5 * (1.5 - fy) * (1.5 - fy); wy[1] = 0.75 - (fy - 1) * (fy - 1); wy[2] = 0.5 * (fy - 0.5) * (fy - 0.5);
       for (let a = 0; a < 3; a++) for (let c = 0; c < 3; c++) w[a * 3 + c] = wx[a] * wy[c];
       // 'dfg': the point's nodes on the second field sit at nNodes + node
       const fb = pf !== null && pfAny[p] ? 9 * p : -1;

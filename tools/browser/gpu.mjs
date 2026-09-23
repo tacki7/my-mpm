@@ -56,7 +56,9 @@ try {
     console.log('SKIP  no WebGPU adapter in this Chrome (start it with BROWSER_GPU=1 on a machine with a GPU)');
     process.exit(0);
   }
-  console.log(`adapter: ${info.vendor} ${info.architecture} ${info.device}`.trim());
+  console.log(`adapter: ${info.vendor} ${info.architecture} ${info.device} ${info.backend}`.trim());
+  const pool = await c.evaluate('__gpucheck.pool()');
+  ok(pool.length >= 1 && pool.some((p) => p.vendor === info.vendor && p.architecture === info.architecture), 'the pool holds the adapter the app uses', pool.map((p) => `${p.vendor} ${p.architecture} ${p.device}`.trim()).join(' | '));
 
   // ── in sync: one step, then a batch, from the same state (a plain pass and the bending: the extra kernel path)
   for (const v of ['plain', 'bend']) {
@@ -89,8 +91,17 @@ try {
     near(r.gpu.spread, r.cpu.spread, 1e-2, `${r.variant}: the spread within 1 %`);
     ok(r.gpuMs < r.cpuMs, `${r.variant}: the GPU's pass is faster`, `${(r.cpuMs / r.gpuMs).toFixed(2)}×`);
   };
-  rigid(await pass('plain', 2));
-  rigid(await pass('tension', 2));
+  const plain = await pass('plain', 2);
+  rigid(plain);
+  const tension = await pass('tension', 2);
+  rigid(tension);
+  {
+    // two passes at once round the pool (one device here: both on it; two: one each), the same steady means
+    const all = await c.evaluate('__gpucheck.passesAll(["plain", "tension"], 2, 4)');
+    ok(all.length === 2 && all[0].gpu && all[1].gpu, 'pool: two passes at once both reach steady', `${all[0].gpuSteps} / ${all[1].gpuSteps} steps`);
+    if (all[0].gpu && plain.gpu) near(all[0].gpu.force, plain.gpu.force, 5e-3, 'pool: plain, the steady force within 0.5 % of the pass alone');
+    if (all[1].gpu && tension.gpu) near(all[1].gpu.force, tension.gpu.force, 5e-3, 'pool: tension, the steady force within 0.5 % of the pass alone');
+  }
   {
     const r = await pass('bend', 2);
     rigid(r);

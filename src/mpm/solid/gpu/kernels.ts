@@ -6,6 +6,16 @@
 // of those sums varies between runs: the GPU is not bit-reproducible). The controls that take a step's result
 // (the roll's adjustment, the bending, the tensions, the stall check) stay on the CPU, once per batch of steps
 // (Sim3.advanceBatch), so the roll, the tensions and the deflection are uniform over a batch.
+//
+// Written for any WebGPU device (Metal, Vulkan, D3D12): default limits only (one bind group of five buffers,
+// 64-wide workgroups, dispatches over two dimensions past 65535 workgroups), no float atomics, no subgroups, no
+// f16; the arguments of log and pow are clamped where a select would discard the arm, so no arm computes Inf or
+// NaN; a point whose stencil would fall outside the grid is left alone (a negative index would wrap).
+
+/** threads per workgroup (all kernels are 1-D, 64 wide) */
+export const WG = 64;
+/** workgroups per dispatch row (WebGPU's default maxComputeWorkgroupsPerDimension): a bigger dispatch goes to a second row */
+export const DISPATCH_MAX = 65535;
 
 /** floats per point in the particle buffer */
 export const PSTRIDE = 52;
@@ -70,6 +80,8 @@ struct U {
 @group(0) @binding(4) var<storage, read> bend: array<f32>;
 
 const S: u32 = ${PSTRIDE}u;
+/** the thread's index over a 2-D dispatch (stepper.ts: rows of at most DISPATCH_MAX workgroups) */
+fn tid(id: vec3u) -> u32 { return id.x + id.y * ${DISPATCH_MAX * WG}u; }
 fn ld(i: u32) -> f32 { return bitcast<f32>(atomicLoad(&Ga[i])); }
 fn st(i: u32, v: f32) { atomicStore(&Ga[i], bitcast<u32>(v)); }
 const INF: f32 = 3.0e38;
@@ -131,13 +143,14 @@ fn gripWeight(i: u32, end: u32) -> f32 {
 }
 
 @compute @workgroup_size(64) fn p2g(@builtin(global_invocation_id) id: vec3u) {
-  let p = id.x;
+  let p = tid(id);
   if (p >= u.n) { return; }
   let b = p * S;
   if (P[b + ${P_ACTIVE}u] == 0.0) { return; }
   let xp = P[b]; let yp = P[b + 1u]; let zp = P[b + 2u];
   let gx = (xp - u.ox) * u.invH; let gy = yp * u.invH + 1.0; let gz = zp * u.invH + 1.0;
   let bx = i32(floor(gx - 0.5)); let by = i32(floor(gy - 0.5)); let bz = i32(floor(gz - 0.5));
+  if (bx < 0 || by < 0 || bz < 0 || bx + 2 >= i32(u.nxN) || by + 2 >= i32(u.nyN) || bz + 2 >= i32(u.nzN)) { return; }
   let fx = gx - f32(bx); let fy = gy - f32(by); let fz = gz - f32(bz);
   let wx = w3(fx); let wy = w3(fy); let wz = w3(fz);
   let o = b + ${P_F}u;
@@ -209,7 +222,7 @@ fn gripWeight(i: u32, end: u32) -> f32 {
 
 // one thread per ix: the ghost layers onto their mirror images (sim3.ts foldMomentum)
 @compute @workgroup_size(64) fn fold(@builtin(global_invocation_id) id: vec3u) {
-  let ix = id.x;
+  let ix = tid(id);
   if (ix >= u.nxN) { return; }
   let ng = u.ng;
   let c = ix * u.nyN * u.nzN;
@@ -243,7 +256,7 @@ fn gripWeight(i: u32, end: u32) -> f32 {
 
 // one thread per node (iy, iz ≥ 1): momentum → velocity, the roll's contact with Coulomb friction (sim3.ts gridUpdate)
 @compute @workgroup_size(64) fn grid(@builtin(global_invocation_id) id: vec3u) {
-  let idx = id.x;
+  let idx = tid(id);
   if (idx >= u.ng) { return; }
   let ng = u.ng;
   let slab = u.nyN * u.nzN;
@@ -304,7 +317,7 @@ fn gripWeight(i: u32, end: u32) -> f32 {
 // followRoll, the points' half (sim3.ts followRoll, the first loop): what a point inside the roll lacks to keep
 // its top edge on the roll's surface is asked of its held nodes, mass-weighted
 @compute @workgroup_size(64) fn folA(@builtin(global_invocation_id) id: vec3u) {
-  let p = id.x;
+  let p = tid(id);
   if (p >= u.n) { return; }
   let b = p * S;
   if (P[b + ${P_ACTIVE}u] == 0.0 || P[b + ${P_TOUCH}u] == 0.0) { return; }
@@ -312,6 +325,7 @@ fn gripWeight(i: u32, end: u32) -> f32 {
   let xp = P[b]; let yp = P[b + 1u]; let zp = P[b + 2u];
   let gx = (xp - u.ox) * u.invH; let gy = yp * u.invH + 1.0; let gz = zp * u.invH + 1.0;
   let bx = i32(floor(gx - 0.5)); let by = i32(floor(gy - 0.5)); let bz = i32(floor(gz - 0.5));
+  if (bx < 0 || by < 0 || bz < 0 || bx + 2 >= i32(u.nxN) || by + 2 >= i32(u.nyN) || bz + 2 >= i32(u.nzN)) { return; }
   let fx = gx - f32(bx); let fy = gy - f32(by); let fz = gz - f32(bz);
   let wx = w3(fx); let wy = w3(fy); let wz = w3(fz);
   let rx = xp;
@@ -364,7 +378,7 @@ fn gripWeight(i: u32, end: u32) -> f32 {
 
 // followRoll, the nodes' half: the mean request applied along the normal, Coulomb's share taken from the slip
 @compute @workgroup_size(64) fn folB(@builtin(global_invocation_id) id: vec3u) {
-  let idx = id.x;
+  let idx = tid(id);
   if (idx >= u.ng) { return; }
   let ng = u.ng;
   let D = ld(${G_FOLD}u * ng + idx);
@@ -405,7 +419,7 @@ fn gripWeight(i: u32, end: u32) -> f32 {
 
 // one thread per ix: the velocities back to the ghosts, and the column's force and torque, the nodes' normal forces summed for the batch
 @compute @workgroup_size(64) fn mirror(@builtin(global_invocation_id) id: vec3u) {
-  let ix = id.x;
+  let ix = tid(id);
   if (ix >= u.nxN) { return; }
   let ng = u.ng;
   let c = ix * u.nyN * u.nzN;
@@ -435,13 +449,14 @@ fn gripWeight(i: u32, end: u32) -> f32 {
 }
 
 @compute @workgroup_size(64) fn g2pv(@builtin(global_invocation_id) id: vec3u) {
-  let p = id.x;
+  let p = tid(id);
   if (p >= u.n) { return; }
   let b = p * S;
   if (P[b + ${P_ACTIVE}u] == 0.0) { return; }
   let ng = u.ng;
   let gx = (P[b] - u.ox) * u.invH; let gy = P[b + 1u] * u.invH + 1.0; let gz = P[b + 2u] * u.invH + 1.0;
   let bx = i32(floor(gx - 0.5)); let by = i32(floor(gy - 0.5)); let bz = i32(floor(gz - 0.5));
+  if (bx < 0 || by < 0 || bz < 0 || bx + 2 >= i32(u.nxN) || by + 2 >= i32(u.nyN) || bz + 2 >= i32(u.nzN)) { return; }
   let fx = gx - f32(bx); let fy = gy - f32(by); let fz = gz - f32(bz);
   let wx = w3(fx); let wy = w3(fy); let wz = w3(fz);
   var nv = vec3f(0.0);
@@ -496,7 +511,7 @@ fn gripWeight(i: u32, end: u32) -> f32 {
 
 // one thread per ix: the volume sums folded, the means, and the means back to the ghosts
 @compute @workgroup_size(64) fn vmean(@builtin(global_invocation_id) id: vec3u) {
-  let ix = id.x;
+  let ix = tid(id);
   if (ix >= u.nxN) { return; }
   let ng = u.ng;
   let c = ix * u.nyN * u.nzN;
@@ -545,14 +560,14 @@ fn gripWeight(i: u32, end: u32) -> f32 {
 }
 
 fn homT(T: f32) -> f32 { return clamp((T - u.tRoom) / (u.tMelt - u.tRoom), 0.0, 1.0); }
-fn rateFactor(epsDot: f32) -> f32 { let r = epsDot / u.epsDot0; return select(1.0, 1.0 + u.jcC * log(r), r > 1.0); }
+fn rateFactor(epsDot: f32) -> f32 { let r = epsDot / u.epsDot0; return select(1.0, 1.0 + u.jcC * log(max(r, 1.0)), r > 1.0); }
 fn staticStrength(ep: f32) -> f32 {
   if (u.swift == 1u) { return u.swK * pow(u.swE0 + max(ep, 0.0), u.swN); }
-  return u.jcA + u.jcB * select(0.0, pow(ep, u.jcN), ep > 0.0);
+  return u.jcA + u.jcB * select(0.0, pow(max(ep, 0.0), u.jcN), ep > 0.0);
 }
 fn strengthFactor(epsDot: f32, T: f32) -> f32 {
   let Ts = homT(T);
-  let thermal = select(1.0, 1.0 - pow(Ts, u.jcM), Ts > 0.0);
+  let thermal = select(1.0, 1.0 - pow(max(Ts, 0.0), u.jcM), Ts > 0.0);
   return rateFactor(epsDot) * thermal;
 }
 // flow stress and its slope
@@ -563,7 +578,7 @@ fn flow(ep: f32, f: f32) -> vec2f {
     return vec2f(sw * f, (sw * u.swN * f) / bb);
   }
   let e = max(ep, 1e-9);
-  let pw = select(0.0, pow(ep, u.jcN), ep > 0.0);
+  let pw = select(0.0, pow(max(ep, 0.0), u.jcN), ep > 0.0);
   return vec2f((u.jcA + u.jcB * pw) * f, u.jcB * u.jcN * pow(e, u.jcN - 1.0) * f);
 }
 fn plasticIncrement(qTrial: f32, ep: f32, f: f32) -> f32 {
@@ -600,13 +615,13 @@ fn maxPrincipal(a: f32, b: f32, c: f32, d: f32, e: f32, f: f32) -> f32 {
 }
 fn jcFractureStrain(eta: f32, epsDotStar: f32, Ts: f32) -> f32 {
   let a = u.D1 + u.D2 * exp(u.D3 * eta);
-  let b = select(1.0, 1.0 + u.D4 * log(epsDotStar), epsDotStar > 1.0);
+  let b = select(1.0, 1.0 + u.D4 * log(max(epsDotStar, 1.0)), epsDotStar > 1.0);
   let c = 1.0 + u.D5 * Ts;
   return max(a * b * c, 1e-3);
 }
 
 @compute @workgroup_size(64) fn g2pu(@builtin(global_invocation_id) id: vec3u) {
-  let p = id.x;
+  let p = tid(id);
   if (p >= u.n) { return; }
   let b = p * S;
   if (P[b + ${P_ACTIVE}u] == 0.0) { return; }
@@ -622,6 +637,7 @@ fn jcFractureStrain(eta: f32, epsDotStar: f32, Ts: f32) -> f32 {
   if (!((failed && !(pres0 > 0.0)) || !(Jold > 0.0))) {
     let gx = (P[b] - u.ox) * u.invH; let gy = P[b + 1u] * u.invH + 1.0; let gz = P[b + 2u] * u.invH + 1.0;
     let bx = i32(floor(gx - 0.5)); let by = i32(floor(gy - 0.5)); let bz = i32(floor(gz - 0.5));
+    if (bx < 0 || by < 0 || bz < 0 || bx + 2 >= i32(u.nxN) || by + 2 >= i32(u.nyN) || bz + 2 >= i32(u.nzN)) { return; }
     let fx = gx - f32(bx); let fy = gy - f32(by); let fz = gz - f32(bz);
     let wx = w3(fx); let wy = w3(fy); let wz = w3(fz);
     var thBar = 0.0; var rA = 0.0; var rB = 0.0;
@@ -642,7 +658,7 @@ fn jcFractureStrain(eta: f32, epsDotStar: f32, Ts: f32) -> f32 {
     let g00 = 1.0 + dt * l00; let g11 = 1.0 + dt * l11; let g22 = 1.0 + dt * l22;
     let detG = g00 * (g11 * g22 - dt * dt * l12 * l21) - dt * l01 * (dt * l10 * g22 - dt * dt * l12 * l20) + dt * l02 * (dt * dt * l10 * l21 - g11 * dt * l20);
     let ratio = exp(dt * theta) / detG;
-    cor = select(1.0, pow(ratio, 1.0 / 3.0), ratio > 0.0);
+    cor = select(1.0, pow(max(ratio, 1e-30), 1.0 / 3.0), ratio > 0.0);
   }
   let nxp = P[b] + dt * P[b + 3u];
   let nyp = P[b + 1u] + dt * P[b + 4u];
@@ -681,7 +697,7 @@ fn jcFractureStrain(eta: f32, epsDotStar: f32, Ts: f32) -> f32 {
   }
   let g2 = 2.0 * u.G * dt;
   sx += g2 * exx; sy += g2 * eyy; sz += g2 * ezz; sa += g2 * exy; sb += g2 * eyz; sc += g2 * ezx;
-  var pr = select(0.0, -u.K * log(J), J > 0.0);
+  var pr = select(0.0, -u.K * log(max(J, 1e-30)), J > 0.0);
   var q = sqrt(1.5 * (sx * sx + sy * sy + sz * sz + 2.0 * (sa * sa + sb * sb + sc * sc)));
   var dep = 0.0;
   var T = P[b + ${P_TEMP}u];
@@ -708,7 +724,7 @@ fn jcFractureStrain(eta: f32, epsDotStar: f32, Ts: f32) -> f32 {
   }
   P[s] = sx; P[s + 1u] = sy; P[s + 2u] = sz; P[s + 3u] = sa; P[s + 4u] = sb; P[s + 5u] = sc;
   P[b + ${P_PRES}u] = pr;
-  let eta = select(0.0, -pr / q, q > 1e3);
+  let eta = select(0.0, -pr / max(q, 1e3), q > 1e3);
   P[b + ${P_SEQ}u] = q;
   P[b + ${P_ETA}u] = eta;
   if (dep > 0.0) {
