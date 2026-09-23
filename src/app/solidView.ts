@@ -28,6 +28,7 @@ export const SOLID_FIELDS: SolidFieldInfo[] = [
   { id: 'szz', label: '板幅方向の応力 σzz', tab: '板幅方向 σzz', unit: 'MPa', scale: 'diverging' },
   { id: 'damage', label: '損傷 D', unit: '', scale: 'sequential' },
   { id: 'spread', label: '板幅方向の変位（外向きが正）', tab: '幅広がり uz', unit: 'mm', scale: 'sequential' },
+  { id: 'rate', label: '相当ひずみ速度（実機の速度）', tab: 'ひずみ速度', unit: '1/s', scale: 'sequential' },
 ];
 
 export const solidFieldInfo = (id: SolidFieldName) => SOLID_FIELDS.find((f) => f.id === id) ?? SOLID_FIELDS[0];

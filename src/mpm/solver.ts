@@ -177,6 +177,7 @@ export type FieldName =
   | 'dT'
   | 'loc'
   | 'drucker'
+  | 'rate'
   | 'sxx'
   | 'syy'
   | 'sxy'
@@ -321,6 +322,7 @@ export class Sim {
   readonly por: Float64Array; // porosity f (GTN)
   readonly ev: Float64Array; // plastic volume strain Σ tr Δεp (GTN): p = −K (ln J − ev)
   readonly flowRate: Float64Array; // equivalent strain rate [1/s] of the last step if the point flowed (J2), −1 if not
+  readonly rate: Float64Array; // equivalent strain rate [1/s] of the last step, flowing or not (the deviatoric rate of deformation at the mill speed)
   // Drucker's σ̇ : Dp / ε̇p² = Σ Δσ:Δεp / Σ Δεp² over the recent plastic steps (weight DRUCKER_DECAY = 1 − 1/64 per step):
   // one step alone is dominated by the noise of the elastic trial
   readonly drW: Float64Array;
@@ -586,6 +588,7 @@ export class Sim {
     this.por = F();
     this.ev = F();
     this.flowRate = F().fill(-1);
+    this.rate = F();
     this.drW = F();
     this.drE = F();
     this.locHit = new Uint8Array(n);
@@ -1904,6 +1907,7 @@ export class Sim {
       const ez = -tr3;
       // physical equivalent strain rate for rate-dependent laws
       const epsDot = Math.sqrt((2 / 3) * (ex * ex + ey * ey + ez * ez + 2 * dxy * dxy)) * rateScale;
+      this.rate[p] = epsDot;
 
       // Jaumann rotation of the deviatoric stress, then the elastic trial
       let sx = sxx[p];
@@ -2654,6 +2658,9 @@ export class Sim {
           break;
         case 'drucker':
           v = this.flowRate[p] >= 0 && this.drE[p] > 0 ? (this.drW[p] / this.drE[p]) * MPa : 0;
+          break;
+        case 'rate':
+          v = this.rate[p];
           break;
         case 'sxx':
           v = (this.sxx[p] - this.pres[p]) * MPa;

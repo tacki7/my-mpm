@@ -21,7 +21,7 @@ export const DISPATCH_MAX = 65535;
 export const PSTRIDE = 52;
 export const P_X = 0, P_V = 3, P_C = 6, P_F = 15, P_S = 24, P_PRES = 30, P_MASS = 31, P_VOL0 = 32, P_EP = 33, P_TEMP = 34;
 export const P_STR = 35, P_STREP = 36, P_VR = 37, P_TH = 38, P_SEQ = 39, P_ETA = 40, P_TOUCH = 41, P_ACTIVE = 42, P_FAILED = 43, P_WORK = 44;
-export const P_YSIZE = 45, P_DJC = 46, P_DHM = 47, P_DCL = 48, P_FAILSTEP = 49;
+export const P_YSIZE = 45, P_DJC = 46, P_DHM = 47, P_DCL = 48, P_FAILSTEP = 49, P_RATE = 50;
 
 /** grid slots (each ng entries): mass, momentum ×3, θ, Je, B, Mv, pen key, push, con, fy, tq, fn (contact), fn (followRoll), slip ×3, follow N / D */
 export const G_M = 0, G_VX = 1, G_VY = 2, G_VZ = 3, G_TH = 4, G_JE = 5, G_B = 6, G_MV = 7, G_PEN = 8, G_PUSH = 9, G_CON = 10, G_FY = 11, G_TQ = 12;
@@ -700,6 +700,7 @@ fn jcFractureStrain(eta: f32, epsDotStar: f32, Ts: f32) -> f32 {
   let exy = 0.5 * (l01 + l10); let eyz = 0.5 * (l12 + l21); let ezx = 0.5 * (l20 + l02);
   let wxy = 0.5 * (l01 - l10); let wyz = 0.5 * (l12 - l21); let wzx = 0.5 * (l20 - l02);
   let epsDot = sqrt((2.0 / 3.0) * (exx * exx + eyy * eyy + ezz * ezz + 2.0 * (exy * exy + eyz * eyz + ezx * ezx))) * u.rateScale;
+  P[b + ${P_RATE}u] = epsDot;
   let s = b + ${P_S}u;
   var sx = P[s]; var sy = P[s + 1u]; var sz = P[s + 2u]; var sa = P[s + 3u]; var sb = P[s + 4u]; var sc = P[s + 5u];
   {

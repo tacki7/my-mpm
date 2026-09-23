@@ -28,6 +28,9 @@ export const FIELDS: FieldInfo[] = [
   // 0 everywhere unless the Taylor-Quinney coefficient χ is above 0 (kept away from the other all-zero
   // field, porosity: two all-zero tabs side by side look the same)
   { id: 'dT', label: '温度上昇 ΔT', unit: 'K', scale: 'sequential' },
+  // the rate the flow stress and the JC fracture strain see: the deviatoric rate of deformation at the mill speed
+  // (millSpeed / rollSpeed times the simulated one); 0 before the bite and after it, largest at the entry of the bite
+  { id: 'rate', label: '相当ひずみ速度（実機の速度）', tab: 'ひずみ速度', unit: '1/s', scale: 'sequential' },
   { id: 'lagrange', label: 'メタルフロー', unit: '', scale: 'lattice', range: [0, 1] },
   // 0 everywhere unless the yield condition is GTN
   { id: 'porosity', label: '空孔率 f', unit: '', scale: 'sequential' },
