@@ -131,6 +131,9 @@
         </div>
       </section>
 
+      <!-- the 条件の比較 tab (src/app/sweepMode.ts): its title, the conditions' progress, the comparison's graphs and table -->
+      <section class="sweep-stage sweep-only" id="sweep-stage" aria-label="条件の比較"></section>
+
       <div class="splitter split-right" data-size="right" aria-label="結果の欄の幅（ドラッグか矢印キー、ダブルクリックで元に戻す）"></div>
       <aside class="record" aria-label="結果">
         <section class="certificate section-only">
@@ -168,10 +171,15 @@
         <section class="certificate stand-results dim3-only" id="solid-stand-section" hidden>
           <h2>スタンドごとの結果（3 次元）</h2>
           <div class="table-scroll"><table id="solid-stand-results"></table></div>
-          <p class="table-note">荷重・先進率は各スタンドの定常の平均。次のスタンドの入側の板厚と板幅は、出てきた板の厚さ（体積から。弾性の戻りを含む）と幅（端の面の平均）。次のスタンドの板は断面の形（端のふくらみ、板厚のむら）ごと作り直す（応力・ひずみ・損傷も引き継ぐ）</p>
+          <p class="table-note">荷重・先進率は各スタンドの定常の平均。次のスタンドの入側の板厚と板幅は、出てきた板の厚さ（体積から。弾性の戻りを含む）と幅（端の面の平均）。次のスタンドの板は板の形（断面のクラウン・端のふくらみ。板が抜けてから・中央部の切り出しでは平面形と長手の変化も）ごと作り直す（応力・ひずみ・損傷も引き継ぐ）</p>
         </section>
         <section class="explorer dim3-only" id="solid-explorer" aria-label="応力状態（3 次元）"></section>
         <section class="export dim3-only" id="solid-export" aria-label="結果の書き出し（3 次元）"></section>
+        <section class="certificate sweep-only">
+          <h2>比較の読み方</h2>
+          <p class="table-note">条件ごとに 3 次元のタンデム（1/4 モデル）を最後のパスまで回し、各パスの定常の平均を並べる。板クラウンは出側の板厚を板幅方向の放物線で近似した中央 − 端、幅広がりは最後のパスの出側の板幅 ÷ 母板の板幅 − 1。剛体のロールで平らな板を圧延すると板クラウンはほぼ 0 で、ロールの撓み（「ロールの撓み（3 次元）」の欄）や入側の板クラウンで生まれる</p>
+        </section>
+        <section class="export sweep-only" id="sweep-export" aria-label="結果の書き出し（比較）"></section>
       </aside>
     </main>
     <script type="module" src="/src/main.ts"></script>

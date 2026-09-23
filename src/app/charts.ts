@@ -27,6 +27,8 @@ export interface ChartSpec {
   dots?: { x: number; y: number; color: string; r?: number; ring?: boolean; label?: string }[];
   xRange?: [number, number];
   yRange?: [number, number];
+  /** the x ticks, when the nice ones would not do (a count: whole numbers only) */
+  xTicks?: number[];
 }
 
 export function drawChart(canvas: HTMLCanvasElement, spec: ChartSpec): void {
@@ -88,7 +90,7 @@ export function drawChart(canvas: HTMLCanvasElement, spec: ChartSpec): void {
   }
   ctx.textAlign = 'center';
   ctx.textBaseline = 'top';
-  for (const v of ticks(x0, x1, 5)) ctx.fillText(fmt(v), X(v), H - B + 4);
+  for (const v of spec.xTicks ?? ticks(x0, x1, 5)) ctx.fillText(fmt(v), X(v), H - B + 4);
   ctx.fillStyle = 'rgba(29,42,58,0.7)';
   ctx.fillText(spec.xLabel, (L + W - Rm) / 2, H - 14);
   ctx.save();

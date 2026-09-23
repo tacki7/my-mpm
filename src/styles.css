@@ -1228,7 +1228,7 @@ details.group > summary {
 /* .solid-too: a section-only condition the 3 次元 tab has as well (stands, handoff, flattening, constant reduction) */
 body:not([data-view='plan']) .plan-only,
 body[data-view='plan'] .section-only:not(.solid-too),
-body[data-view='plan']:not([data-dim='3']) .solid-too {
+body[data-view='plan']:not([data-dim='3']):not([data-dim='c']) .solid-too {
   display: none !important;
 }
 
@@ -1288,7 +1288,19 @@ body[data-dim='3'] .section-only:not(.solid-too),
 body[data-dim='3'] .plan-only,
 body[data-dim='3'] .dim2-only,
 body[data-dim='3'] .view-switch,
-body:not([data-dim='3']) .dim3-only {
+body:not([data-dim='3']):not([data-dim='c']) .dim3-only {
+  display: none !important;
+}
+
+/* the 条件の比較 tab: the 3D model's conditions (the shared ones and 「板と格子（3 次元）」), its own page, and its own
+   passes and handoff instead of the shared ones */
+body[data-dim='c'] .section-only:not(.solid-too),
+body[data-dim='c'] .plan-only,
+body[data-dim='c'] .dim2-only,
+body[data-dim='c'] .view-switch,
+body[data-dim='c'] section.dim3-only,
+body[data-dim='c'] .sweep-hide,
+body:not([data-dim='c']) .sweep-only {
   display: none !important;
 }
 
@@ -1360,6 +1372,135 @@ body:not([data-dim='3']) .dim3-only {
 /* a tandem's stands under the width graphs; nothing to show, no line */
 .solid-charts .chart-legend:empty {
   display: none;
+}
+
+/* ── 条件の比較 (src/app/sweepMode.ts) ─────────────────────────────────── */
+.sweep-stage {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.sweep-head {
+  padding: 14px 18px 12px;
+}
+
+.sweep-head h2 {
+  font-size: var(--fs-l);
+}
+
+.sweep-head .phase {
+  margin: 4px 0 10px;
+  font-size: var(--fs-s);
+  color: var(--ink-soft);
+}
+
+/* one cell per condition, in its colour, filled as far as it has got */
+.sweep-bar {
+  display: flex;
+  gap: 3px;
+}
+
+.sweep-cell {
+  flex: 1;
+  height: 10px;
+  border: 1px solid var(--rule);
+  background: var(--sheet);
+}
+
+.sweep-fill {
+  display: block;
+  height: 100%;
+  width: 0;
+  background: var(--c);
+}
+
+.sweep-cell[data-state='running'] {
+  border-color: var(--ink);
+}
+
+.sweep-cell[data-state='stopped'],
+.sweep-cell[data-state='error'] {
+  border-color: #9b2c2c;
+}
+
+.sweep-charts {
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  overflow: hidden;
+}
+
+.sweep-charts figure {
+  border-left: 1px solid var(--rule);
+  border-top: 1px solid var(--rule);
+  margin-top: -1px;
+  margin-left: -1px;
+}
+
+.sweep-charts canvas {
+  height: var(--chart-h, 190px);
+}
+
+.sweep-table-wrap {
+  overflow-x: auto;
+  padding: 10px 18px 22px;
+  border-top: 1px solid var(--rule);
+}
+
+.sweep-table {
+  border-collapse: collapse;
+  font-size: var(--fs-s);
+  font-variant-numeric: tabular-nums;
+}
+
+.sweep-table th,
+.sweep-table td {
+  padding: 3px 10px;
+  border-bottom: 1px solid var(--rule);
+  text-align: right;
+  white-space: nowrap;
+}
+
+.sweep-table thead th {
+  font-weight: normal;
+  color: var(--ink-soft);
+  border-bottom: 1px solid var(--ink);
+}
+
+.sweep-table tbody th {
+  text-align: left;
+  font-weight: normal;
+}
+
+.sweep-table tr[data-state='waiting'] td {
+  color: var(--ink-soft);
+}
+
+.sweep-table tr[data-state='stopped'] td,
+.sweep-table tr[data-state='error'] td {
+  color: #9b2c2c;
+}
+
+.sweep-swatch {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  margin-right: 6px;
+  vertical-align: -1px;
+  background: var(--c);
+}
+
+/* the conditions panel: a quantity's first and last values on one line */
+.sweep-vary .sweep-range input {
+  width: 5.4em;
+}
+
+.sweep-arrow {
+  margin: 0 4px;
+  color: var(--ink-soft);
+}
+
+.sweep-vary.off .sweep-range {
+  opacity: 0.45;
 }
 
 /* the playback of the recorded frames: a transport bar under the drawing */
@@ -1541,8 +1682,16 @@ body:not([data-dim='3']) .dim3-only {
      (the preset and the buttons stay at the top) */
   .stage,
   .plan-stage,
-  .solid-stage {
+  .solid-stage,
+  .sweep-stage {
     order: 1;
+  }
+  .sweep-charts {
+    grid-template-columns: 1fr;
+  }
+  .sweep-charts figure {
+    border-left: 0;
+    margin-left: 0;
   }
   .solid-charts {
     grid-template-columns: 1fr;
