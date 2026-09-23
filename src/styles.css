@@ -1312,9 +1312,13 @@ body:not([data-dim='3']) .dim3-only {
 
 .solid-stage {
   display: grid;
-  /* tabs, the drawing, the playback bar (shown once the run has stopped), the graphs */
-  grid-template-rows: auto minmax(380px, 1fr) auto auto;
+  /* tabs, the drawing, the playback bar (shown once the run has stopped), the boundary that sets the graphs' height, the graphs */
+  grid-template-rows: auto minmax(380px, 1fr) auto 6px auto;
   min-width: 0;
+}
+
+.solid-charts canvas {
+  height: var(--chart-h3, 160px);
 }
 
 /* the playback of the recorded frames: a transport bar under the drawing */
@@ -1411,11 +1415,16 @@ body:not([data-dim='3']) .dim3-only {
 }
 
 .solid-charts {
-  grid-template-columns: 1fr 1fr 1fr 1fr;
+  /* six graphs: as many to a row as keep 230 px each, the rest on the next row */
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  overflow: hidden;
 }
 
-.solid-charts figure + figure {
+.solid-charts figure {
   border-left: 1px solid var(--rule);
+  border-top: 1px solid var(--rule);
+  margin-top: -1px;
+  margin-left: -1px;
 }
 
 .fig-range {
@@ -1497,9 +1506,9 @@ body:not([data-dim='3']) .dim3-only {
   .solid-charts {
     grid-template-columns: 1fr;
   }
-  .solid-charts figure + figure {
+  .solid-charts figure {
     border-left: 0;
-    border-top: 1px solid var(--rule);
+    margin-left: 0;
   }
   .dim-tabs {
     margin-bottom: -14px;

@@ -37,7 +37,7 @@ export function faces(sim: Sim3, values: ((p: number) => number)[]): Face[] {
         const o = 9 * p;
         // how far along each lattice direction the vertex sits from the centre: to the strip's surface where the point is on it
         const a = i === NI - 1 && name !== 'tail' ? 0.5 * dp : i === 0 && name !== 'head' ? -0.5 * dp : 0;
-        const b = j === NJ - 1 ? 0.5 * dp : j === 0 ? -0.5 * dp : 0;
+        const b = j === NJ - 1 ? 0.5 * dp * sim.ySize[k] : j === 0 ? -0.5 * dp * sim.ySize[k] : 0;
         const g = k === NK - 1 ? 0.5 * dz : k === 0 ? -0.5 * dz : 0;
         pos[3 * v] = px[p] + F[o] * a + F[o + 1] * b + F[o + 2] * g;
         // the symmetry planes stay planes

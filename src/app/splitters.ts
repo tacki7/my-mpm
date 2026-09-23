@@ -5,7 +5,7 @@
 // when focused (Shift for bigger steps), and goes back to the default on a double click. The sizes
 // are kept per viewer in localStorage (it can be missing or throw: the page works without it).
 
-type Size = 'left' | 'right' | 'charts' | 'c12' | 'c23';
+type Size = 'left' | 'right' | 'charts' | 'charts3' | 'c12' | 'c23';
 
 interface Limits {
   min: number;
@@ -17,17 +17,20 @@ const STEP = 16; // px per arrow key
 const BIG = 64; // with Shift
 
 /** px limits of the one-number sizes (the chart columns keep at least MIN_COL each) */
-const LIMITS: Record<'left' | 'right' | 'charts', Limits> = {
+const LIMITS: Record<'left' | 'right' | 'charts' | 'charts3', Limits> = {
   left: { min: 180, max: 520 },
   right: { min: 200, max: 560 },
   charts: { min: 90, max: 480 },
+  charts3: { min: 90, max: 480 },
 };
 const MIN_COL = 160;
 
-const VARS: Record<'left' | 'right' | 'charts', string> = {
+const VARS: Record<'left' | 'right' | 'charts' | 'charts3', string> = {
   left: '--w-left',
   right: '--w-right',
   charts: '--chart-h',
+  /* the 3 次元 tab's graphs have a height of their own */
+  charts3: '--chart-h3',
 };
 
 function load(): Record<string, string> {
@@ -59,7 +62,7 @@ export function setupSplitters(changed: () => void): void {
   const values = load();
   // only the known variables, only plain numbers with a unit (a stored value never becomes CSS we did not write)
   for (const [k, v] of Object.entries(values)) {
-    if (/^--(w-left|w-right|chart-h|c[123])$/.test(k) && /^\d+(\.\d+)?(px|fr)$/.test(v)) root.style.setProperty(k, v);
+    if (/^--(w-left|w-right|chart-h|chart-h3|c[123])$/.test(k) && /^\d+(\.\d+)?(px|fr)$/.test(v)) root.style.setProperty(k, v);
     else delete values[k];
   }
 
@@ -74,13 +77,14 @@ export function setupSplitters(changed: () => void): void {
 
   const width = (sel: string) => (document.querySelector(sel) as HTMLElement | null)?.getBoundingClientRect().width ?? 0;
   const figures = () => Array.from(document.querySelectorAll<HTMLElement>('.charts > figure'));
-  const chartHeight = () => (document.querySelector('.charts canvas') as HTMLElement | null)?.getBoundingClientRect().height ?? 190;
+  const chartHeight = (sel: string) => (document.querySelector(sel) as HTMLElement | null)?.getBoundingClientRect().height ?? 190;
 
   /** the size a splitter shows as its value (aria-valuenow) */
   const current = (size: Size): number => {
     if (size === 'left') return width('.conditions');
     if (size === 'right') return width('.record');
-    if (size === 'charts') return chartHeight();
+    if (size === 'charts') return chartHeight('.charts:not(.solid-charts) canvas');
+    if (size === 'charts3') return chartHeight('.solid-charts canvas');
     const f = figures();
     return size === 'c12' ? f[0]?.getBoundingClientRect().width ?? 0 : f[1]?.getBoundingClientRect().width ?? 0;
   };
@@ -89,7 +93,7 @@ export function setupSplitters(changed: () => void): void {
   const apply = (size: Size, start: number[], d: number) => {
     if (size === 'left') set(VARS.left, `${Math.round(clamp(start[0] + d, LIMITS.left))}px`);
     else if (size === 'right') set(VARS.right, `${Math.round(clamp(start[0] - d, LIMITS.right))}px`);
-    else if (size === 'charts') set(VARS.charts, `${Math.round(clamp(start[0] - d, LIMITS.charts))}px`);
+    else if (size === 'charts' || size === 'charts3') set(VARS[size], `${Math.round(clamp(start[0] - d, LIMITS[size]))}px`);
     else {
       // two neighbouring chart columns trade width; the three are kept as proportions (fr), so they
       // follow when the window or the side panes change
@@ -116,7 +120,7 @@ export function setupSplitters(changed: () => void): void {
 
   for (const el of document.querySelectorAll<HTMLElement>('.splitter')) {
     const size = el.dataset.size as Size;
-    const horizontal = size === 'charts'; // a line across: it moves up and down
+    const horizontal = size === 'charts' || size === 'charts3'; // a line across: it moves up and down
     el.tabIndex = 0;
     el.setAttribute('role', 'separator');
     el.setAttribute('aria-orientation', horizontal ? 'horizontal' : 'vertical');
@@ -135,6 +139,7 @@ export function setupSplitters(changed: () => void): void {
       el.classList.add('dragging');
       origin = horizontal ? e.clientY : e.clientX;
       start = startSizes(size);
+      show();
     });
     el.addEventListener('pointermove', (e) => {
       if (!el.hasPointerCapture(e.pointerId)) return;

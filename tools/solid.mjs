@@ -2,7 +2,7 @@
 //   node tools/solid.mjs [--W 8] [--L 12] [--cells 4] [--r 0.25] [--R 100] [--h0 1] [--mu 0.08] [--mat spcc]
 //                        [--tb 0] [--tf 0] [--plane-strain] [--max 200000] [--json]
 //                        [--length steady] [--stands 3] [--handoff done|steady]
-//                        [--flatten hitchcock] [--rollE 206] [--control reduction] [--bend <barrel mm> [--span <mm>]]
+//                        [--flatten hitchcock] [--rollE 206] [--control reduction] [--bend <barrel mm> [--span <mm>]] [--crown <µm>]
 // --length steady: the strip as long as the steady looks need (--L is not used). --stands: a tandem, every stand
 // the same condition, the strip carried from stand to stand (src/mpm/solid/tandem3.ts).
 // Lengths in mm, tensions in MPa, the reduction as a fraction. The steady values are read as the page reads them (steady.ts).
@@ -31,7 +31,7 @@ if (has('mat')) base.material = { ...MATERIALS[opt('mat')] };
 if (has('damage')) base.damage.model = opt('damage');
 base.numerics.cellsThrough = +opt('cells', 4);
 if (has('ms')) base.numerics.massScale = +opt('ms');
-const P = solidParams(base, { width: +opt('W', 8) * 1e-3, planeStrain: has('plane-strain'), ...(has('bend') ? { rollBend: { barrel: +opt('bend') * 1e-3, span: +opt('span', 0) * 1e-3 } } : {}) });
+const P = solidParams(base, { width: +opt('W', 8) * 1e-3, planeStrain: has('plane-strain'), ...(has('bend') ? { rollBend: { barrel: +opt('bend') * 1e-3, span: +opt('span', 0) * 1e-3 } } : {}), ...(has('crown') ? { crownIn: +opt('crown') * 1e-6 } : {}) });
 const json = has('json');
 const maxSteps = +opt('max', 400000);
 
@@ -66,6 +66,11 @@ const steadyOut = (st, width) => st && {
   forwardSlip: st.forwardSlip,
   forceByZ_kN_per_mm: st.forceByZ.map((v) => +(v * 1e-6).toFixed(4)),
   rollBend_um: st.rollBend && { centre: st.rollBend.centre * 1e6, edge: st.rollBend.edge * 1e6 },
+  crownIn_um: st.crownIn * 1e6,
+  crownOut_um: st.crownOut * 1e6,
+  thicknessByZ_mm: st.halfThickness.map((v) => +(2 * v * 1e3).toFixed(5)),
+  exitZ_mm: st.exitZ.map((v) => +(v * 1e3).toFixed(4)),
+  flatness_I: st.flatness.map((v) => +v.toFixed(1)),
 };
 // a single pass that ran out of steps has no result yet: its sampler's means
 const st = tandem.results[0]?.steady ?? (tandem.stands === 1 ? tandem.sampler.means(sim) : null);

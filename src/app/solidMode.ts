@@ -64,6 +64,8 @@ export interface SolidPageSettings {
   /** grid cells through the thickness (even: the mid-thickness is a grid plane) */
   cells: number;
   planeStrain: boolean;
+  /** the strip's crown at the entry [m]: the mid-width thickness (h0) less the edge's, a parabola across the width */
+  crown: number;
   /** the roll bends under the force (Sim3 rollBend): its barrel length, and its supports at the barrel's ends or at bearings span apart [m] */
   bend: boolean;
   barrel: number;
@@ -74,7 +76,7 @@ export interface SolidPageSettings {
 export type BendSupport = 'barrel' | 'bearing';
 
 interface NumberField {
-  key: 'width' | 'length' | 'cells' | 'barrel' | 'span';
+  key: 'width' | 'length' | 'cells' | 'crown' | 'barrel' | 'span';
   /** which fieldset the row is in */
   group: 'strip' | 'bend';
   query: string;
@@ -91,6 +93,7 @@ const NUMBERS: NumberField[] = [
   { key: 'width', group: 'strip', query: 'W3', label: '板幅', unit: 'mm', step: 1, min: 2, max: 200, scale: mm, hint: '解くのは 1/4（板幅と板厚の中央で鏡映）。時間は板幅に比例: 8 mm で約 2.5 分、40 mm で約 14 分、200 mm は 1 時間以上' },
   { key: 'length', group: 'strip', query: 'L3', label: '板の長さ', unit: 'mm', step: 1, min: 6, max: 40, scale: mm, hint: '定常の読みには 12 mm ほど要る。「板の長さの取り方」が「定常状態になるまで」なら自動' },
   { key: 'cells', group: 'strip', query: 'cells3', label: '板厚方向のセル数', unit: '', step: 2, min: 4, max: 8, scale: 1, hint: '偶数。4 で約 2〜3 分、6 で約 14 分' },
+  { key: 'crown', group: 'strip', query: 'crown3', label: '入側の板クラウン', unit: 'µm', step: 5, min: -500, max: 500, scale: 1e-6, hint: '板幅の中央の板厚（h0）から端の板厚を引いた差。幅方向に 2 次曲線。負なら中央が薄い。板厚の半分まで' },
   { key: 'barrel', group: 'bend', query: 'barrel3', label: 'バレル長', unit: 'mm', step: 10, min: 2, max: 5000, scale: mm, hint: 'ロールの胴の長さ。板幅の 1.5 倍以上（幅広がりの余裕）。板は胴の中央' },
   { key: 'span', group: 'bend', query: 'span3', label: '支点間距離', unit: 'mm', step: 10, min: 2, max: 6000, scale: mm, hint: '軸受の中心の間。バレル長より長く、胴の外に張り出した分だけ撓みが増える' },
 ];
@@ -98,7 +101,7 @@ const NUMBERS: NumberField[] = [
 const BARREL_OVER = 1.5;
 const FIELD = Object.fromEntries(NUMBERS.map((f) => [f.key, f])) as Record<NumberField['key'], NumberField>;
 
-const DEFAULTS: SolidPageSettings = { width: 8 * mm, length: 12 * mm, cells: 4, planeStrain: false, bend: false, barrel: 300 * mm, support: 'barrel', span: 400 * mm };
+const DEFAULTS: SolidPageSettings = { width: 8 * mm, length: 12 * mm, cells: 4, planeStrain: false, crown: 0, bend: false, barrel: 300 * mm, support: 'barrel', span: 400 * mm };
 
 function checked(s: SolidPageSettings): SolidPageSettings {
   const clamp = (v: number, f: NumberField, lo = f.min * f.scale) => Math.min(f.max * f.scale, Math.max(lo, v));
@@ -107,7 +110,7 @@ function checked(s: SolidPageSettings): SolidPageSettings {
   // the strip fits on the barrel with room for its spread (a tandem's later stands are wider), and the bearings are beyond the barrel's ends
   const barrel = clamp(s.barrel, FIELD.barrel, BARREL_OVER * width);
   const span = clamp(s.span, FIELD.span, barrel);
-  return { width, length: clamp(s.length, FIELD.length), cells, planeStrain: s.planeStrain, bend: s.bend, barrel, support: s.support === 'bearing' ? 'bearing' : 'barrel', span };
+  return { width, length: clamp(s.length, FIELD.length), cells, planeStrain: s.planeStrain, crown: clamp(s.crown, FIELD.crown), bend: s.bend, barrel, support: s.support === 'bearing' ? 'bearing' : 'barrel', span };
 }
 
 /** what the solver is told about the roll's bending: nothing with a rigid roll */
@@ -584,7 +587,7 @@ export class SolidMode {
     for (const k of ['L', 'cells']) q.delete(k);
     q.set('dim', '3');
     const s = this.settings;
-    for (const f of NUMBERS) if (f.group === 'strip' || (s.bend && (f.key === 'barrel' || s.support === 'bearing'))) q.set(f.query, String(+(s[f.key] / f.scale).toFixed(3)));
+    for (const f of NUMBERS) if ((f.group === 'strip' && (f.key !== 'crown' || s.crown !== 0)) || (s.bend && (f.key === 'barrel' || s.support === 'bearing'))) q.set(f.query, String(+(s[f.key] / f.scale).toFixed(3)));
     if (s.planeStrain) q.set('ps3', '1');
     if (s.bend) q.set('bend3', '1');
     if (s.bend && s.support === 'bearing') q.set('support3', 'bearing');
@@ -668,7 +671,8 @@ export class SolidMode {
     this.awaitingReady = true;
     this.tape.clear();
     this.stopReplay();
-    const solid: SolidSettings = { width: this.settings.width, planeStrain: this.settings.planeStrain, rollBend: rollBendOf(this.settings) };
+    const crown = Math.max(-0.5 * P.rolling.h0, Math.min(0.5 * P.rolling.h0, this.settings.crown));
+    const solid: SolidSettings = { width: this.settings.width, planeStrain: this.settings.planeStrain, rollBend: rollBendOf(this.settings), ...(crown !== 0 ? { crownIn: crown } : {}) };
     this.send({ type: 'init', params: P, solid, stands: P.rolling.stands ?? 1, handoff: P.rolling.handoff ?? 'done', stopAfter: this.stopAfter });
     this.standTable.update(1, [], 0, false, null, null);
     this.explorer.reset();
@@ -1005,6 +1009,9 @@ export class SolidMode {
       ['幅広がり W1/W0 − 1', num(halfW != null ? (2 * halfW) / W0 - 1 : undefined, 100, 2), '%', !steady],
       ['出側板厚（板幅の中央）', num(centre, 1e3, 4), 'mm', !steady],
       ['出側板厚（端）', num(edge, 1e3, 4), 'mm', false],
+      ['入側の板クラウン', num(g.crownIn, 1e6, 1), 'µm', false],
+      ['出側の板クラウン', num(steady ? st.crownOut : undefined, 1e6, 1), 'µm', !steady],
+      ['平坦度（中央 − 端）', num(steady ? st.flatness[0] - st.flatness[st.flatness.length - 1] : undefined, 1, 0), 'I 単位', !steady],
       ['先進率', num(steady ? st.forwardSlip : undefined, 100, 2), '%', false],
       ...(adjusted
         ? ([
@@ -1123,6 +1130,12 @@ export class SolidMode {
     this.drawWidthCharts();
   }
 
+  /** the charts' canvases changed size (the splitter under the drawing): redraw them */
+  chartsResized(): void {
+    this.dirty = this.chartsDirty = true;
+    this.view.resize();
+  }
+
   /** the steady means the width graphs show: the running stand's, or until it has any the last stand's that had */
   private shownSteady(): { st: SolidSteady; g: SolidGeometry } | null {
     const now = this.last?.diag.steady;
@@ -1169,7 +1182,71 @@ export class SolidMode {
       yRange: [0, Math.max(g.slabForce * 1e-6 * 1.5, ...q) || 1],
     });
     if (!st) this.emptyNote(this.$<HTMLCanvasElement>('solid-chart-width'));
+    this.drawProfileCharts(st, g, tag);
     this.drawPressureMap(st, g, tag);
+  }
+
+  /**
+   * The crown across the width, the thickness less the edge's [µm], at the entry (the input's parabola) and at the
+   * exit (steady), and the exit's flatness. The thicknesses themselves differ by the reduction, which would hide a
+   * crown of a few µm; the results table has them
+   */
+  private drawProfileCharts(st: SolidSteady | null, g: SolidGeometry, tag: string): void {
+    const hw0 = g.halfWidth0 / mm;
+    // the entry: crown (1 − (z / hw)²), mirrored
+    const zIn: number[] = [];
+    const hIn: number[] = [];
+    for (let i = -20; i <= 20; i++) {
+      const z = (i / 20) * hw0;
+      zIn.push(z);
+      hIn.push(g.crownIn * (1 - (i / 20) ** 2) * 1e6);
+    }
+    // the exit by lattice column, at the columns' z (they spread), mirrored
+    const mirror = (z: ArrayLike<number>, v: ArrayLike<number>): { x: number[]; y: number[] } => {
+      const x: number[] = [];
+      const y: number[] = [];
+      for (let k = z.length - 1; k >= 0; k--) if (Number.isFinite(v[k]) && Number.isFinite(z[k])) (x.push(-z[k] / mm), y.push(v[k]));
+      for (let k = 0; k < z.length; k++) if (Number.isFinite(v[k]) && Number.isFinite(z[k])) (x.push(z[k] / mm), y.push(v[k]));
+      return { x, y };
+    };
+    // the columns' thicknesses carry the lattice's stripes across the width (±2 µm at 4 cells): three columns are averaged
+    const smooth = (v: number[]): number[] => v.map((_, k) => {
+      const w = v.slice(Math.max(0, k - 1), k + 2).filter(Number.isFinite);
+      return w.length ? w.reduce((a, b) => a + b, 0) / w.length : NaN;
+    });
+    const hOut = st ? smooth(st.halfThickness) : [];
+    const hEdge = hOut.length ? hOut[hOut.length - 1] : 0;
+    const out = st ? mirror(st.exitZ, hOut.map((v) => 2 * (v - hEdge) * 1e6)) : { x: [], y: [] };
+    const all = [...hIn, ...out.y, 0];
+    const lo = Math.min(...all);
+    const hi = Math.max(...all);
+    const pad = Math.max((hi - lo) * 0.25, 5);
+    const steadyLabel = tag ? `出側（定常の平均、${tag}）` : '出側（定常の平均）';
+    drawChart(this.$<HTMLCanvasElement>('solid-chart-crown'), {
+      xLabel: '板幅方向の位置 z [mm]',
+      yLabel: '板厚 − 端の板厚 [µm]',
+      series: [
+        { x: zIn, y: hIn, color: STEEL, label: '入側', dash: [4, 3] },
+        { x: out.x, y: out.y, color: INK, label: steadyLabel },
+      ],
+      hmarks: [{ y: 0, label: '端' }],
+      xRange: [-hw0 * 1.25, hw0 * 1.25],
+      yRange: [lo - pad, hi + pad],
+    });
+    const fl = st ? mirror(st.exitZ, smooth(st.flatness)) : { x: [], y: [] };
+    const span = Math.max(50, ...fl.y.map(Math.abs)) * 1.3;
+    drawChart(this.$<HTMLCanvasElement>('solid-chart-flat'), {
+      xLabel: '板幅方向の位置 z [mm]',
+      yLabel: '平坦度 [I 単位]',
+      series: [{ x: fl.x, y: fl.y, color: INK, label: steadyLabel }],
+      hmarks: [{ y: 0, label: '平均' }],
+      xRange: [-hw0 * 1.25, hw0 * 1.25],
+      yRange: [-span, span],
+    });
+    if (!st) {
+      this.emptyNote(this.$<HTMLCanvasElement>('solid-chart-crown'));
+      this.emptyNote(this.$<HTMLCanvasElement>('solid-chart-flat'));
+    }
   }
 
   /** a graph of steady means, before there are any: say when it comes (or that it did not) */
@@ -1377,6 +1454,8 @@ export class SolidMode {
       get frameShown() {
         return self.shownFrame();
       },
+      /** the chart canvases changed size (a splitter moved): redraw them */
+      chartsResized: () => self.chartsResized(),
       /** the tape written to a video file and downloaded: what was written (null: nothing) */
       video: () => self.saveVideo().then((r) => (r ? { name: r.name, ext: r.ext, width: r.width, height: r.height, frames: r.frames, seconds: r.seconds, bytes: r.blob.size } : null)),
       get videoBusy() {
