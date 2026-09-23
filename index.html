@@ -9,6 +9,7 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
       href="https://fonts.googleapis.com/css2?family=BIZ+UDPGothic:wght@400;700&family=Shippori+Mincho+B1:wght@600;800&display=swap"
+      crossorigin
       rel="stylesheet"
     />
     <link rel="stylesheet" href="/src/styles.css" />
@@ -34,6 +35,8 @@
       <div class="clock" aria-live="off">
         <span class="eta" id="eta"></span>
         <span id="clock"></span>
+        <!-- how often the workers send a frame to draw (src/app/frameRate.ts); takes effect at the next frame -->
+        <label class="frame-rate" title="ワーカーが絵を送る間隔。計算中でも次の絵から効く。少なくすると描画に取られる分だけ計算が進む">描画の更新 <select id="frame-rate"></select></label>
       </div>
       <!-- the two models, as index tabs standing on the masthead's rule (src/app/solidMode.ts) -->
       <nav class="dim-tabs" id="dim-tabs" role="tablist" aria-label="計算の次元"></nav>

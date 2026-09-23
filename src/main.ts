@@ -26,6 +26,7 @@ import { ChartSummary } from './app/chartSummary.ts';
 import { PresetNote } from './app/presetNote.ts';
 import { radioGroup } from './app/radioGroup.ts';
 import { say } from './app/liveText.ts';
+import { frameMs, mountFrameRate, onFrameMs, setFrameMs } from './app/frameRate.ts';
 import { Eta, etaText, standGrowth } from './app/eta.ts';
 import { SteadyForce, SteadyProfile, drawForceChart, drawHillChart, slabRatio, type HillStand, type HillChartData, type Profile, slabReference, type ForceChartData, type StandStart } from './app/slabOverlay.ts';
 
@@ -234,6 +235,7 @@ function send(m: ToWorker) {
 
 function startWorker() {
   worker = new Worker(new URL('./app/sim.worker.ts', import.meta.url), { type: 'module' });
+  send({ type: 'frame-ms', ms: frameMs() });
   worker.onmessage = (e: MessageEvent<FromWorker>) => {
     const m = e.data;
     if (m.type === 'ready') {
@@ -646,6 +648,13 @@ window.__mpm = {
   get frames() {
     return frames;
   },
+  /** the interval between the workers' frames [ms] (0: each worker's own; src/app/frameRate.ts). Settable: as the masthead's select */
+  get frameMs() {
+    return frameMs();
+  },
+  set frameMs(ms: number) {
+    setFrameMs(ms);
+  },
   /** the time left [s] the section view shows (null before there is a rate to go by) */
   get eta() {
     return eta.seconds;
@@ -780,6 +789,13 @@ window.__mpm = {
 };
 
 startWorker();
+// the frame interval: the masthead's select, sent to every worker as it changes (each mode sends it to its own worker as well when it starts one)
+mountFrameRate(document.getElementById('frame-rate') as HTMLSelectElement);
+onFrameMs((ms) => {
+  send({ type: 'frame-ms', ms });
+  plan.frameMs(ms);
+  solid.frameMs(ms);
+});
 setField(field);
 restart();
 requestAnimationFrame(frameLoop);

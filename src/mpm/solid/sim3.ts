@@ -32,6 +32,7 @@ import { beamDeflection, type Beam } from './rollBend.ts';
 import { CTL_EVERY, CTL_TOL_H, CTL_TOL_R, presetRolls } from '../solver.ts';
 import { adiabaticRise, elasticConstants, hmFractureStrain, homologousTemperature, jcFractureStrain, plasticIncrement, staticStrength, strengthFactor, type Elastic } from '../material.ts';
 import { GpuStepper } from './gpu/stepper.ts';
+import { f64, grid3Buffers, grid3From, makeGrid3, u8, PHASES, PH_FOLA, PH_FOLB, PH_G2PU, PH_G2PV, PH_GRID, PH_P2G, PH_VMEAN, PT_COUNT, PT_FIRST, PT_FY, PT_IXHI, PT_IXLO, PT_NFAIL, PT_TQ, PT_WORK, SY_BACK_NOW, SY_BACK_SCALE, SY_BOUNDS, SY_COUNT, SY_CY, SY_FRONT_NOW, SY_FRONT_SCALE, SY_IXHI, SY_IXLO, SY_IXPREVHI, SY_IXPREVLO, SY_OMEGA, SY_PUSHING, SY_R, SY_STEP, SY_T, SY_VCY, SY_VR, type Grid3, type Grid3Buffers } from './grid3.ts';
 import { PSTRIDE, P_ACTIVE, P_C, P_DCL, P_DHM, P_DJC, P_EP, P_ETA, P_F, P_FAILED, P_FAILSTEP, P_MASS, P_PRES, P_S, P_SEQ, P_STR, P_STREP, P_TEMP, P_TH, P_TOUCH, P_V, P_VOL0, P_VR, P_WORK, P_X, P_YSIZE, U, U_INTS } from './gpu/kernels.ts';
 
 export interface SolidSettings {
@@ -110,6 +111,47 @@ export function solidScales(P: SimParams): { h: number; dt: number; contactLengt
   const c = Math.sqrt((el.K + (4 / 3) * el.G) / rho);
   return { h, dt: (num.cfl * h) / (c + 1.5 * r.rollSpeed), contactLength: Lc, xExitProbe: Math.max(6 * h, Math.min(3 * r.h0, 2 * Lc)), vIn: r.rollSpeed * (1 - r.reduction), rollsAdjusted: start.adjusted };
 }
+
+/** the particle arrays of a Sim3 by name (a worker of a team attaches to the coordinator's) */
+export type ParticleBuffers = Record<string, ArrayBufferLike>;
+
+/** everything a team's worker shares with the coordinator: the state, the grids and the blocks of sums */
+export interface Sim3Buffers {
+  particles: ParticleBuffers;
+  bend: ArrayBufferLike;
+  bendVel: ArrayBufferLike;
+  ySize: ArrayBufferLike;
+  sync: ArrayBufferLike;
+  part: ArrayBufferLike;
+  accFz: ArrayBufferLike;
+  accMap: ArrayBufferLike;
+  stepFz: ArrayBufferLike;
+  main: Grid3Buffers;
+  own: Grid3Buffers;
+  left: Grid3Buffers | null;
+}
+
+/** what a worker of a team hands back after a step (views on its shared blocks) */
+export interface TeamSums {
+  part: Float64Array;
+  accFz: Float64Array;
+  accMap: Float64Array;
+  stepFz: Float64Array;
+}
+
+export interface Sim3Options {
+  /** the arrays on SharedArrayBuffers: the coordinator of a team (team.ts) */
+  shared?: boolean;
+  /** a worker of a team: the arrays are the coordinator's, no points are made */
+  attach?: Sim3Buffers;
+  /** this worker's place in the team (0: the coordinator, which also steps its share) and the team's size */
+  rank?: number;
+  size?: number;
+}
+
+/** the names of the Float64 particle arrays (shared with a team's workers as they are) */
+const PARTICLE_F64 = ['px', 'py', 'pz', 'vx', 'vy', 'vz', 'C', 'F', 'mass', 'vol0', 'sxx', 'syy', 'szz', 'sxy', 'syz', 'szx', 'pres', 'ep', 'temp', 'seq', 'eta', 'dJC', 'dHM', 'dCL', 'strength', 'strengthEp', 'vr', 'th'] as const;
+const PARTICLE_U8 = ['active', 'failed', 'touch', 'owner'] as const;
 
 export class Sim3 {
   readonly params: Solid3Params;
@@ -228,27 +270,37 @@ export class Sim3 {
   readonly active: Uint8Array;
   readonly failed: Uint8Array;
   readonly touch: Uint8Array;
+  /**
+   * the worker whose point it is this step (rank + 1; 0 none yet), decided by its base cell column at the scatter
+   * (p2g). The later stages go by this, not by the position: the update moves the point, and a neighbour that reads
+   * the moved position in the same stage would take the point as its own and update it twice (a race, seen)
+   */
+  readonly owner: Uint8Array;
   private readonly strength: Float64Array;
   private readonly strengthEp: Float64Array;
   private readonly vr: Float64Array;
   private readonly th: Float64Array;
 
-  private readonly gm: Float64Array;
-  private readonly gvx: Float64Array;
-  private readonly gvy: Float64Array;
-  private readonly gvz: Float64Array;
-  private readonly gpen: Float64Array;
-  private readonly gpush: Uint8Array;
-  private readonly gcon: Uint8Array;
-  private readonly gslipX: Float64Array;
-  private readonly gslipY: Float64Array;
-  private readonly gslipZ: Float64Array;
-  private readonly gfolN: Float64Array;
-  private readonly gfolD: Float64Array;
-  private readonly gTh: Float64Array;
-  private readonly gJe: Float64Array;
-  private readonly gB: Float64Array;
-  private readonly gMv: Float64Array;
+  /**
+   * The grid the stages scatter into (g) and the one they gather from and update the nodes of (G). Alone they are
+   * the same arrays. In a team (team.ts) every worker scatters its own points into its own copy g, and the owner of
+   * a column of nodes sums the copies into the main grid G: its own and the copy of the worker below it (left),
+   * whose points reach two of its columns. The nodes' update and the gathers then read G.
+   */
+  private readonly g: Grid3;
+  private readonly G: Grid3;
+  private readonly left: Grid3 | null;
+  /** this worker's columns: the points whose base cell column is in [pLo, pHi), and the nodes of those columns */
+  private pLo = -1e9;
+  private pHi = 1e9;
+  readonly rank: number;
+  readonly size: number;
+  /** the sync block the coordinator writes for the team's stages (grid3.ts SY_*) and this worker's partial sums (PT_*) */
+  readonly sync: Float64Array;
+  readonly part: Float64Array;
+  /** the columns this worker's points scattered into last step (zeroed before the next scatter) */
+  private ownPrevLo = 0;
+  private ownPrevHi: number;
   private ixLo = 0;
   private ixHi = 0;
   private ixPrevLo = 0;
@@ -272,8 +324,12 @@ export class Sim3 {
   /** the uniform block's constant part, filled when the GPU is attached */
   private gpuBase: ArrayBuffer | null = null;
 
-  constructor(input: Solid3Params) {
+  constructor(input: Solid3Params, opts: Sim3Options = {}) {
     const P: Solid3Params = { ...cloneParams(input), solid: { ...input.solid } };
+    const attach = opts.attach ?? null;
+    const shared = opts.shared === true || attach !== null;
+    this.rank = opts.rank ?? 0;
+    this.size = opts.size ?? 1;
     this.params = P;
     const r = P.rolling;
     const num = P.numerics;
@@ -302,23 +358,23 @@ export class Sim3 {
     // room for the spread: a quarter of the half width, and four cells
     this.nzN = Math.ceil((hw * 1.25 + 4 * h) / h) + 2;
     const NN = this.nxN * this.nyN * this.nzN;
-    this.gm = new Float64Array(NN);
-    this.gvx = new Float64Array(NN);
-    this.gvy = new Float64Array(NN);
-    this.gvz = new Float64Array(NN);
-    this.gpen = new Float64Array(NN).fill(INF);
-    this.gpush = new Uint8Array(NN);
-    this.gcon = new Uint8Array(NN);
-    this.gslipX = new Float64Array(NN);
-    this.gslipY = new Float64Array(NN);
-    this.gslipZ = new Float64Array(NN);
-    this.gfolN = new Float64Array(NN);
-    this.gfolD = new Float64Array(NN);
-    this.gTh = new Float64Array(NN);
-    this.gJe = new Float64Array(NN);
-    this.gB = new Float64Array(NN);
-    this.gMv = new Float64Array(NN);
+    if (attach) {
+      this.G = grid3From(attach.main);
+      this.g = grid3From(attach.own);
+      this.left = attach.left ? grid3From(attach.left) : null;
+      this.sync = new Float64Array(attach.sync);
+      this.part = new Float64Array(attach.part);
+    } else {
+      this.G = makeGrid3(NN, shared);
+      // a team's coordinator scatters into a copy of its own like the workers; alone, into the grid itself
+      this.g = this.size > 1 ? makeGrid3(NN, shared) : this.G;
+      this.left = null;
+      this.sync = f64(SY_COUNT, shared);
+      this.part = f64(PT_COUNT, shared);
+      this.part[PT_FIRST] = -1;
+    }
     this.ixPrevHi = this.nxN;
+    this.ownPrevHi = this.nxN;
 
     const R = start.R;
     this.roll = { cy: R + this.gap / 2, R, omega: r.rollSpeed / R, vR: 0, vcy: 0 };
@@ -328,9 +384,9 @@ export class Sim3 {
       if (span < P.solid.width) throw new Error('the strip is wider than the distance between the roll supports');
       this.beam = { D: 2 * r.rollRadius, span, E: r.rollE ?? ROLL_E, nu: r.rollNu ?? ROLL_NU };
     } else this.beam = null;
-    this.bend = new Float64Array(this.nzN);
-    this.bendVel = new Float64Array(this.nzN);
-    this.stepFz = new Float64Array(this.nzN);
+    this.bend = attach ? new Float64Array(attach.bend) : f64(this.nzN, shared);
+    this.bendVel = attach ? new Float64Array(attach.bendVel) : f64(this.nzN, shared);
+    this.stepFz = attach ? new Float64Array(attach.stepFz) : f64(this.nzN, shared);
     this.bendQ = new Float64Array(this.nzN);
     this.bendSettled = this.beam === null;
     this.xExitProbe = Math.max(6 * h, Math.min(3 * r.h0, 2 * Lc));
@@ -359,38 +415,42 @@ export class Sim3 {
     this.NK = NK;
     const n = NI * NJ * NK;
     this.n = n;
-    const A = () => new Float64Array(n);
-    this.px = A();
-    this.py = A();
-    this.pz = A();
-    this.vx = A();
-    this.vy = A();
-    this.vz = A();
-    this.C = new Float64Array(9 * n);
-    this.F = new Float64Array(9 * n);
-    this.mass = A();
-    this.vol0 = A();
-    this.sxx = A();
-    this.syy = A();
-    this.szz = A();
-    this.sxy = A();
-    this.syz = A();
-    this.szx = A();
-    this.pres = A();
-    this.ep = A();
-    this.temp = A();
-    this.seq = A();
-    this.eta = A();
-    this.dJC = A();
-    this.dHM = A();
-    this.dCL = A();
-    this.strength = A();
-    this.strengthEp = A().fill(NaN);
-    this.vr = A();
-    this.th = A();
-    this.active = new Uint8Array(n).fill(1);
-    this.failed = new Uint8Array(n);
-    this.touch = new Uint8Array(n);
+    const pb = attach?.particles ?? null;
+    const A = (name: string, k = 1) => (pb ? new Float64Array(pb[name]) : f64(k * n, shared));
+    this.px = A('px');
+    this.py = A('py');
+    this.pz = A('pz');
+    this.vx = A('vx');
+    this.vy = A('vy');
+    this.vz = A('vz');
+    this.C = A('C', 9);
+    this.F = A('F', 9);
+    this.mass = A('mass');
+    this.vol0 = A('vol0');
+    this.sxx = A('sxx');
+    this.syy = A('syy');
+    this.szz = A('szz');
+    this.sxy = A('sxy');
+    this.syz = A('syz');
+    this.szx = A('szx');
+    this.pres = A('pres');
+    this.ep = A('ep');
+    this.temp = A('temp');
+    this.seq = A('seq');
+    this.eta = A('eta');
+    this.dJC = A('dJC');
+    this.dHM = A('dHM');
+    this.dCL = A('dCL');
+    this.strength = A('strength');
+    this.strengthEp = A('strengthEp');
+    if (!pb) this.strengthEp.fill(NaN);
+    this.vr = A('vr');
+    this.th = A('th');
+    this.active = pb ? new Uint8Array(pb.active) : u8(n, shared);
+    if (!pb) this.active.fill(1);
+    this.failed = pb ? new Uint8Array(pb.failed) : u8(n, shared);
+    this.touch = pb ? new Uint8Array(pb.touch) : u8(n, shared);
+    this.owner = pb ? new Uint8Array(pb.owner) : u8(n, shared);
 
     this.vIn = r.rollSpeed * (1 - r.reduction);
     const rho = P.material.rho * num.massScale;
@@ -401,10 +461,11 @@ export class Sim3 {
     // is dp ySize[k] wherever a point's extent matters (section, exitMeasure, the drawn faces)
     const crown = P.solid.crownIn ?? 0;
     if (Math.abs(crown) >= r.h0) throw new Error('the entry crown must be smaller than the thickness');
-    this.ySize = new Float64Array(NK);
-    for (let k = 0; k < NK; k++) this.ySize[k] = 1 - (crown * ((k + 0.5) * dz) ** 2) / (hw * hw * r.h0);
+    this.ySize = attach ? new Float64Array(attach.ySize) : f64(NK, shared);
+    if (!attach) for (let k = 0; k < NK; k++) this.ySize[k] = 1 - (crown * ((k + 0.5) * dz) ** 2) / (hw * hw * r.h0);
     let p = 0;
-    for (let i = 0; i < NI; i++) {
+    // a team's worker attaches to the coordinator's points
+    if (!attach) for (let i = 0; i < NI; i++) {
       for (let j = 0; j < NJ; j++) {
         for (let k = 0; k < NK; k++, p++) {
           const sy = this.ySize[k];
@@ -434,8 +495,27 @@ export class Sim3 {
 
     this.binCol0 = Math.round((-Lc - 3 * h - this.ox) / h);
     this.nBinsX = Math.ceil((Lc + 6 * h) / h);
-    this.accFz = new Float64Array(this.nzN);
-    this.accMap = new Float64Array(this.nBinsX * this.nzN);
+    this.accFz = attach ? new Float64Array(attach.accFz) : f64(this.nzN, shared);
+    this.accMap = attach ? new Float64Array(attach.accMap) : f64(this.nBinsX * this.nzN, shared);
+  }
+
+  /** the coordinator's shared arrays for a worker of the team (team.ts adds the worker's own copy of the grid, its neighbour's and its blocks of sums) */
+  shareBuffers(): Omit<Sim3Buffers, 'own' | 'left' | 'part' | 'accFz' | 'accMap' | 'stepFz'> {
+    if (!(this.px.buffer instanceof SharedArrayBuffer)) throw new Error('the arrays are not shared (Sim3Options.shared)');
+    const particles: ParticleBuffers = {};
+    for (const k of PARTICLE_F64) particles[k] = (this[k] as Float64Array).buffer;
+    for (const k of PARTICLE_U8) particles[k] = (this[k] as Uint8Array).buffer;
+    return { particles, bend: this.bend.buffer, bendVel: this.bendVel.buffer, ySize: this.ySize.buffer, sync: this.sync.buffer, main: grid3Buffers(this.G) };
+  }
+
+  /** the coordinator's own copy of the grid (the worker of rank 1 reads it as its left neighbour) */
+  ownGridBuffers(): Grid3Buffers {
+    return grid3Buffers(this.g);
+  }
+
+  /** the number of nodes (the size of a grid copy) */
+  get nodeCount(): number {
+    return this.nxN * this.nyN * this.nzN;
   }
 
   /** spacing of the points across the width [m] */
@@ -445,34 +525,277 @@ export class Sim3 {
     return (i * this.NJ + j) * this.NK + k;
   }
 
+  /** one step alone: the stages in order (a team runs the same stages on every worker, team.ts) */
   advance(): void {
-    const slab = this.nyN * this.nzN;
-    const lo = this.ixPrevLo * slab;
-    const hi = this.ixPrevHi * slab;
-    this.gm.fill(0, lo, hi);
-    this.gvx.fill(0, lo, hi);
-    this.gvy.fill(0, lo, hi);
-    this.gvz.fill(0, lo, hi);
-    this.gpen.fill(INF, lo, hi);
-    this.gpush.fill(0, lo, hi);
-    this.gcon.fill(0, lo, hi);
-    this.gTh.fill(0, lo, hi);
-    this.gJe.fill(0, lo, hi);
-    this.gB.fill(0, lo, hi);
-    this.gMv.fill(0, lo, hi);
+    this.beginStep();
+    for (let ph = 0; ph < PHASES; ph++) {
+      this.runPhase(ph);
+      this.afterPhase(ph, []);
+    }
+    this.finishStep([]);
+  }
+
+  /** the coordinator's start of a step: the pusher, the stall check, the tensions, the team's columns, the sync block */
+  beginStep(): void {
     if (this.pusherActive && this.headX() > this.xExitProbe) this.pusherActive = false;
     if (!this.pusherActive && !this.stalled && this.step % 200 === 0) this.checkStall();
     this.updateTension();
-    this.p2g();
-    this.gridUpdate();
-    this.g2pVelocity();
-    this.g2pUpdate();
+    if (this.size > 1 && this.step % 20 === 0) this.partition();
+    this.pushSync();
+  }
+
+  /**
+   * The team's columns: [ixPrevLo, ixPrevHi) cut into `size` runs of columns holding about the same number of points
+   * (their base cell columns; the first and last runs open at the ends, so that a point just outside is still
+   * somebody's). Every 20 steps: the points move a small part of a cell in that time.
+   */
+  private partition(): void {
+    const { n, active, px, ox, h, size } = this;
+    const lo = this.ixPrevLo;
+    const hi = Math.max(lo + 1, this.ixPrevHi);
+    const hist = new Int32Array(hi - lo);
+    let total = 0;
+    const invH = 1 / h;
+    for (let p = 0; p < n; p++) {
+      if (!active[p]) continue;
+      let c = Math.floor((px[p] - ox) * invH - 0.5) - lo;
+      if (c < 0) c = 0;
+      else if (c >= hi - lo) c = hi - lo - 1;
+      hist[c]++;
+      total++;
+    }
+    const b = this.sync;
+    b[SY_BOUNDS] = -1e9;
+    let w = 1;
+    let sum = 0;
+    for (let c = 0; c < hi - lo && w < size; c++) {
+      sum += hist[c];
+      if (sum >= (w * total) / size) b[SY_BOUNDS + w++] = lo + c + 1;
+    }
+    for (; w < size; w++) b[SY_BOUNDS + w] = hi;
+    b[SY_BOUNDS + size] = 1e9;
+  }
+
+  /** what the stages read of the coordinator's state, for the workers (and this instance's own columns) */
+  private pushSync(): void {
+    const b = this.sync;
+    b[SY_CY] = this.roll.cy;
+    b[SY_R] = this.roll.R;
+    b[SY_OMEGA] = this.roll.omega;
+    b[SY_VR] = this.roll.vR;
+    b[SY_VCY] = this.roll.vcy;
+    b[SY_PUSHING] = this.pusherActive ? 1 : 0;
+    b[SY_BACK_NOW] = this.backNow;
+    b[SY_BACK_SCALE] = this.backScale;
+    b[SY_FRONT_NOW] = this.frontNow;
+    b[SY_FRONT_SCALE] = this.frontScale;
+    b[SY_T] = this.t;
+    b[SY_STEP] = this.step;
+    b[SY_IXLO] = this.ixLo;
+    b[SY_IXHI] = this.ixHi;
+    b[SY_IXPREVLO] = this.ixPrevLo;
+    b[SY_IXPREVHI] = this.ixPrevHi;
+    if (this.size > 1) {
+      this.pLo = b[SY_BOUNDS + this.rank];
+      this.pHi = b[SY_BOUNDS + this.rank + 1];
+    }
+  }
+
+  /** a worker's read of the sync block before a stage */
+  private pullSync(): void {
+    const b = this.sync;
+    this.roll.cy = b[SY_CY];
+    this.roll.R = b[SY_R];
+    this.roll.omega = b[SY_OMEGA];
+    this.roll.vR = b[SY_VR];
+    this.roll.vcy = b[SY_VCY];
+    this.pusherActive = b[SY_PUSHING] === 1;
+    this.backNow = b[SY_BACK_NOW];
+    this.backScale = b[SY_BACK_SCALE];
+    this.frontNow = b[SY_FRONT_NOW];
+    this.frontScale = b[SY_FRONT_SCALE];
+    this.t = b[SY_T];
+    this.step = b[SY_STEP];
+    this.ixLo = b[SY_IXLO];
+    this.ixHi = b[SY_IXHI];
+    this.ixPrevLo = b[SY_IXPREVLO];
+    this.ixPrevHi = b[SY_IXPREVHI];
+    this.pLo = b[SY_BOUNDS + this.rank];
+    this.pHi = b[SY_BOUNDS + this.rank + 1];
+  }
+
+  /** the first and one past the last of this worker's columns among the active ones */
+  private get colLo(): number {
+    return Math.max(this.ixLo, this.pLo);
+  }
+  private get colHi(): number {
+    return Math.min(this.ixHi, this.pHi);
+  }
+
+  /** one stage of the step over this worker's points and columns (grid3.ts PH_*) */
+  runPhase(ph: number): void {
+    // a worker reads the coordinator's sync block before every stage (the active columns change after the scatter)
+    if (this.rank > 0) this.pullSync();
+    switch (ph) {
+      case PH_P2G:
+        this.zeroOwn();
+        this.p2g();
+        break;
+      case PH_GRID:
+        this.reduce(['m', 'vx', 'vy', 'vz'], 'pen', 'push');
+        this.zeroMainContact();
+        this.foldMomentum();
+        this.gridNodes();
+        break;
+      case PH_FOLA:
+        this.followScatter();
+        break;
+      case PH_FOLB:
+        this.reduce(['folN', 'folD']);
+        this.followNodes();
+        this.mirrorBack();
+        break;
+      case PH_G2PV:
+        this.g2pVelocity();
+        break;
+      case PH_VMEAN:
+        this.reduce(['Th', 'Je', 'B', 'Mv']);
+        this.volumeMeans();
+        break;
+      case PH_G2PU:
+        this.g2pUpdate();
+        break;
+    }
+  }
+
+  /** the coordinator, after a stage of every worker: the active columns from the scatters (the workers read them at the next stage) */
+  afterPhase(ph: number, parts: Float64Array[]): void {
+    if (ph !== PH_P2G) return;
+    let lo = this.part[PT_IXLO];
+    let hi = this.part[PT_IXHI];
+    for (const q of parts) {
+      if (q[PT_IXLO] < lo) lo = q[PT_IXLO];
+      if (q[PT_IXHI] > hi) hi = q[PT_IXHI];
+    }
+    if (hi < 0) {
+      this.ixLo = 0;
+      this.ixHi = 0;
+    } else {
+      this.ixLo = Math.max(0, lo);
+      this.ixHi = Math.min(this.nxN, hi + 3);
+    }
+    this.sync[SY_IXLO] = this.ixLo;
+    this.sync[SY_IXHI] = this.ixHi;
+  }
+
+  /**
+   * The coordinator's end of a step: the workers' sums merged (the force on the roll, the plastic work, the failed
+   * points and the first of them, the force by column and cell), the controls, the clock.
+   */
+  finishStep(helpers: TeamSums[]): void {
+    const own = this.part;
+    let fy = own[PT_FY];
+    let tq = own[PT_TQ];
+    let work = own[PT_WORK];
+    let nFailed = own[PT_NFAIL];
+    let first = own[PT_FIRST];
+    for (const hlp of helpers) {
+      const q = hlp.part;
+      fy += q[PT_FY];
+      tq += q[PT_TQ];
+      work += q[PT_WORK];
+      nFailed += q[PT_NFAIL];
+      if (q[PT_FIRST] >= 0 && (first < 0 || q[PT_FIRST] < first)) first = q[PT_FIRST];
+      for (let i = 0; i < this.accFz.length; i++) this.accFz[i] += hlp.accFz[i];
+      for (let i = 0; i < this.accMap.length; i++) this.accMap[i] += hlp.accMap[i];
+      for (let i = 0; i < this.stepFz.length; i++) this.stepFz[i] += hlp.stepFz[i];
+      hlp.accFz.fill(0);
+      hlp.accMap.fill(0);
+      hlp.stepFz.fill(0);
+      q.fill(0, PT_FY, PT_COUNT);
+      q[PT_FIRST] = -1;
+    }
+    own.fill(0, PT_FY, PT_COUNT);
+    own[PT_FIRST] = -1;
+    // the sheet pushes the roll up: the force on the roll is minus the force on the sheet
+    this.accFy += -fy;
+    this.accTq += tq;
+    if (!this.rollsSettled) this.ctlForce += ((-2 * fy) / this.ctlWidth - this.ctlForce) * Math.min(1, this.dt / this.ctlTauF);
+    this.accSteps++;
+    this.plasticWork += work;
+    this.nFailed += nFailed;
+    if (first >= 0 && !this.firstCrack) this.recordFirstCrack(first);
     this.ixPrevLo = this.ixLo;
     this.ixPrevHi = this.ixHi;
     this.t += this.dt;
     this.step++;
     if (!this.rollsSettled) this.adjustRolls();
     if (this.beam) this.updateBend();
+  }
+
+  /** this worker's copy of the grid, cleared where its points scattered last step */
+  private zeroOwn(): void {
+    const slab = this.nyN * this.nzN;
+    const lo = this.ownPrevLo * slab;
+    const hi = this.ownPrevHi * slab;
+    const g = this.g;
+    g.m.fill(0, lo, hi);
+    g.vx.fill(0, lo, hi);
+    g.vy.fill(0, lo, hi);
+    g.vz.fill(0, lo, hi);
+    g.pen.fill(INF, lo, hi);
+    g.push.fill(0, lo, hi);
+    g.con.fill(0, lo, hi);
+    g.folN.fill(0, lo, hi);
+    g.folD.fill(0, lo, hi);
+    g.Th.fill(0, lo, hi);
+    g.Je.fill(0, lo, hi);
+    g.B.fill(0, lo, hi);
+    g.Mv.fill(0, lo, hi);
+  }
+
+  /** the main grid's contact marks of this worker's columns, from last step and this one (alone: done by zeroOwn) */
+  private zeroMainContact(): void {
+    if (this.G === this.g) return;
+    const slab = this.nyN * this.nzN;
+    const lo = Math.max(this.pLo, Math.min(this.ixPrevLo, this.ixLo));
+    const hi = Math.min(this.pHi, Math.max(this.ixPrevHi, this.ixHi));
+    if (hi > lo) this.G.con.fill(0, lo * slab, hi * slab);
+  }
+
+  /**
+   * The team's sums onto the main grid over this worker's columns: its own copy, plus the copy of the worker below
+   * over the two columns its points reach (sums; the penetration the least, the push mark either). Alone: nothing.
+   */
+  private reduce(sum: (keyof Grid3)[], min?: 'pen', or?: 'push'): void {
+    const { g, G, left } = this;
+    if (G === g) return;
+    const slab = this.nyN * this.nzN;
+    const lo = this.colLo;
+    const hi = this.colHi;
+    if (hi <= lo) return;
+    const a = lo * slab;
+    const b = hi * slab;
+    for (const k of sum) G[k].set(g[k].subarray(a, b), a);
+    if (min) G[min].set(g[min].subarray(a, b), a);
+    if (or) G[or].set(g[or].subarray(a, b), a);
+    if (!left) return;
+    const c = Math.min(hi, lo + 2) * slab;
+    for (const k of sum) {
+      const dst = G[k] as Float64Array;
+      const src = left[k] as Float64Array;
+      for (let i = a; i < c; i++) dst[i] += src[i];
+    }
+    if (min) {
+      const dst = G[min];
+      const src = left[min];
+      for (let i = a; i < c; i++) if (src[i] < dst[i]) dst[i] = src[i];
+    }
+    if (or) {
+      const dst = G[or];
+      const src = left[or];
+      for (let i = a; i < c; i++) if (src[i]) dst[i] = 1;
+    }
   }
 
   /**
@@ -826,7 +1149,9 @@ export class Sim3 {
   }
 
   private p2g(): void {
-    const { n, active, px, py, pz, vx, vy, vz, C, F, mass, vol0, gm, gvx, gvy, gvz, gpen, gpush, dt, h, ox, nyN, nzN } = this;
+    const { n, active, px, py, pz, vx, vy, vz, C, F, mass, vol0, dt, h, ox, nyN, nzN, pLo, pHi, owner } = this;
+    const me = this.rank + 1;
+    const { m: gm, vx: gvx, vy: gvy, vz: gvz, pen: gpen, push: gpush } = this.g;
     const { sxx, syy, szz, sxy, syz, szx, pres, touch } = this;
     const invH = 1 / h;
     const k4 = 4 * invH * invH;
@@ -857,6 +1182,8 @@ export class Sim3 {
       const bx = Math.floor(gx - 0.5);
       const by = Math.floor(gy - 0.5);
       const bz = Math.floor(gz - 0.5);
+      if (bx < pLo || bx >= pHi) continue;
+      owner[p] = me;
       if (bx < ixLo) ixLo = bx;
       if (bx > ixHi) ixHi = bx;
       const fx = gx - bx;
@@ -940,19 +1267,23 @@ export class Sim3 {
         }
       }
     }
+    // the columns this worker's points reached (cleared next step), and its share of the active range
+    this.part[PT_IXLO] = ixLo;
+    this.part[PT_IXHI] = ixHi;
     if (ixHi < 0) {
-      this.ixLo = 0;
-      this.ixHi = 0;
+      this.ownPrevLo = 0;
+      this.ownPrevHi = 0;
     } else {
-      this.ixLo = Math.max(0, ixLo);
-      this.ixHi = Math.min(this.nxN, ixHi + 3);
+      this.ownPrevLo = Math.max(0, ixLo);
+      this.ownPrevHi = Math.min(this.nxN, ixHi + 3);
     }
   }
 
   /** the ghost layers (iy = 0, iz = 0) onto their mirror images (iy = 2, iz = 2): sums, the normal momentum negated */
   private foldMomentum(): void {
-    const { gm, gvx, gvy, gvz, gpen, gpush, nyN, nzN } = this;
-    for (let ix = this.ixLo; ix < this.ixHi; ix++) {
+    const { nyN, nzN } = this;
+    const { m: gm, vx: gvx, vy: gvy, vz: gvz, pen: gpen, push: gpush } = this.G;
+    for (let ix = this.colLo, hi = this.colHi; ix < hi; ix++) {
       const col = ix * nyN * nzN;
       for (let iz = 0; iz < nzN; iz++) {
         const g = col + iz; // iy = 0
@@ -981,9 +1312,10 @@ export class Sim3 {
     }
   }
 
-  private gridUpdate(): void {
-    this.foldMomentum();
-    const { gm, gvx, gvy, gvz, gpen, gpush, nyN, nzN, h, ox, dt, accFz, accMap, binCol0, nBinsX } = this;
+  /** the nodes of this worker's columns: the velocities, the contact with the roll (Coulomb), the pusher */
+  private gridNodes(): void {
+    const { nyN, nzN, h, ox, dt, accFz, accMap, binCol0, nBinsX } = this;
+    const { m: gm, vx: gvx, vy: gvy, vz: gvz, pen: gpen, push: gpush, con: gcon, slipX: gslipX, slipY: gslipY, slipZ: gslipZ } = this.G;
     const mu = this.params.rolling.mu;
     const planeStrain = this.params.solid.planeStrain === true;
     const pushing = this.pusherActive;
@@ -998,7 +1330,7 @@ export class Sim3 {
     const mMin = 1e-12 * this.mass[0];
     let fyAcc = 0;
     let tqAcc = 0;
-    for (let ix = this.ixLo; ix < this.ixHi; ix++) {
+    for (let ix = this.colLo, hi = this.colHi; ix < hi; ix++) {
       const xi = ox + ix * h;
       const b = ix - binCol0;
       for (let iy = 1; iy < nyN; iy++) {
@@ -1042,10 +1374,10 @@ export class Sim3 {
               const nvx = ux + s * tx;
               const nvy = uy + s * ty;
               const nvz = s * tz;
-              this.gcon[idx] = 1;
-              this.gslipX[idx] = s * tx;
-              this.gslipY[idx] = s * ty;
-              this.gslipZ[idx] = iz === 1 || planeStrain ? 0 : s * tz;
+              gcon[idx] = 1;
+              gslipX[idx] = s * tx;
+              gslipY[idx] = s * ty;
+              gslipZ[idx] = iz === 1 || planeStrain ? 0 : s * tz;
               const fx = m * (nvx - vx) * invDt;
               const fy = m * (nvy - vy) * invDt;
               fyAcc += fy;
@@ -1066,11 +1398,15 @@ export class Sim3 {
         }
       }
     }
-    const fol = this.followRoll();
-    fyAcc += fol[0];
-    tqAcc += fol[1];
-    // the mirrored velocity back to the ghost layers: iz = 0 from iz = 2, then iy = 0 from iy = 2 (the corner too)
-    for (let ix = this.ixLo; ix < this.ixHi; ix++) {
+    this.part[PT_FY] += fyAcc;
+    this.part[PT_TQ] += tqAcc;
+  }
+
+  /** the mirrored velocity back to the ghost layers: iz = 0 from iz = 2, then iy = 0 from iy = 2 (the corner too) */
+  private mirrorBack(): void {
+    const { nyN, nzN } = this;
+    const { vx: gvx, vy: gvy, vz: gvz } = this.G;
+    for (let ix = this.colLo, hi = this.colHi; ix < hi; ix++) {
       const col = ix * nyN * nzN;
       for (let iy = 1; iy < nyN; iy++) {
         const g = col + iy * nzN;
@@ -1086,11 +1422,6 @@ export class Sim3 {
         gvz[g] = gvz[m];
       }
     }
-    // the sheet pushes the roll up: the force on the roll is minus the force on the sheet
-    this.accFy += -fyAcc;
-    this.accTq += tqAcc;
-    if (!this.rollsSettled) this.ctlForce += ((-2 * fyAcc) / this.ctlWidth - this.ctlForce) * Math.min(1, this.dt / this.ctlTauF);
-    this.accSteps++;
   }
 
   /**
@@ -1100,21 +1431,23 @@ export class Sim3 {
    * 2 % over the gap). Its edge moves along the normal n (axis → point) at (v − u)·n − rp D_nn; what it lacks, over
    * the weight the point puts on its held nodes, is asked of those nodes (the mass-weighted mean of the requests),
    * with Coulomb's share of the added normal impulse taken from a sliding node's slip. A ghost node's request goes
-   * to its mirror image. Returns the force on the sheet along y and the torque on the roll it adds.
+   * to its mirror image. Two stages: the points' requests scattered (followScatter), then the nodes' velocities
+   * (followNodes), which add to the force on the sheet along y and the torque on the roll.
    */
-  private followRoll(): [number, number] {
-    const { n, active, touch, px, py, pz, F, gvx, gvy, gvz, gm, gcon, gfolN, gfolD, gslipX, gslipY, gslipZ, mass, h, ox, nyN, nzN, dt, accFz, accMap, binCol0, nBinsX } = this;
+  private followScatter(): void {
+    const { n, active, touch, px, py, pz, F, mass, h, ox, nyN, nzN, owner } = this;
+    const me = this.rank + 1;
+    const { vx: gvx, vy: gvy, con: gcon } = this.G;
+    const { folN: gfolN, folD: gfolD } = this.g;
     const invH = 1 / h;
     const k4 = 4 * invH * invH;
-    const mu = this.params.rolling.mu;
     const { cy, R, omega } = this.roll;
     const halfDp = 0.5 * this.dp;
     const wx = [0, 0, 0];
     const wy = [0, 0, 0];
     const wz = [0, 0, 0];
-    const touched: number[] = [];
     for (let p = 0; p < n; p++) {
-      if (!active[p] || !touch[p]) continue;
+      if (!active[p] || !touch[p] || owner[p] !== me) continue;
       const gx = (px[p] - ox) * invH;
       const gy = py[p] * invH + 1;
       const gz = pz[p] * invH + 1;
@@ -1175,22 +1508,26 @@ export class Sim3 {
             if (!gcon[idx]) continue;
             const wm = wij * wz[k] * mass[p];
             if (!(wm > 0)) continue;
-            if (gfolD[idx] === 0) touched.push(idx);
             gfolN[idx] += wm * want;
             gfolD[idx] += wm;
           }
         }
       }
     }
+  }
+
+  private followNodes(): void {
+    const { h, ox, nyN, nzN, dt, accFz, accMap, binCol0, nBinsX } = this;
+    const { vx: gvx, vy: gvy, vz: gvz, m: gm, folN: gfolN, folD: gfolD, slipX: gslipX, slipY: gslipY, slipZ: gslipZ } = this.G;
+    const mu = this.params.rolling.mu;
+    const { cy } = this.roll;
     const invDt = 1 / dt;
     const slab = nyN * nzN;
     let fyAdd = 0;
     let tqAdd = 0;
-    for (const idx of touched) {
+    for (let ix = this.colLo, hi = this.colHi; ix < hi; ix++) for (let idx = ix * slab, end = idx + slab; idx < end; idx++) {
+      if (!(gfolD[idx] > 0)) continue;
       const dv = gfolN[idx] / gfolD[idx];
-      gfolN[idx] = 0;
-      gfolD[idx] = 0;
-      const ix = Math.floor(idx / slab);
       const iy = Math.floor((idx - ix * slab) / nzN);
       const iz = idx - ix * slab - iy * nzN;
       const rx = ox + ix * h;
@@ -1229,11 +1566,15 @@ export class Sim3 {
       const b = ix - binCol0;
       if (b >= 0 && b < nBinsX) accMap[b * nzN + iz] += f;
     }
-    return [fyAdd, tqAdd];
+    this.part[PT_FY] += fyAdd;
+    this.part[PT_TQ] += tqAdd;
   }
 
   private g2pVelocity(): void {
-    const { n, active, px, py, pz, vx, vy, vz, C, F, mass, gvx, gvy, gvz, gTh, gJe, gB, gMv, h, ox, nyN, nzN, failed, pres, vr, th } = this;
+    const { n, active, px, py, pz, vx, vy, vz, C, F, mass, h, ox, nyN, nzN, failed, pres, vr, th, owner } = this;
+    const me = this.rank + 1;
+    const { vx: gvx, vy: gvy, vz: gvz } = this.G;
+    const { Th: gTh, Je: gJe, B: gB, Mv: gMv } = this.g;
     const invH = 1 / h;
     const k4 = 4 * invH * invH;
     const invK = 1 / this.el.K;
@@ -1241,7 +1582,7 @@ export class Sim3 {
     const wy = [0, 0, 0];
     const wz = [0, 0, 0];
     for (let p = 0; p < n; p++) {
-      if (!active[p]) continue;
+      if (!active[p] || owner[p] !== me) continue;
       const gx = (px[p] - ox) * invH;
       const gy = py[p] * invH + 1;
       const gz = pz[p] * invH + 1;
@@ -1328,8 +1669,13 @@ export class Sim3 {
         }
       }
     }
-    // the ghost layers' sums onto their mirror images, the means, and the means back to the ghosts
-    for (let ix = this.ixLo; ix < this.ixHi; ix++) {
+  }
+
+  /** the volume averaging's sums by node: the ghost layers' onto their mirror images, the means, and the means back to the ghosts */
+  private volumeMeans(): void {
+    const { nyN, nzN } = this;
+    const { Th: gTh, Je: gJe, B: gB, Mv: gMv } = this.G;
+    for (let ix = this.colLo, hi = this.colHi; ix < hi; ix++) {
       const col = ix * nyN * nzN;
       for (let iz = 0; iz < nzN; iz++) {
         const g = col + iz;
@@ -1377,7 +1723,9 @@ export class Sim3 {
   }
 
   private g2pUpdate(): void {
-    const { n, active, px, py, pz, vx, vy, vz, C, F, gTh, gJe, gB, dt, h, ox, nxN, nyN, nzN, failed, pres, vr } = this;
+    const { n, active, px, py, pz, vx, vy, vz, C, F, dt, h, ox, nxN, nyN, nzN, failed, pres, vr, owner, part } = this;
+    const me = this.rank + 1;
+    const { Th: gTh, Je: gJe, B: gB } = this.G;
     const { sxx, syy, szz, sxy, syz, szx, temp, vol0, dJC, dHM, dCL, strength, strengthEp } = this;
     const P = this.params;
     const mat = P.material;
@@ -1393,7 +1741,7 @@ export class Sim3 {
     const wy = [0, 0, 0];
     const wz = [0, 0, 0];
     for (let p = 0; p < n; p++) {
-      if (!active[p]) continue;
+      if (!active[p] || owner[p] !== me) continue;
       const o = 9 * p;
       const l00 = C[o], l01 = C[o + 1], l02 = C[o + 2], l10 = C[o + 3], l11 = C[o + 4], l12 = C[o + 5], l20 = C[o + 6], l21 = C[o + 7], l22 = C[o + 8];
       const Jold = det3(F, o);
@@ -1530,7 +1878,7 @@ export class Sim3 {
           sc *= s;
           q -= 3 * G * dep;
           this.ep[p] += dep;
-          this.plasticWork += q * dep * vol0[p] * J;
+          part[PT_WORK] += q * dep * vol0[p] * J;
           if (mat.chi > 0) temp[p] += adiabaticRise(mat.chi, q * dep, J, mat.rho, mat.cp);
         }
       }
@@ -1573,8 +1921,12 @@ export class Sim3 {
     // the ends are held by nothing here, but the pusher's column must stay whole
     if (p < this.NJ * this.NK) return;
     this.failed[p] = 1;
-    this.nFailed++;
-    if (this.firstCrack) return;
+    this.part[PT_NFAIL]++;
+    if (this.part[PT_FIRST] < 0 || p < this.part[PT_FIRST]) this.part[PT_FIRST] = p;
+  }
+
+  /** the first point to fail (the lowest index of the step's), at the end of the step it failed in */
+  private recordFirstCrack(p: number): void {
     const i = Math.floor(p / (this.NJ * this.NK));
     const j = Math.floor(p / this.NK) % this.NJ;
     const k = p % this.NK;

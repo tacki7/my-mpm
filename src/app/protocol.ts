@@ -8,6 +8,8 @@ export type ToWorker =
   | { type: 'init'; params: SimParams; stands: number; field: FieldName; stopAfter: number | null }
   | { type: 'run' }
   | { type: 'pause' }
+  /** the interval between frames [ms]; 0 for the worker's own (src/app/frameRate.ts) */
+  | { type: 'frame-ms'; ms: number }
   | { type: 'field'; field: FieldName }
   /** the material point the stress explorer follows (null: none) */
   /** stand: the stand of the frame the point was picked in (a tandem may have moved on before the worker reads it) */

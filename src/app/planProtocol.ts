@@ -11,6 +11,8 @@ export type ToPlanWorker =
   | { type: 'init'; params: SimParams; plan: PlanSettings; field: PlanFieldName; stopAfter: number | null }
   | { type: 'run' }
   | { type: 'pause' }
+  /** the interval between frames [ms]; 0 for the worker's own (src/app/frameRate.ts) */
+  | { type: 'frame-ms'; ms: number }
   | { type: 'field'; field: PlanFieldName };
 
 /** Fixed facts of a plan-view run, sent once after init. Lengths in m. */

@@ -3,6 +3,8 @@
 //                        [--tb 0] [--tf 0] [--plane-strain] [--max 200000] [--json]
 //                        [--length steady] [--stands 3] [--handoff done|steady]
 //                        [--flatten hitchcock] [--rollE 206] [--control reduction] [--bend <barrel mm> [--span <mm>]] [--crown <µm>]
+//                        [--threads N]
+// --threads N: the step by a team of N threads (src/mpm/solid/team.ts on worker_threads; this thread is one of them).
 // --length steady: the strip as long as the steady looks need (--L is not used). --stands: a tandem, every stand
 // the same condition, the strip carried from stand to stand (src/mpm/solid/tandem3.ts).
 // Lengths in mm, tensions in MPa, the reduction as a fraction. The steady values are read as the page reads them (steady.ts).
@@ -10,6 +12,7 @@ import { defaultParams, MATERIALS } from '../src/mpm/params.ts';
 import { solidParams } from '../src/mpm/solid/sim3.ts';
 import { Tandem3 } from '../src/mpm/solid/tandem3.ts';
 import { karman } from '../src/mpm/slab.ts';
+import { nodeTeam } from './lib/solid-team.mjs';
 
 const args = process.argv.slice(2);
 const has = (n) => args.includes(`--${n}`);
@@ -36,7 +39,10 @@ const json = has('json');
 const maxSteps = +opt('max', 400000);
 
 const t0 = performance.now();
-const tandem = new Tandem3(P, +opt('stands', 1), opt('handoff', 'done'));
+const threads = +opt('threads', 1);
+const tandem = new Tandem3(P, +opt('stands', 1), opt('handoff', 'done'), threads > 1 ? { shared: true, size: threads } : {});
+const team = threads > 1 ? nodeTeam(threads) : null;
+if (team) await tandem.useTeam(team);
 const say = (s) => { if (!json) console.log(s); };
 const intro = (sim, k) => say(`${tandem.stands > 1 ? `#${k + 1}: h0 ${(sim.params.rolling.h0 * 1e3).toFixed(4)} mm, W ${(sim.params.solid.width * 1e3).toFixed(4)} mm, L ${(sim.params.rolling.sheetLength * 1e3).toFixed(2)} mm, ` : ''}points ${sim.n} (${sim.NI} × ${sim.NJ} × ${sim.NK}), grid ${sim.nxN} × ${sim.nyN} × ${sim.nzN}, h ${(sim.h * 1e3).toFixed(4)} mm, dt ${sim.dt.toExponential(3)} s, gap ${(sim.gap * 1e3).toFixed(4)} mm, Lc ${(sim.contactLength * 1e3).toFixed(3)} mm`);
 intro(tandem.sim, 0);
@@ -46,11 +52,12 @@ let steps = 0;
 let sim = tandem.sim;
 while (steps < maxSteps && !tandem.done) {
   sim = tandem.sim;
-  const look = tandem.advance();
+  const look = team ? await tandem.advanceTeam() : tandem.advance();
   steps++;
   if (look && sim.step % every === 0) say(`step ${sim.step} t ${(sim.t * 1e3).toFixed(2)} ms ${look.phase} F ${(look.force * 1e-3).toFixed(3)} kN, half width ${look.halfWidth ? (look.halfWidth * 1e3).toFixed(4) : '—'} mm, centre thickness ${look.centreHalfThickness ? (2 * look.centreHalfThickness * 1e3).toFixed(4) : '—'} mm`);
 }
 const secs = (performance.now() - t0) / 1e3;
+team?.close();
 const slab = karman(P.rolling, P.material);
 const steadyOut = (st, width) => st && {
   looks: st.looks,
