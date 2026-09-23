@@ -30,7 +30,7 @@ try {
   c = await connect(process.env.CDP_PORT);
   await c.setViewport(1600, 1000);
   const centre = async (selector) => {
-    const r = await c.evaluate(`(() => { const e = document.querySelector(${JSON.stringify(selector)}); if (!e) return null; const b = e.getBoundingClientRect(); return { x: b.x + b.width / 2, y: b.y + b.height / 2 }; })()`);
+    const r = await c.evaluate(`(() => { const e = document.querySelector(${JSON.stringify(selector)}); if (!e) return null; e.scrollIntoView({ block: 'nearest' }); const b = e.getBoundingClientRect(); return { x: b.x + b.width / 2, y: b.y + b.height / 2 }; })()`);
     if (!r) throw new Error(`no element ${selector}`);
     return r;
   };
