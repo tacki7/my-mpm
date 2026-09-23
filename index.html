@@ -40,6 +40,8 @@
       </div>
       <!-- the two models, as index tabs standing on the masthead's rule (src/app/solidMode.ts) -->
       <nav class="dim-tabs" id="dim-tabs" role="tablist" aria-label="計算の次元"></nav>
+      <!-- the page's density (src/app/density.ts), at the right end of the tabs' row: 標準, or コンパクト with smaller type, tighter gaps, the hints folded away -->
+      <label class="density" title="画面の詰め方。コンパクトは字を一段小さく、余白を詰め、条件の欄の説明文を隠す。計算には影響しない">レイアウト <select id="density"></select></label>
     </header>
 
     <main class="layout" id="dim-panel" role="tabpanel" aria-labelledby="dim-tab-2">

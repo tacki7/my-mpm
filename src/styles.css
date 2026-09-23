@@ -1294,11 +1294,26 @@ body:not([data-dim='3']) .dim3-only {
 
 /* index tabs of a ledger: they stand on the masthead's ink rule, and the sheet shown is the one whose tab is inked */
 .dim-tabs {
-  grid-column: 1 / -1;
+  grid-column: 1 / 3;
   display: flex;
   gap: 4px;
   /* down onto the rule (the masthead's bottom padding) */
   margin: 0 0 -14px;
+}
+
+/* the page's density (src/app/density.ts): the right end of the tabs' row, on the rule */
+.density {
+  grid-column: 3;
+  justify-self: end;
+  align-self: end;
+  font-size: var(--fs-xs);
+  color: var(--ink-soft);
+  white-space: nowrap;
+}
+
+.density select {
+  font: inherit;
+  margin-left: 0.3em;
 }
 
 .dim-tabs button {
@@ -1532,10 +1547,17 @@ body:not([data-dim='3']) .dim3-only {
     margin-left: 0;
   }
   .dim-tabs {
+    grid-column: 1;
     margin-bottom: -14px;
+    /* last, on the rule; the density goes above the tabs, under the clock */
+    order: 1;
   }
   .dim-tabs button {
     flex: 1;
+  }
+  .density {
+    grid-column: 1;
+    justify-self: start;
   }
   /* the stands one above the other on a phone, each about as tall as a phone's picture is wide */
   .stand-row {
@@ -1584,6 +1606,103 @@ body:not([data-dim='3']) .dim3-only {
   .charts .splitter + figure {
     border-top: 1px solid var(--rule);
   }
+}
+
+
+/* ── density (src/app/density.ts: the masthead's 「レイアウト」 select) ─────────
+   コンパクト: one step down the type scale, tighter gaps, the panel's hints and the
+   masthead's subtitle folded away, lower charts. Nothing here touches the model. */
+:root[data-density='compact'] {
+  --fs-xs: 10px;
+  --fs-s: 11.5px;
+  --fs-m: 12.5px;
+  --fs-l: 15px;
+  --fs-xl: 19px;
+  --gap: 10px;
+}
+
+[data-density='compact'] body {
+  line-height: 1.4;
+}
+
+[data-density='compact'] .masthead {
+  padding: 8px 16px 6px;
+  gap: 8px 16px;
+}
+
+[data-density='compact'] .title p {
+  display: none;
+}
+
+[data-density='compact'] .conditions,
+[data-density='compact'] .record {
+  padding: 6px 10px 14px;
+}
+
+[data-density='compact'] .group {
+  padding: 3px 0 4px;
+}
+
+[data-density='compact'] .field {
+  margin: 1px 0;
+}
+
+/* the explanations under the fields go; what a field checks (.why) and the GPU's note stay */
+[data-density='compact'] .conditions .hint {
+  display: none;
+}
+
+[data-density='compact'] .field:has(.hint):not(:has(select)) {
+  display: inline-grid;
+  width: calc(50% - 5px);
+}
+
+[data-density='compact'] .field:has(.hint):not(:has(select)):nth-of-type(odd) {
+  margin-right: 8px;
+}
+
+[data-density='compact'] select,
+[data-density='compact'] input[type='number'] {
+  padding: 2px 5px;
+}
+
+/* the masthead's buttons only: the tabs and the picture's controls keep their 24 px hit targets */
+[data-density='compact'] .controls button {
+  padding: 4px 10px;
+}
+
+[data-density='compact'] .certificate th,
+[data-density='compact'] .certificate td {
+  padding: 2px 0 2px 8px;
+}
+
+[data-density='compact'] .certificate th {
+  padding-left: 0;
+}
+
+[data-density='compact'] .record h2 {
+  margin-bottom: 4px;
+}
+
+[data-density='compact'] .charts figure {
+  padding: 4px 10px 2px;
+}
+
+[data-density='compact'] .charts canvas {
+  height: var(--chart-h, 140px);
+}
+
+[data-density='compact'] .field-tabs {
+  padding: 4px 12px 0;
+}
+
+/* the index tabs stand on the rule: down by the masthead's smaller bottom padding */
+[data-density='compact'] .dim-tabs {
+  margin-bottom: -6px;
+}
+
+[data-density='compact'] .dim-tabs button {
+  padding: 3px 16px 2px;
 }
 
 @media (prefers-reduced-motion: reduce) {
