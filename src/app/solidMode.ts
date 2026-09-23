@@ -224,6 +224,10 @@ export class SolidMode {
   private shown: SolidPageSettings | null = null;
   /** a few words for a screen reader under each graph (canvases are not read), written when the steady reading first comes and at the end */
   private readonly summaries: HTMLElement[] = [];
+  /** the legends under the width, crown and flatness graphs (a tandem's stands, by colour) */
+  private readonly legends: Record<'width' | 'crown' | 'flat', HTMLElement>;
+  /** the stands the width, crown and flatness graphs last drew (0-based) */
+  private overlaid: number[] = [];
   private summaryMoment = '';
 
   constructor(o: SolidModeOptions, stopAfter: number | null) {
@@ -251,6 +255,12 @@ export class SolidMode {
       },
       { roles: ['first-crack', 'max-damage'], hint: '最初に亀裂になった点と、損傷がいちばん大きい点。3 次元では点は選べない' },
     );
+    const legend = (id: string): HTMLElement => {
+      const d = el('div', 'chart-legend');
+      this.$(id).after(d);
+      return d;
+    };
+    this.legends = { width: legend('solid-chart-width'), crown: legend('solid-chart-crown'), flat: legend('solid-chart-flat') };
     for (const id of ['solid-chart-force', 'solid-chart-width', 'solid-chart-map']) {
       const p = el('p', 'sr-only solid-chart-summary');
       this.$(id).parentElement!.append(p);
@@ -1263,42 +1273,68 @@ export class SolidMode {
     return null;
   }
 
+  /**
+   * A tandem's stands with steady means, in order: the stands that ended with some, and the running one once it has
+   * any. The width, crown and flatness graphs draw each in its stand's colour
+   */
+  private standSteadies(): { k: number; st: SolidSteady; g: SolidGeometry }[] {
+    const out: { k: number; st: SolidSteady; g: SolidGeometry }[] = [];
+    for (let k = 0; k < this.standResults.length; k++) {
+      const st = this.standResults[k]?.steady;
+      const g = this.geometries[k];
+      if (st && g) out.push({ k, st, g });
+    }
+    const d = this.last?.diag;
+    if (d?.steady && d.steady.looks > 0 && this.geometry && !this.standResults[d.stand]) out.push({ k: d.stand, st: d.steady, g: this.geometry });
+    return out;
+  }
+
   private drawWidthCharts(): void {
     const shown = this.shownSteady();
     const st = shown?.st ?? null;
     const g = shown?.g ?? this.geometry!;
-    const tag = g.stands > 1 && st ? `#${g.stand + 1}` : '';
+    const tandem = g.stands > 1;
+    const tag = tandem && st ? `#${g.stand + 1}` : '';
+    // a tandem's stands one over another, each in its colour; one stand: the shown means in ink
+    const drawn = tandem ? this.standSteadies() : st ? [{ k: g.stand, st, g }] : [];
+    this.overlaid = drawn.map((d) => d.k);
+    const color = (k: number) => (tandem ? standColor(k) : INK);
     // the load across the width (steady mean), mirrored to the whole width
-    const z: number[] = [];
-    const q: number[] = [];
-    if (st) {
-      const n = st.forceByZ.length;
-      for (let k = n - 1; k >= 0; k--) {
-        z.push((-k * g.h) / mm);
-        q.push(st.forceByZ[k] * 1e-6);
+    const series = drawn.map(({ k, st: s, g: gk }) => {
+      const z: number[] = [];
+      const q: number[] = [];
+      const n = s.forceByZ.length;
+      for (let c = n - 1; c >= 0; c--) {
+        z.push((-c * gk.h) / mm);
+        q.push(s.forceByZ[c] * 1e-6);
       }
-      for (let k = 1; k < n; k++) {
-        z.push((k * g.h) / mm);
-        q.push(st.forceByZ[k] * 1e-6);
+      for (let c = 1; c < n; c++) {
+        z.push((c * gk.h) / mm);
+        q.push(s.forceByZ[c] * 1e-6);
       }
-    }
+      return { x: z, y: q, color: color(k), label: tandem ? `#${k + 1}` : '定常の平均' };
+    });
+    // the widest strip the graphs show: a tandem's later stands are wider
+    const hwMax = Math.max(g.halfWidth0, ...drawn.map((d) => Math.max(d.g.halfWidth0, d.st.halfWidth))) / mm;
     const halfOut = st ? st.halfWidth / mm : g.halfWidth0 / mm;
     drawChart(this.$<HTMLCanvasElement>('solid-chart-width'), {
       xLabel: '板幅方向の位置 z [mm]',
       yLabel: '荷重 [kN/mm]',
-      series: [{ x: z, y: q, color: INK, label: tag ? `定常の平均（${tag}）` : '定常の平均' }],
-      hmarks: [{ y: g.slabForce * 1e-6, label: 'スラブ法（平面ひずみ）' }],
+      series,
+      hmarks: [{ y: g.slabForce * 1e-6, label: tag ? `スラブ法（平面ひずみ、${tag}）` : 'スラブ法（平面ひずみ）' }],
       marks: st
         ? [
-            { x: -halfOut, label: '端', color: STEEL },
+            { x: -halfOut, label: tag ? `端 ${tag}` : '端', color: STEEL },
             { x: halfOut, label: '端', color: STEEL },
           ]
         : [],
-      xRange: [-(g.halfWidth0 / mm) * 1.25, (g.halfWidth0 / mm) * 1.25],
-      yRange: [0, Math.max(g.slabForce * 1e-6 * 1.5, ...q) || 1],
+      xRange: [-hwMax * 1.25, hwMax * 1.25],
+      yRange: [0, Math.max(g.slabForce * 1e-6 * 1.5, ...series.flatMap((s) => s.y)) || 1],
     });
     if (!st) this.emptyNote(this.$<HTMLCanvasElement>('solid-chart-width'));
-    this.drawProfileCharts(st, g, tag);
+    const stands = (extra: string[] = []) => (tandem ? [...extra, ...drawn.map(({ k }) => legendItem(standColor(k), `#${k + 1}${k === this.geometries.length - 1 && !this.finished ? '（圧延中）' : ''}`))] : extra);
+    setLegend(this.legends.width, drawn.length ? stands() : []);
+    this.drawProfileCharts(drawn, g, hwMax, tandem, stands);
     this.drawPressureMap(st, g, tag);
   }
 
@@ -1307,15 +1343,22 @@ export class SolidMode {
    * exit (steady), and the exit's flatness. The thicknesses themselves differ by the reduction, which would hide a
    * crown of a few µm; the results table has them
    */
-  private drawProfileCharts(st: SolidSteady | null, g: SolidGeometry, tag: string): void {
-    const hw0 = g.halfWidth0 / mm;
-    // the entry: crown (1 − (z / hw)²), mirrored
+  private drawProfileCharts(
+    drawn: { k: number; st: SolidSteady; g: SolidGeometry }[],
+    g: SolidGeometry,
+    hwMax: number,
+    tandem: boolean,
+    stands: (extra?: string[]) => string[],
+  ): void {
+    // the entry: the first stand's input crown (1 − (z / hw)²), mirrored (a later stand's entry is the one before's exit)
+    const g0 = (tandem ? this.geometries[0] : null) ?? g;
+    const hw0 = g0.halfWidth0 / mm;
     const zIn: number[] = [];
     const hIn: number[] = [];
     for (let i = -20; i <= 20; i++) {
       const z = (i / 20) * hw0;
       zIn.push(z);
-      hIn.push(g.crownIn * (1 - (i / 20) ** 2) * 1e6);
+      hIn.push(g0.crownIn * (1 - (i / 20) ** 2) * 1e6);
     }
     // the exit by lattice column, at the columns' z (they spread), mirrored
     const mirror = (z: ArrayLike<number>, v: ArrayLike<number>): { x: number[]; y: number[] } => {
@@ -1330,36 +1373,39 @@ export class SolidMode {
       const w = v.slice(Math.max(0, k - 1), k + 2).filter(Number.isFinite);
       return w.length ? w.reduce((a, b) => a + b, 0) / w.length : NaN;
     });
-    const hOut = st ? smooth(st.halfThickness) : [];
-    const hEdge = hOut.length ? hOut[hOut.length - 1] : 0;
-    const out = st ? mirror(st.exitZ, hOut.map((v) => 2 * (v - hEdge) * 1e6)) : { x: [], y: [] };
-    const all = [...hIn, ...out.y, 0];
+    const color = (k: number) => (tandem ? standColor(k) : INK);
+    const label = (k: number) => (tandem ? `出側 #${k + 1}` : '出側（定常の平均）');
+    const crowns = drawn.map(({ k, st }) => {
+      const hOut = smooth(st.halfThickness);
+      const hEdge = hOut[hOut.length - 1];
+      return { ...mirror(st.exitZ, hOut.map((v) => 2 * (v - hEdge) * 1e6)), color: color(k), label: label(k) };
+    });
+    const all = [...hIn, ...crowns.flatMap((c) => c.y), 0];
     const lo = Math.min(...all);
     const hi = Math.max(...all);
     const pad = Math.max((hi - lo) * 0.25, 5);
-    const steadyLabel = tag ? `出側（定常の平均、${tag}）` : '出側（定常の平均）';
     drawChart(this.$<HTMLCanvasElement>('solid-chart-crown'), {
       xLabel: '板幅方向の位置 z [mm]',
       yLabel: '板厚 − 端の板厚 [µm]',
-      series: [
-        { x: zIn, y: hIn, color: STEEL, label: '入側', dash: [4, 3] },
-        { x: out.x, y: out.y, color: INK, label: steadyLabel },
-      ],
+      series: [{ x: zIn, y: hIn, color: STEEL, label: '入側', dash: [4, 3] }, ...crowns],
       hmarks: [{ y: 0, label: '端' }],
-      xRange: [-hw0 * 1.25, hw0 * 1.25],
+      xRange: [-hwMax * 1.25, hwMax * 1.25],
       yRange: [lo - pad, hi + pad],
     });
-    const fl = st ? mirror(st.exitZ, smooth(st.flatness)) : { x: [], y: [] };
-    const span = Math.max(50, ...fl.y.map(Math.abs)) * 1.3;
+    const entry = legendItem(STEEL, tandem ? '入側（#1）' : '入側', 'dashed');
+    setLegend(this.legends.crown, tandem ? stands([entry]) : [entry, legendItem(INK, '出側（定常の平均）')]);
+    const flats = drawn.map(({ k, st }) => ({ ...mirror(st.exitZ, smooth(st.flatness)), color: color(k), label: label(k) }));
+    const span = Math.max(50, ...flats.flatMap((f) => f.y.map(Math.abs))) * 1.3;
     drawChart(this.$<HTMLCanvasElement>('solid-chart-flat'), {
       xLabel: '板幅方向の位置 z [mm]',
       yLabel: '平坦度 [I 単位]',
-      series: [{ x: fl.x, y: fl.y, color: INK, label: steadyLabel }],
+      series: flats,
       hmarks: [{ y: 0, label: '平均' }],
-      xRange: [-hw0 * 1.25, hw0 * 1.25],
+      xRange: [-hwMax * 1.25, hwMax * 1.25],
       yRange: [-span, span],
     });
-    if (!st) {
+    setLegend(this.legends.flat, drawn.length ? stands() : []);
+    if (!drawn.length) {
       this.emptyNote(this.$<HTMLCanvasElement>('solid-chart-crown'));
       this.emptyNote(this.$<HTMLCanvasElement>('solid-chart-flat'));
     }
@@ -1540,6 +1586,10 @@ export class SolidMode {
       get standResults() {
         return self.standResults.slice();
       },
+      /** the stands the width, crown and flatness graphs draw (0-based; one colour each in a tandem) */
+      get overlaid() {
+        return self.overlaid.slice();
+      },
       get stopped() {
         return self.last?.diag.stopped ?? null;
       },
@@ -1591,3 +1641,11 @@ export class SolidMode {
 
 const NOTE =
   '荷重はロール 1 本あたり・板の全幅。定常の値は、頭端が出口の先に届いてから尾端が入口に来るまでの平均（500 ステップごと、tools/solid.mjs と同じ読み方）。板幅あたりの荷重は出側の板幅で割った値で、幅広がりのぶん平面ひずみより小さい。';
+
+const legendItem = (color: string, text: string, kind = ''): string =>
+  `<span class="item"><span class="swatch${kind ? ` ${kind}` : ''}" style="--c:${color}"></span>${text}</span>`;
+/** replace a legend's items only when they change (the charts are redrawn every frame) */
+function setLegend(el: HTMLElement, items: string[]): void {
+  const html = items.join('');
+  if (el.innerHTML !== html) el.innerHTML = html;
+}

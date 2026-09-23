@@ -1357,6 +1357,11 @@ body:not([data-dim='3']) .dim3-only {
   height: var(--chart-h3, 160px);
 }
 
+/* a tandem's stands under the width graphs; nothing to show, no line */
+.solid-charts .chart-legend:empty {
+  display: none;
+}
+
 /* the playback of the recorded frames: a transport bar under the drawing */
 .replay {
   display: flex;

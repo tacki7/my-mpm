@@ -144,9 +144,10 @@ export interface RollingParams {
   stands?: number;
   /**
    * When a tandem's stand hands its sheet on (src/mpm/tandem.ts): 'done' (or absent) once the whole sheet is
-   * rolled, 'steady' as soon as it rolls steadily, the next stand's sheet made of the steady stretch. Sim does not read it
+   * rolled, 'steady' as soon as it rolls steadily, the next stand's sheet made of the steady stretch, 'crop' as soon as
+   * the middle stretch the next stand needs to get steady is out, that stretch cut out for it. Sim does not read it
    */
-  handoff?: 'done' | 'steady';
+  handoff?: 'done' | 'steady' | 'crop';
 }
 
 /**

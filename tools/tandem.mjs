@@ -1,7 +1,7 @@
 // Tandem rolling headless: the same pass over --stands stands, the material state carried from each
 // stand to the next (src/mpm/tandem.ts). Prints a line per stand (or one JSON object with --json).
 //
-//   node tools/tandem.mjs --stands 3 [--handoff steady] [the options of tools/run.mjs]
+//   node tools/tandem.mjs --stands 3 [--handoff steady|crop] [the options of tools/run.mjs]
 //
 // Each stand's summary is the one tools/run.mjs prints for a pass (tools/run-summary.mjs), plus its
 // entry sheet and the thickness of the sheet it let out; with --stands 1 it is run.mjs's.

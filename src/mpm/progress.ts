@@ -16,6 +16,15 @@ export function standEndTail(h0: number, contactLength: number, length: number, 
 }
 
 /**
+ * Where the tail is when a tandem's stand hands on its middle stretch (handoff 'crop') [m]: the stretch's tail end at
+ * the exit probe, `behind` (the strip behind the stretch, entry length) spread from there back over the bite (a
+ * contact length) and the way out to the probe at the exit speed; the tail is in the bite if that is all of it.
+ */
+export function cropEndTail(contactLength: number, xExitProbe: number, reduction: number, behind: number): number {
+  return -contactLength - Math.max(0, behind - contactLength - xExitProbe * (1 - reduction));
+}
+
+/**
  * The tail's way to x in the time it takes, as a length at the entry speed [m]. Up to the bite the tail moves at the
  * entry speed; through the bite (−Lc..0) the strip speeds up to the exit speed, entry / (1 − r), taken as a time per
  * length that falls linearly along the arc; past the exit it moves at the exit speed.

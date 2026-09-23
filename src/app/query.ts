@@ -2,7 +2,7 @@
 // and headless checks). Lengths in mm, tensions in MPa. Invalid values are ignored,
 // and so are h0, r and R together when the rolls could not bite with them.
 //   ?preset=<id>&h0=1&r=25&R=100&L=16&mu=0.08&tb=0&tf=0&mat=spcc&damage=johnson-cook
-//   &yield=gtn&f0=0.005&fc=0.05&nucleation=tension&crack=none|dfg&handoff=done|steady
+//   &yield=gtn&f0=0.005&fc=0.05&nucleation=tension&crack=none|dfg&handoff=done|steady|crop
 //   &flatten=none|hitchcock&rollE=206 (GPa)&control=gap|reduction&length=fixed|steady&sym=1
 //   &cells=10&ms=10000&field=eta&autorun=1&stopafter=<steps>
 //   &cond=<base64url JSON>: every other condition, as the leaves that differ from the
@@ -84,7 +84,7 @@ export function applyQuery(base: SimParams, q: URLSearchParams): SimParams {
   if (crack && CRACK_FIELDS.includes(crack)) p.numerics.crackFields = crack;
   // 'done' is written as no handoff at all, as the presets have it
   const handoff = q.get('handoff');
-  if (handoff === 'steady') p.rolling.handoff = 'steady';
+  if (handoff === 'steady' || handoff === 'crop') p.rolling.handoff = handoff;
   else if (handoff === 'done') delete p.rolling.handoff;
   // rigid rolls and a fixed gap are written as no key at all, as the presets have them (and so is the steel roll's E)
   const flatten = q.get('flatten');
@@ -172,7 +172,7 @@ const RULES: Record<string, Rule> = {
   'rolling.rollRadius': r(5e-3, 2),
   'rolling.sheetLength': r(1e-3, 0.5),
   'rolling.stands': { range: [1, MAX_STANDS], int: true },
-  'rolling.handoff': { oneOf: ['done', 'steady'] },
+  'rolling.handoff': { oneOf: ['done', 'steady', 'crop'] },
   'rolling.flattening': { oneOf: ['none', 'hitchcock'] },
   'rolling.gapControl': { oneOf: ['gap', 'reduction'] },
   'rolling.halfThickness': 'flag',

@@ -95,8 +95,9 @@ export function etaText(seconds: number | null, started: boolean, finished: bool
 
 /** a tandem's stand against the one before it, before any stand is in: the strip is 1/(1−r) longer on a grid (1−r) finer
  *  (handoff 'done': points and steps both by 1/(1−r)² in the section model, points by one power more in 3D); a stand
- *  that hands on when steady rolls a strip as long as its reading needs, which grows about as the thickness falls */
-export function standGrowth(reduction: number, handoff: 'done' | 'steady', threeD: boolean): number {
+ *  that hands on when steady (or its middle stretch, 'crop') rolls a strip as long as its reading needs, which grows
+ *  about as the thickness falls */
+export function standGrowth(reduction: number, handoff: 'done' | 'steady' | 'crop', threeD: boolean): number {
   const k = 1 / (1 - reduction);
-  return handoff === 'steady' ? k : k ** (threeD ? 5 : 4);
+  return handoff === 'done' ? k ** (threeD ? 5 : 4) : k;
 }

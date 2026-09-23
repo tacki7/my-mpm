@@ -6,7 +6,7 @@ import { Tandem3, steadyLength3 } from '../mpm/solid/tandem3.ts';
 import { requestGpu, type GpuInfo } from '../mpm/solid/gpu/stepper.ts';
 import { Team, type TeamPort } from '../mpm/solid/team.ts';
 import { CTL_EVERY } from '../mpm/solver.ts';
-import { standEndTail, standProgress } from '../mpm/progress.ts';
+import { cropEndTail, standEndTail, standProgress } from '../mpm/progress.ts';
 import { faces } from '../mpm/solid/surface.ts';
 import { Tracker3 } from './tracker3.ts';
 import { karman } from '../mpm/slab.ts';
@@ -48,7 +48,9 @@ function progressOf(T: Tandem3): number {
     // reading needs, the later ones are made that long
     const handsOn = T.handoff === 'steady' && T.stand < T.stands - 1;
     const need = !handsOn ? null : T.stand === 0 ? steadyLength3(s.params) : length;
-    span = [tail0, standEndTail(s.params.rolling.h0, s.contactLength, length, need)];
+    // a stand that hands on its middle stretch (handoff 'crop') ends when the stretch's tail end is out
+    const r = s.params.rolling;
+    span = [tail0, T.crop ? cropEndTail(s.contactLength, s.xExitProbe, r.reduction, T.crop[0] * s.dp) : standEndTail(r.h0, s.contactLength, length, need)];
     tailSpan.set(s, span);
   }
   return standProgress(s.tailX(), span[0], span[1], s.contactLength, s.params.rolling.reduction);

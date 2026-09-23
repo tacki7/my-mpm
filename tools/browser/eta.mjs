@@ -1,7 +1,7 @@
 // The time left beside the clock (src/app/eta.ts), in a headless Chrome: the page samples what it shows four times
 // a second while a run goes to its end, and each shown value is then held against the time the run really still
 // took. The section model (one stand, then a pause in the middle: the pause is not part of the estimate), a tandem
-// of two stands (the stand to come is a guess until it runs), the plan view and the 3D tab. Nothing is shown
+// of two stands (the stand to come is a guess until it runs; handoffs 'steady', 'done' and 'crop'), the plan view and the 3D tab. Nothing is shown
 // before a run starts or after it ends. Not a `@check` (it needs the dev server and Chrome).
 //
 //   CDP_PORT=<cdp> node tools/browser/eta.mjs <url> [out-prefix] [--timeout 300000]
@@ -99,8 +99,9 @@ try {
   }
 
   // ── a tandem of two stands: the second stand is a guess until it runs
-  for (const handoff of ['steady', 'done']) {
-    await c.navigate(page(`?cells=6&L=10&stands=2&handoff=${handoff}`));
+  // ('crop' needs a strip longer than the next stand's steady length)
+  for (const [handoff, L] of [['steady', 10], ['done', 10], ['crop', 20]]) {
+    await c.navigate(page(`?cells=6&L=${L}&stands=2&handoff=${handoff}`));
     await c.waitFor('window.__mpm?.ready', 30000);
     await c.evaluate(sampler('__mpm', '__mpm.done'));
     await click('run');

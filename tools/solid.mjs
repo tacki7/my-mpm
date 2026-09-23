@@ -1,7 +1,7 @@
 // One pass of the three-dimensional model (src/mpm/solid/sim3.ts), headless.
 //   node tools/solid.mjs [--W 8] [--L 12] [--cells 4] [--r 0.25] [--R 100] [--h0 1] [--mu 0.08] [--mat spcc]
 //                        [--tb 0] [--tf 0] [--plane-strain] [--full] [--max 200000] [--json]
-//                        [--length steady] [--stands 3] [--handoff done|steady]
+//                        [--length steady] [--stands 3] [--handoff done|steady|crop]
 //                        [--flatten hitchcock] [--rollE 206] [--control reduction] [--bend <barrel mm> [--span <mm>]] [--crown <µm>]
 //                        [--threads N]
 // --full: the whole thickness with both rolls (the quarter model, y ≥ 0 with the top roll, without).
