@@ -1,11 +1,12 @@
 // The 「条件の比較」 tab (src/app/sweepMode.ts, src/app/sweep.worker.ts), in a headless Chrome:
-// - the URL (dim=c, sv, sn, sp, sj) opens the tab with its spec; the panel has the sweep's fieldset and the 3D
+// - the URL (dim=c, sv, sn, sp, st) opens the tab with its spec; the panel has the sweep's fieldset and the 3D
 //   strip's, not the shared stands and handoff; the stage is the sweep's (the 3D drawing and the section are gone)
 // - a real click on 「比較を始める」 rolls three conditions (W 2 mm, 4 cells, the thickness 0.9 → 1.1 mm, two passes)
-//   three at once; 一時停止 holds every condition's progress, 「続ける」 goes on; leaving the tab pauses the row
+//   one after another (one worker, never two conditions running), each on three threads; 一時停止 holds the
+//   progress, 「続ける」 goes on; leaving the tab pauses the row
 // - at the end the summaries are `node tools/sweep.mjs` 's (the first pass's force and width relative 1e-5, the
 //   rest 1 %: as tools/browser/solid.mjs, a later stand amplifies the last bit of Math.exp), the six charts are
-//   drawn in the conditions' colours, the table has a row per condition, the CSV a line per condition
+//   drawn in the conditions' colours, the conditions ran on the three threads asked for, the table has a row per condition, the CSV a line per condition
 // - the URL of the spec opens the same spec; an edit of the panel is taken up by 「条件を反映してやり直す」
 // - 700 px: nothing wider than the page
 //
@@ -23,7 +24,7 @@ if (!target || !process.env.CDP_PORT) {
   process.exit(64);
 }
 const page = (query) => new URL(query, target).href;
-const SPEC = 'dim=c&W3=2&cells3=4&sv=h0:0.9:1.1&sn=3&sp=2&sj=3';
+const SPEC = 'dim=c&W3=2&cells3=4&sv=h0:0.9:1.1&sn=3&sp=2&st=3';
 
 let c;
 try {
@@ -63,7 +64,7 @@ try {
       spec.count === 3 &&
       spec.stands === 2 &&
       spec.handoff === 'steady' &&
-      (await c.evaluate('__mpm.sweep.jobs')) === 3,
+      (await c.evaluate('__mpm.sweep.threads')) === 3,
     'the URL opens the 条件の比較 tab with its spec',
     JSON.stringify(spec),
   );
@@ -84,8 +85,11 @@ try {
 
   // ── a real click starts the row; 一時停止 holds it
   await click('#run');
-  await c.waitFor('__mpm.sweep.running && __mpm.sweep.cases.every((c) => c.state === "running" && c.progress > 0.05)', 120000);
-  ok((await c.evaluate('__mpm.sweep.workers')) === 3, 'three conditions at once, a worker each');
+  // the most conditions ever running at once, sampled every 50 ms until the row is done
+  await c.evaluate(`window.__maxRunning = 0; window.__watchRunning = setInterval(() => { window.__maxRunning = Math.max(window.__maxRunning, __mpm.sweep.cases.filter((c) => c.state === 'running').length); if (__mpm.sweep.done) clearInterval(window.__watchRunning); }, 50)`);
+  await c.waitFor('__mpm.sweep.running && __mpm.sweep.cases[0].progress > 0.05', 120000);
+  const first = await c.evaluate('__mpm.sweep.cases.map((c) => c.state)');
+  ok((await c.evaluate('__mpm.sweep.workers')) === 1 && first.join() === 'running,waiting,waiting', 'one condition at a time: the first runs, the others wait (one worker)', first.join(', '));
   await click('#pause');
   await c.waitFor('!__mpm.sweep.running', 5000);
   // a worker takes the pause up between its slices (150 ms): the slice it is in still reports
@@ -99,7 +103,7 @@ try {
   await c.waitFor('__mpm.sweep.running', 5000);
   await c.evaluate('new Promise((r) => setTimeout(r, 1500))');
   const on = await c.evaluate('__mpm.sweep.cases.map((c) => c.progress)');
-  ok(on.every((p, i) => p > still[i]), '「続ける」 goes on', on.map((p) => p.toFixed(3)).join(', '));
+  ok(on.some((p, i) => p > still[i]), '「続ける」 goes on', on.map((p) => p.toFixed(3)).join(', '));
   // leaving the tab pauses the row; coming back it is still paused
   await click('#dim-tab-2');
   await c.waitFor(`document.body.dataset.dim === '2'`, 5000);
@@ -131,6 +135,9 @@ try {
     near(g.spread, w.spread, 0.01, `#${i + 1} spread = node's within 1 %`, `${(g.spread * 100).toFixed(3)} vs ${(w.spread * 100).toFixed(3)} %`);
   }
   ok(got[2].force[0] > got[0].force[0], 'a thicker strip rolls harder (#3 over #1, pass 1)');
+  ok((await c.evaluate('window.__maxRunning')) === 1, 'never two conditions running at once', `at most ${await c.evaluate('window.__maxRunning')}`);
+  const ran = await c.evaluate('__mpm.sweep.ranOn');
+  ok(ran?.threads === 3 && ran.note === null, 'the conditions ran on the three threads asked for', JSON.stringify(ran));
   const after = await Promise.all(CHARTS.map(coloured));
   ok(after.every((n) => n > 50), 'the six charts are drawn in colour', CHARTS.map((id, i) => `${id.slice(12)} ${after[i]}`).join(', '));
   const table = await c.evaluate(`[...document.querySelectorAll('#sweep-table tbody tr')].map((r) => [r.dataset.state, r.textContent])`);

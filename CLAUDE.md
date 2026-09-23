@@ -16,7 +16,7 @@ Hancock-MacKenzie、破壊した粒子の応力の扱い）。式と出典の対
 | `src/mpm/tandem.ts` | タンデム（`TandemSim`: スタンドを 1 つずつ解き、材料の状態を次のスタンドの新しい格子へ写す）。`node tools/tandem.mjs --stands 3 [--handoff steady|crop]`（`run.mjs` と同じ引数） |
 | `src/mpm/planview/` | 平面図モデル（x 圧延方向・z 板幅方向、板厚は粒子の状態）。耳割れ用。`node tools/planview.mjs --W 20`。定常の読み方は `steady.ts`（ツールと画面の平面図で共通） |
 | `src/mpm/solid/` | 3 次元モデル（`Sim3`: x・y・z を解く 1/4 モデル、幅広がり・板幅方向の荷重分布）。画面の「3 次元」のタブ（`src/app/solidMode.ts`・`solidView.ts`・`solid.worker.ts`。止まったあとの巻き戻し再生は `tape.ts`、その動画ファイルは `solidVideo.ts`（WebCodecs）と `mux.ts`（MP4・WebM を自前で書く。`tools/checks/mux.mjs` が ffmpeg の本物のフレームで検証））。タンデム・定常になるまでの板長は `tandem3.ts`（`Tandem3`）、ロール偏平・圧下率一定は `Sim3.adjustRolls`。`node tools/solid.mjs --W 8 --L 12 --cells 4 [--plane-strain] [--length steady] [--stands 3 --handoff steady|crop] [--flatten hitchcock --control reduction] [--bend <バレル mm> [--span <mm>]] [--crown <µm>]`（4 セルで約 2.5 分）。ロールの撓みは `rollBend.ts`（梁）+ `Sim3.updateBend`。入側の板クラウン・出側のクラウンと平坦度は `Sim3.ySize`・`exitMeasure`・`steady.ts`。GPU は `solid/gpu/`（`kernels.ts` WGSL・`stepper.ts`）+ `Sim3.advanceBatch`、比較の頁は `tools/gpu/check.html`。CPU の複数スレッドは `team.ts`（`Team`: 調整役 + 貼り付けた `Sim3` の段ごとの関門）+ `grid3.ts`（格子の写し・同期の塊・部分和の配置）、入口は `src/app/solid.helper.worker.ts`（ブラウザ）と `tools/lib/solid-helper.mjs`・`solid-team.mjs`（node）。`node tools/solid.mjs --threads 4`。`SharedArrayBuffer` のため `vite.config.ts` が COOP / COEP を付ける |
-| `src/mpm/solid/sweep.ts` | 条件の比較（画面の「条件の比較」のタブ、`src/app/sweepMode.ts`・`sweep.worker.ts`）: 板厚・板幅・ロール径・摩擦係数を等間隔に振った条件の並び（`sweepValues`・`sweepCase`）と、最後のパスのあとの読み（`summarize`）。1 条件を回すのは `sweepRun.ts`（`runCase`、素の `Tandem3`）、進み具合は `progress3.ts`。`node tools/sweep.mjs --W 4 --vary h0=0.8:1.2 --n 10 --stands 4 [--jobs 4] [--json]`（1 条件に 1 スレッド） |
+| `src/mpm/solid/sweep.ts` | 条件の比較（画面の「条件の比較」のタブ、`src/app/sweepMode.ts`・`sweep.worker.ts`）: 板厚・板幅・ロール径・摩擦係数を等間隔に振った条件の並び（`sweepValues`・`sweepCase`）と、最後のパスのあとの読み（`summarize`）。1 条件を回すのは `sweepRun.ts`（`runCase`、素の `Tandem3`）、進み具合は `progress3.ts`。`node tools/sweep.mjs --W 4 --vary h0=0.8:1.2 --n 10 --stands 4 [--jobs 4] [--json]`（ツールは 1 条件に 1 スレッドで `--jobs` 並べる。画面は 1 条件ずつ順に、1 条件を `Team` の N スレッドで） |
 | `src/app/` | ワーカー（`sim.worker.ts`）、描画（`view.ts`）、グラフ、条件パネル |
 | `tools/check.mjs` | 回帰関門。`// @check` の付いたスクリプトを集めて回す |
 | `tools/run.mjs` | ヘッドレスで 1 回圧延して数値を出す（`npm run sim -- --cells 6 --L 8`。`--half` = 板厚方向の対称モデル、上半分だけ） |
@@ -112,7 +112,7 @@ Math.exp・log の最後の 1 ビットが違うのでビット一致はしな�
 `solid.mjs` の節にも入っている。
 
 条件の比較のタブ（`sweepMode.ts`・`sweep.worker.ts`・`src/mpm/solid/sweep.ts`）を触ったら `node tools/checks/sweep.mjs`（`@check`、約 3 分）と `CDP_PORT=<cdp> node tools/browser/sweep.mjs http://localhost:<dev>/ <作業用ディレクトリ>/sw`
-（約 4 分。URL の振り方で開く・欄の表示、実クリックで 3 条件を 3 つ同時に回す・一時停止で止まる・タブを移ると一時停止、終わりの読みを `node tools/sweep.mjs --json` と比べる（1 パス目は相対 1e-5、2 パス目は 1 %）、6 つの図の色・表・CSV、URL を開き直す、欄の編集とやり直す、700 px。`sw-*.png` を自分で見る）。
+（約 4 分。URL の振り方で開く・欄の表示、実クリックで 3 条件を 1 つずつ 3 スレッドで回す（同時に 2 つ走らない）・一時停止で止まる・タブを移ると一時停止、終わりの読みを `node tools/sweep.mjs --json` と比べる（1 パス目は相対 1e-5、2 パス目は 1 %）、6 つの図の色・表・CSV、URL を開き直す、欄の編集とやり直す、700 px。`sw-*.png` を自分で見る）。
 
 レイアウトの密度（タブの行の右端の「レイアウト」標準 / コンパクト、`src/app/density.ts`・`styles.css` の「density」・`--masthead-h` の実測）を触ったら `CDP_PORT=<cdp> node tools/browser/density.mjs http://localhost:<dev>/ <作業用ディレクトリ>/dn`（約 40 秒。属性・マストヘッドの高さとトークン・罫線の上のタブ・説明文の表示・字の大きさ・グラフの高さ・再読み込み・3 次元・700 px・定常の荷重が同じ。`dn-*.png` を自分で見る）。
 描画の更新（時計の下の「描画の更新」、`src/app/frameRate.ts`・ワーカーの `frame-ms`）を触ったら `CDP_PORT=<cdp> node tools/browser/frame-rate.mjs http://localhost:<dev>/`（約 1 分。断面・3 次元・平面図で実際の選択を変えて 2 秒の枚数を数え、再読み込みで残ること）。
@@ -122,7 +122,7 @@ Math.exp・log の最後の 1 ビットが違うのでビット一致はしな�
 ポートは必ず渡す（既定値は無い）。`window.__mpm` は `frames` `density`（レイアウトの密度 'standard' | 'compact'。読み書き）`eta`（表示中の残り時間 [s]。速さが読めるまでは null。`plan.eta`・`solid.eta` も）`running` `ready` `done` `diag` `steady`（表示中のスタンドの定常の平均、`TandemSim` の読み。無ければ null）`cracks`
 `geometry` `params` `history` `slab`（スラブ法の荷重・中立点・方法の外の理由、`delta` = 平均板厚 / 接触長、`steadyForce` = 定常の荷重をステップ数で重み付けした平均 [N/m]、`ratio` = MPM / スラブ法。定常の前と方法の外では null）`forceChart`（荷重のグラフに描いた生の値と移動平均）`explorer`（表示中の点）`tracks`（追っている点と経路）`view`（拡大率・パン・倍率・主応力の向き）
 `plan`（平面図: `active` `ready` `running` `done` `diag`（`steady` が定常の平均、SI）`cracks` `settings` `url` `setMode()` `setField()` `drawMs()`）
-`sweep`（条件の比較のタブ: `active` `running` `done` `eta` `spec`（`vary` [SI]・`count`・`stands`・`handoff`）`jobs` `cases`（条件ごとの `values`・`state`・`progress`・`stand`・`seconds`）`summaries`（`SweepSummary`、SI。済んでいない条件は null）`params`（回した `Solid3Params`）`url` `workers` `csv()` `run()` `pause()`）
+`sweep`（条件の比較のタブ: `active` `running` `done` `eta` `spec`（`vary` [SI]・`count`・`stands`・`handoff`）`threads`（1 条件のスレッド数）`ranOn`（最後の条件が走ったスレッド数と、減らした理由）`cases`（条件ごとの `values`・`state`・`progress`・`stand`・`seconds`）`summaries`（`SweepSummary`、SI。済んでいない条件は null）`params`（回した `Solid3Params`）`url` `workers` `csv()` `run()` `pause()`）
 （約 12 分、うちタンデムの節が約 9 分。実クリックでタブを移り、板幅 4 mm を最後まで回して `node tools/solid.mjs` と比べる（相対 1e-5）、巻き戻し再生（実クリックで巻き戻す・再生・一時停止・スライダーの端、再生中の色の量のタブ）、「動画に保存」で実際にダウンロードした MP4 を ffprobe で読む（枚数・幅・長さ。ffprobe が無ければ飛ばす）、色の量のタブ、実ドラッグで動かす・Shift+ドラッグで回す・動かしたあと矢印キーで画面の中央を軸に回る・ホイール・ダブルクリック、見る向き、URL、
 応力状態の表と `__mpm.solid.explorer` の一致・破断軌跡の描画、亀裂になる条件（`cond` で D2 0.15）で最初の亀裂の点と役のボタンの実クリック・絵の上の丸の印（`__mpm.solid.screenOf(role)` の周りの画素の色）、
 `stand` `stands` `standResults` `standFrames` `stopped`（タンデム: 表示中のスタンド（0 始まり）・スタンド数・済んだスタンドの結果・並んだ枠の状態・最後のスタンドまで行かずに止まった理由 'stalled' | 'separated' | 'lost'、ふだんは null）と
@@ -139,7 +139,7 @@ Math.exp・log の最後の 1 ビットが違うのでビット一致はしな�
 `&view=plan&W=20&wcells=10&notch=0&pfield=sxx|szz|seq|eta|damage|spread`（平面図。板幅 mm・半幅のセル数・端の切り欠きの半径 mm）
 `&dim=3&W3=8&L3=12&cells3=4&ps3=1&full3=1&f3=seq|ep|pres|eta|sxx|syy|szz|damage|spread|rate`（3 次元のタブ。板幅 mm・板の長さ mm・板厚方向のセル数（偶数 4〜8）・平面ひずみで解く・板厚の全体をロール 2 本で解く（既定は 1/4 モデル。`Sim3.fullThickness`、`tools/solid.mjs --full`、`tools/checks/solid3-full.mjs`）・色の量。
 `&gpu3=1` = 1 ステップを WebGPU で（無ければ CPU。`__mpm.solid.compute` が `{compute, gpu, note, threads}`）。`&threads3=N` = CPU の 1 ステップを N 本のスレッドで（1〜論理コア数。cross-origin isolated でないページでは 1 で `note` に理由。GPU のときは使わない）。`&bend3=1&barrel3=300&support3=bearing&span3=400` = ロールの撓み（バレル長 mm・支点を軸受に・支点間距離 mm。`support3` が無ければバレルの端。`diag.rollBend`・`steady.rollBend`）。`&crown3=40` = 入側の板クラウン µm（幅方向に 2 次。`steady.crownIn`・`crownOut`・`flatness`）。ほかの条件は 2 次元と共通で、`stands`・`handoff`・`length`・`flatten`・`rollE`・`control` は 3 次元にも効く。`tb`・`tf` も効く。`crack`・`L`・`cells`・GTN は 3 次元では使わない）
-`&dim=c&sv=h0:0.8:1.2,W:4:8,D:150:250,mu:0.05:0.12&sn=10&sp=4&sh=steady|crop|done&sj=4`（条件の比較のタブ。振る量と最初・最後の値（h0・W・D は mm）・条件の数 2〜20・パス数・引き継ぎ・同時に回す数。基の条件は 3 次元のタブと同じキー（`W3`・`cells3`・`crown3`・`bend3` …）。`autorun=1` で開いてすぐ回す）
+`&dim=c&sv=h0:0.8:1.2,W:4:8,D:150:250,mu:0.05:0.12&sn=10&sp=4&sh=steady|crop|done&st=4`（条件の比較のタブ。振る量と最初・最後の値（h0・W・D は mm）・条件の数 2〜20・パス数・引き継ぎ・1 条件のスレッド数（条件は 1 つずつ順に）。基の条件は 3 次元のタブと同じキー（`W3`・`cells3`・`crown3`・`bend3` …）。`autorun=1` で開いてすぐ回す）
 `&escatter=0&ewidth=1&elen=1&eseed=1`（端の延性のばらつき。大きさ %・帯の幅 mm・相関長 mm・種。`escatter=0`（既定）で無し）
 `&stands=1..5`（タンデムのスタンド数。どのスタンドも同じ条件で、圧下率は各スタンドの入側板厚に対して。断面の画面だけ）
 `&length=fixed|steady`（板の長さの取り方。`steady` = 1 スタンド目の板を、定常の読みが揃うのに要る長さに自動で（`L` は使わない。決めた長さは `__mpm.params.rolling.sheetLength`）。ツールは `--length steady`）
