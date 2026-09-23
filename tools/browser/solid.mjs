@@ -360,6 +360,47 @@ try {
   const tension0 = JSON.parse(execFileSync('node', ['tools/solid.mjs', '--W', '2', '--cells', '4', '--json'], { encoding: 'utf8' }));
   ok(td.steady && td.steady.force < 0.98 * tension0.steady.force_kN * 1e3, 'the tensions lower the steady force by more than 2 %', `${(td.steady?.force * 1e-3).toFixed(2)} vs ${tension0.steady.force_kN.toFixed(2)} kN without`);
 
+  // ── the roll's bending: the panel's rows, their locks and ranges, the settings reach the model and the URL, the results
+  await c.navigate(page('?dim=3&W3=2&R=10'));
+  await c.waitFor('__mpm.solid.active && __mpm.solid.ready', 60000);
+  const bendState = () => c.evaluate(`(() => { const q = (n) => document.querySelector('[name="' + n + '"]'); return { on: q('solid-bend').checked, support: q('solid-support').disabled, barrel: q('solid-barrel').disabled, span: q('solid-span').disabled, spanOff: q('solid-span').closest('label').classList.contains('off'), badSpan: q('solid-span').closest('label').classList.contains('bad'), badBarrel: q('solid-barrel').closest('label').classList.contains('bad') }; })()`);
+  let bs = await bendState();
+  ok(!bs.on && bs.support && bs.barrel && bs.span && bs.spanOff, 'a rigid roll to begin with: the bending\'s inputs are off', JSON.stringify(bs));
+  await click('[name="solid-bend"]');
+  bs = await bendState();
+  ok(bs.on && !bs.support && !bs.barrel && bs.span && bs.spanOff, 'ticking it frees the supports and the barrel; the span stays off with the supports at the barrel\'s ends', JSON.stringify(bs));
+  await choose('solid-barrel', '1');
+  bs = await bendState();
+  ok(bs.badBarrel, 'a barrel shorter than the strip (2 mm) is flagged');
+  await choose('solid-barrel', '60');
+  await choose('solid-support', 'bearing');
+  await choose('solid-span', '30');
+  bs = await bendState();
+  ok(!bs.badBarrel && !bs.span && !bs.spanOff && bs.badSpan, 'with bearings the span opens; one shorter than the barrel is flagged', JSON.stringify(bs));
+  await choose('solid-span', '80');
+  ok(!(await bendState()).badSpan, 'a span beyond the barrel is fine');
+  await click('#reset');
+  await c.waitFor('__mpm.solid.ready && __mpm.solid.settings.bend && __mpm.solid.settings.barrel === 0.06', 60000);
+  const bp = await c.evaluate('__mpm.solid.settings');
+  ok(bp.support === 'bearing' && Math.abs(bp.span - 0.08) < 1e-12, 'the barrel and the span typed in the panel are the run\'s settings', JSON.stringify(bp));
+  const bUrl = await c.evaluate('__mpm.solid.url');
+  ok(/bend3=1/.test(bUrl) && /barrel3=60/.test(bUrl) && /support3=bearing/.test(bUrl) && /span3=80/.test(bUrl) && /R=10/.test(bUrl), 'the conditions URL carries the bending', bUrl);
+  await click('#run');
+  await c.waitFor('__mpm.solid.diag.phase === "steady"', 600000);
+  await c.waitFor('__mpm.solid.done', 600000);
+  const bd = await c.evaluate('__mpm.solid.diag');
+  const brow = await c.evaluate(`[...document.querySelectorAll('#solid-results tr')].map((r) => r.textContent).filter((t) => /撓み|クラウン/.test(t))`);
+  ok(bd.steady?.rollBend && bd.steady.rollBend.centre > bd.steady.rollBend.edge && bd.steady.rollBend.edge > 2e-6, 'the roll bent away from the strip, more at the mid-width than at the edge', `${(bd.steady?.rollBend?.centre * 1e6).toFixed(3)} / ${(bd.steady?.rollBend?.edge * 1e6).toFixed(3)} µm`);
+  ok(brow.length === 3 && /板幅の中央.*µm/.test(brow[0]) && /板の端.*µm/.test(brow[1]) && /クラウン.*µm/.test(brow[2]) && new RegExp((bd.steady?.rollBend?.centre * 1e6).toFixed(2)).test(brow[0]), 'the results show the deflection at the mid-width and the edge and the crown, in µm, the steady means', JSON.stringify(brow));
+  const bendTool = JSON.parse(execFileSync('node', ['tools/solid.mjs', '--W', '2', '--cells', '4', '--R', '10', '--bend', '60', '--span', '80', '--json'], { encoding: 'utf8' }));
+  ok(rel(bd.steady.force * 1e-3, bendTool.steady.force_kN) < 1e-5 && rel(bd.steady.rollBend.centre * 1e6, bendTool.steady.rollBend_um.centre) < 1e-5, 'page = tool: the steady force and the deflection (1e-5)', `${(bd.steady.force * 1e-3).toFixed(4)} kN, ${(bd.steady.rollBend.centre * 1e6).toFixed(4)} µm`);
+  await c.navigate(page(`?${bUrl}`));
+  await c.waitFor('__mpm.solid.active && __mpm.solid.ready', 60000);
+  bs = await bendState();
+  const bset = await c.evaluate('__mpm.solid.settings');
+  ok(bs.on && !bs.span && bset.bend && bset.support === 'bearing' && Math.abs(bset.barrel - 0.06) < 1e-12 && Math.abs(bset.span - 0.08) < 1e-12, 'the URL opened again gives the same bending settings', JSON.stringify(bset));
+  await shot('bend');
+
   // ── a narrow screen
   await c.setViewport(700, 1000);
   await c.navigate(page('?dim=3'));

@@ -64,10 +64,19 @@ export interface SolidPageSettings {
   /** grid cells through the thickness (even: the mid-thickness is a grid plane) */
   cells: number;
   planeStrain: boolean;
+  /** the roll bends under the force (Sim3 rollBend): its barrel length, and its supports at the barrel's ends or at bearings span apart [m] */
+  bend: boolean;
+  barrel: number;
+  support: BendSupport;
+  span: number;
 }
 
+export type BendSupport = 'barrel' | 'bearing';
+
 interface NumberField {
-  key: 'width' | 'length' | 'cells';
+  key: 'width' | 'length' | 'cells' | 'barrel' | 'span';
+  /** which fieldset the row is in */
+  group: 'strip' | 'bend';
   query: string;
   label: string;
   unit: string;
@@ -79,17 +88,31 @@ interface NumberField {
 }
 
 const NUMBERS: NumberField[] = [
-  { key: 'width', query: 'W3', label: '板幅', unit: 'mm', step: 1, min: 2, max: 200, scale: mm, hint: '解くのは 1/4（板幅と板厚の中央で鏡映）。時間は板幅に比例: 8 mm で約 2.5 分、40 mm で約 14 分、200 mm は 1 時間以上' },
-  { key: 'length', query: 'L3', label: '板の長さ', unit: 'mm', step: 1, min: 6, max: 40, scale: mm, hint: '定常の読みには 12 mm ほど要る。「板の長さの取り方」が「定常状態になるまで」なら自動' },
-  { key: 'cells', query: 'cells3', label: '板厚方向のセル数', unit: '', step: 2, min: 4, max: 8, scale: 1, hint: '偶数。4 で約 2〜3 分、6 で約 14 分' },
+  { key: 'width', group: 'strip', query: 'W3', label: '板幅', unit: 'mm', step: 1, min: 2, max: 200, scale: mm, hint: '解くのは 1/4（板幅と板厚の中央で鏡映）。時間は板幅に比例: 8 mm で約 2.5 分、40 mm で約 14 分、200 mm は 1 時間以上' },
+  { key: 'length', group: 'strip', query: 'L3', label: '板の長さ', unit: 'mm', step: 1, min: 6, max: 40, scale: mm, hint: '定常の読みには 12 mm ほど要る。「板の長さの取り方」が「定常状態になるまで」なら自動' },
+  { key: 'cells', group: 'strip', query: 'cells3', label: '板厚方向のセル数', unit: '', step: 2, min: 4, max: 8, scale: 1, hint: '偶数。4 で約 2〜3 分、6 で約 14 分' },
+  { key: 'barrel', group: 'bend', query: 'barrel3', label: 'バレル長', unit: 'mm', step: 10, min: 2, max: 5000, scale: mm, hint: 'ロールの胴の長さ。板幅の 1.5 倍以上（幅広がりの余裕）。板は胴の中央' },
+  { key: 'span', group: 'bend', query: 'span3', label: '支点間距離', unit: 'mm', step: 10, min: 2, max: 6000, scale: mm, hint: '軸受の中心の間。バレル長より長く、胴の外に張り出した分だけ撓みが増える' },
 ];
+/** the barrel is at least this many times the strip's width */
+const BARREL_OVER = 1.5;
+const FIELD = Object.fromEntries(NUMBERS.map((f) => [f.key, f])) as Record<NumberField['key'], NumberField>;
 
-const DEFAULTS: SolidPageSettings = { width: 8 * mm, length: 12 * mm, cells: 4, planeStrain: false };
+const DEFAULTS: SolidPageSettings = { width: 8 * mm, length: 12 * mm, cells: 4, planeStrain: false, bend: false, barrel: 300 * mm, support: 'barrel', span: 400 * mm };
 
 function checked(s: SolidPageSettings): SolidPageSettings {
-  const clamp = (v: number, f: NumberField) => Math.min(f.max * f.scale, Math.max(f.min * f.scale, v));
-  const cells = 2 * Math.round(clamp(s.cells, NUMBERS[2]) / 2);
-  return { width: clamp(s.width, NUMBERS[0]), length: clamp(s.length, NUMBERS[1]), cells, planeStrain: s.planeStrain };
+  const clamp = (v: number, f: NumberField, lo = f.min * f.scale) => Math.min(f.max * f.scale, Math.max(lo, v));
+  const cells = 2 * Math.round(clamp(s.cells, FIELD.cells) / 2);
+  const width = clamp(s.width, FIELD.width);
+  // the strip fits on the barrel with room for its spread (a tandem's later stands are wider), and the bearings are beyond the barrel's ends
+  const barrel = clamp(s.barrel, FIELD.barrel, BARREL_OVER * width);
+  const span = clamp(s.span, FIELD.span, barrel);
+  return { width, length: clamp(s.length, FIELD.length), cells, planeStrain: s.planeStrain, bend: s.bend, barrel, support: s.support === 'bearing' ? 'bearing' : 'barrel', span };
+}
+
+/** what the solver is told about the roll's bending: nothing with a rigid roll */
+export function rollBendOf(s: SolidPageSettings): SolidSettings['rollBend'] {
+  return s.bend ? { barrel: s.barrel, ...(s.support === 'bearing' ? { span: s.span } : {}) } : undefined;
 }
 
 function settingsOf(q: URLSearchParams): SolidPageSettings {
@@ -99,6 +122,8 @@ function settingsOf(q: URLSearchParams): SolidPageSettings {
     if (Number.isFinite(v) && v >= f.min && v <= f.max) s[f.key] = v * f.scale;
   }
   s.planeStrain = q.get('ps3') === '1';
+  s.bend = q.get('bend3') === '1';
+  s.support = q.get('support3') === 'bearing' ? 'bearing' : 'barrel';
   return checked(s);
 }
 
@@ -159,6 +184,8 @@ export class SolidMode {
   private readonly stopAfter: number | null;
   private readonly inputs = new Map<NumberField['key'], HTMLInputElement>();
   private planeStrainBox!: HTMLInputElement;
+  private bendBox!: HTMLInputElement;
+  private supportSelect!: HTMLSelectElement;
   private readonly checks: (() => void)[] = [];
   private readonly tabButtons: HTMLButtonElement[] = [];
   private shown: SolidPageSettings | null = null;
@@ -252,6 +279,39 @@ export class SolidMode {
   private buildSettings(): void {
     const fs = el('fieldset', 'group dim3-only');
     fs.append(el('legend', undefined, '板と格子（3 次元）'));
+    const bendFs = el('fieldset', 'group dim3-only');
+    bendFs.append(el('legend', undefined, 'ロールの撓み（3 次元）'));
+    const bendRow = el('label', 'field check');
+    this.bendBox = el('input');
+    this.bendBox.type = 'checkbox';
+    this.bendBox.name = 'solid-bend';
+    this.bendBox.addEventListener('change', () => {
+      this.lockBend();
+      this.o.onEdit();
+    });
+    bendRow.append(this.bendBox, el('span', undefined, 'ロールが荷重で撓む'));
+    bendRow.title = 'ロールを梁として、板から受ける荷重（幅方向の分布）で毎ステップ撓みを解き、板厚方向の位置に足す。撓んだ分だけ板の中央が厚く出る（クラウン）。剛体のロールは撓まない';
+    bendFs.append(bendRow);
+    const supportRow = el('label', 'field');
+    supportRow.append(el('span', 'field-label', '支点'));
+    const supportBox = el('span', 'field-input');
+    this.supportSelect = el('select');
+    this.supportSelect.name = 'solid-support';
+    for (const [v, t] of [
+      ['barrel', 'バレルの端'],
+      ['bearing', '軸受（支点間距離を入力）'],
+    ] as [BendSupport, string][]) {
+      const o = el('option', undefined, t);
+      o.value = v;
+      this.supportSelect.append(o);
+    }
+    this.supportSelect.addEventListener('change', () => {
+      this.lockBend();
+      this.o.onEdit();
+    });
+    supportBox.append(this.supportSelect);
+    supportRow.append(supportBox, el('span', 'hint', '単純支持。バレルの端なら撓みは最も小さく見積もる側。実機は軸受で支えるので、その距離が分かればこちら'));
+    bendFs.append(supportRow);
     for (const f of NUMBERS) {
       const row = el('label', 'field');
       row.append(el('span', 'field-label', f.label));
@@ -267,10 +327,13 @@ export class SolidMode {
       if (f.unit) box.append(el('span', 'unit', f.unit));
       row.append(box);
       if (f.hint) row.append(el('span', 'hint', f.hint));
-      this.checks.push(checkRange(inp, row, () => [f.min, f.max], f.unit));
-      fs.append(row);
+      // the barrel takes the strip, and the bearings are beyond the barrel: the lower ends follow the other inputs
+      const lo = () => (f.key === 'barrel' ? Math.max(f.min, BARREL_OVER * (parseFloat(this.inputs.get('width')!.value) || 0)) : f.key === 'span' ? Math.max(f.min, parseFloat(this.inputs.get('barrel')!.value) || f.min) : f.min);
+      this.checks.push(checkRange(inp, row, () => [lo(), f.max], f.unit));
+      (f.group === 'bend' ? bendFs : fs).append(row);
       this.inputs.set(f.key, inp);
     }
+    for (const k of ['width', 'barrel'] as const) this.inputs.get(k)!.addEventListener('input', () => this.checks.forEach((c) => c()));
     const ps = el('label', 'field check');
     this.planeStrainBox = el('input');
     this.planeStrainBox.type = 'checkbox';
@@ -280,9 +343,10 @@ export class SolidMode {
     ps.title = '板幅方向の速度を 0 にする。2 次元の断面と同じ問題になるので、3 次元の計算の確かめに使う';
     fs.append(ps);
     fs.append(el('p', 'hint', 'スタンド数（タンデム）・ロール偏平・圧下率一定・板の長さの取り方は「板とロール」の欄で、2 次元と共通。張力（「潤滑と張力」の欄）も効く: 後方張力は最初から、前方張力は頭端が出てから立ち上げ、定常はそれを待つ。GTN・亀裂の面は 3 次元には無い（亀裂になった点は応力を失うだけで、面は開かない）'));
+    bendFs.append(el('p', 'hint', 'ロールの径はロール半径、ヤング率は「ロール偏平」のロールのヤング率。片側だけの撓み（曲げ + せん断）を板の中央と端で結果に出す。R 100 mm・板幅 8 mm ではおよそ 1 µm で、細いロールや広い板で効く'));
     const note = this.o.panelRoot.querySelector('.note-more') ?? this.o.panelRoot.querySelector('.preset-note');
-    if (note) note.after(fs);
-    else this.o.panelRoot.prepend(fs);
+    if (note) note.after(fs, bendFs);
+    else this.o.panelRoot.prepend(fs, bendFs);
     // the rows of the shared panel the 3D model has no use for
     for (const name of NOT_IN_3D) {
       const c = this.o.panelRoot.querySelector(`[name="${name}"]`);
@@ -308,11 +372,24 @@ export class SolidMode {
     if (!auto && this.shown) showNumber(L, this.shown.length / mm);
   }
 
+  /** the bending's inputs are off with a rigid roll, and the span only with bearings */
+  private lockBend(): void {
+    const on = this.bendBox.checked;
+    const bearing = this.supportSelect.value === 'bearing';
+    this.supportSelect.disabled = !on;
+    this.inputs.get('barrel')!.disabled = !on;
+    this.inputs.get('span')!.disabled = !on || !bearing;
+    this.inputs.get('span')!.closest('label')?.classList.toggle('off', !on || !bearing);
+  }
+
   private showSettings(s: SolidPageSettings): void {
     this.shown = { ...s };
     for (const f of NUMBERS) showNumber(this.inputs.get(f.key)!, s[f.key] / f.scale);
     this.planeStrainBox.checked = s.planeStrain;
+    this.bendBox.checked = s.bend;
+    this.supportSelect.value = s.support;
     this.lockLength();
+    this.lockBend();
     for (const c of this.checks) c();
   }
 
@@ -325,6 +402,8 @@ export class SolidMode {
       if (Number.isFinite(v)) s[f.key] = v * f.scale;
     }
     s.planeStrain = this.planeStrainBox.checked;
+    s.bend = this.bendBox.checked;
+    s.support = this.supportSelect.value === 'bearing' ? 'bearing' : 'barrel';
     return checked(s);
   }
 
@@ -504,8 +583,11 @@ export class SolidMode {
     const q = conditionsQuery(this.o.presetId(), this.o.preset(), this.params3d ?? this.o.conditions());
     for (const k of ['L', 'cells']) q.delete(k);
     q.set('dim', '3');
-    for (const f of NUMBERS) q.set(f.query, String(+(this.settings[f.key] / f.scale).toFixed(3)));
-    if (this.settings.planeStrain) q.set('ps3', '1');
+    const s = this.settings;
+    for (const f of NUMBERS) if (f.group === 'strip' || (s.bend && (f.key === 'barrel' || s.support === 'bearing'))) q.set(f.query, String(+(s[f.key] / f.scale).toFixed(3)));
+    if (s.planeStrain) q.set('ps3', '1');
+    if (s.bend) q.set('bend3', '1');
+    if (s.bend && s.support === 'bearing') q.set('support3', 'bearing');
     if (this.field !== 'seq') q.set('f3', this.field);
     return q;
   }
@@ -586,7 +668,7 @@ export class SolidMode {
     this.awaitingReady = true;
     this.tape.clear();
     this.stopReplay();
-    const solid: SolidSettings = { width: this.settings.width, planeStrain: this.settings.planeStrain };
+    const solid: SolidSettings = { width: this.settings.width, planeStrain: this.settings.planeStrain, rollBend: rollBendOf(this.settings) };
     this.send({ type: 'init', params: P, solid, stands: P.rolling.stands ?? 1, handoff: P.rolling.handoff ?? 'done', stopAfter: this.stopAfter });
     this.standTable.update(1, [], 0, false, null, null);
     this.explorer.reset();
@@ -928,6 +1010,14 @@ export class SolidMode {
         ? ([
             ["ロール半径 R'", num(d.rollRadius, 1e3, 1), 'mm', !d.rollsSettled],
             ['ロールギャップ', num(d.gap, 1e3, 4), 'mm', !d.rollsSettled],
+          ] as [string, string, string, boolean][])
+        : []),
+      // the roll's deflection: the running value while adjusting, the steady mean once there
+      ...(d.rollBend
+        ? ([
+            ['ロールの撓み（板幅の中央）', num(steady && st.rollBend ? st.rollBend.centre : d.rollBend.centre, 1e6, 2), 'µm', !steady],
+            ['ロールの撓み（板の端）', num(steady && st.rollBend ? st.rollBend.edge : d.rollBend.edge, 1e6, 2), 'µm', !steady],
+            ['クラウン 2(δ中央 − δ端)', num(steady && st.rollBend ? 2 * (st.rollBend.centre - st.rollBend.edge) : 2 * (d.rollBend.centre - d.rollBend.edge), 1e6, 2), 'µm', !steady],
           ] as [string, string, string, boolean][])
         : []),
       // the tensions asked for, and what is on the strip now (ramping, or let go once the tail is at the rolls)

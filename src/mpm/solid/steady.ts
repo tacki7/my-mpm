@@ -31,6 +31,8 @@ export interface SolidSteady {
   spread: number;
   halfThickness: number[];
   forwardSlip: number;
+  /** the roll's deflection away from the strip at the mid-width and at the strip's edge (its entry half width) [m]; null with rigid rolls */
+  rollBend: { centre: number; edge: number } | null;
 }
 
 export class SolidSampler {
@@ -45,6 +47,8 @@ export class SolidSampler {
   private thick: Float64Array | null = null;
   private thickN: Int32Array | null = null;
   private gauges = 0;
+  private bendCentre = 0;
+  private bendEdge = 0;
   last: SolidLook | null = null;
 
   /** steady looks so far */
@@ -74,6 +78,10 @@ export class SolidSampler {
     this.map ??= new Float64Array(c.map.length);
     for (let i = 0; i < c.byZ.length; i++) this.byZ[i] += c.byZ[i] * c.steps;
     for (let i = 0; i < c.map.length; i++) this.map[i] += c.map[i] * c.steps;
+    if (sim.beam) {
+      this.bendCentre += sim.bend[1] * c.steps;
+      this.bendEdge += sim.bendAt(sim.halfWidth0) * c.steps;
+    }
     if (ex) {
       this.gauges++;
       this.hw += ex.halfWidth;
@@ -105,6 +113,7 @@ export class SolidSampler {
       spread: hw / sim.halfWidth0 - 1,
       halfThickness: Array.from(this.thick!, (v, k) => (this.thickN![k] ? v / this.thickN![k] : NaN)),
       forwardSlip: this.slip / this.gauges,
+      rollBend: sim.beam ? { centre: this.bendCentre / s, edge: this.bendEdge / s } : null,
     };
   }
 }

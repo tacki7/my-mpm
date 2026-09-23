@@ -23,7 +23,12 @@
 //   shared over the h0-long grips at the ends by a linear weight and each point's deformed section (updateTension,
 //   gripScale). No crack faces: a failed point carries no deviator and no tension (it is counted, and the first one
 //   is recorded). A tandem is a Sim3 per stand (tandem3.ts).
-import { startOffset, tailMargin, biteGeometry, cloneParams, hitchcockRadius, type DamageModel, type SimParams } from '../params.ts';
+// - Roll bending (solid.rollBend): the roll is a beam on two supports (rollBend.ts) loaded by the contact force by z
+//   column, low-passed as the flattening's force is; its axis sits higher by the deflection δ(z), so the gap opens
+//   toward the middle of the width. Solved together with the pass every step (updateBend); 'steady' waits for the
+//   deflection to settle as it does for the rolls' radius.
+import { startOffset, tailMargin, biteGeometry, cloneParams, hitchcockRadius, ROLL_E, ROLL_NU, type DamageModel, type SimParams } from '../params.ts';
+import { beamDeflection, type Beam } from './rollBend.ts';
 import { CTL_EVERY, CTL_TOL_H, CTL_TOL_R, presetRolls } from '../solver.ts';
 import { adiabaticRise, elasticConstants, hmFractureStrain, homologousTemperature, jcFractureStrain, plasticIncrement, staticStrength, strengthFactor, type Elastic } from '../material.ts';
 
@@ -32,6 +37,11 @@ export interface SolidSettings {
   width: number;
   /** no lateral velocity anywhere (the plane-strain limit: what the section model solves) */
   planeStrain?: boolean;
+  /**
+   * The rolls bend under the load (rollBend.ts): the barrel's length and the distance between the supports [m]
+   * (0 or absent: the barrel's ends). Absent, or a barrel of 0: rigid rolls
+   */
+  rollBend?: { barrel: number; span?: number };
 }
 
 export interface Solid3Params extends SimParams {
@@ -108,8 +118,21 @@ export class Sim3 {
   readonly xExitProbe: number;
   readonly halfWidth0: number;
   readonly inertiaRatio: number;
-  /** the top roll: a cylinder along z through (0, cy) */
+  /** the top roll: a cylinder along z through (0, cy); bent, its axis is at cy + bend[iz] over the z column iz */
   readonly roll: { cy: number; R: number; omega: number; vR: number; vcy: number };
+  /** the roll as a beam (null: rigid), the deflection of its axis by z column [m] and its rate [m/s] (nodes iz, z = (iz − 1) h) */
+  readonly beam: Beam | null;
+  readonly bend: Float64Array;
+  private readonly bendVel: Float64Array;
+  /** the contact force by z column over this step [N], and the load low-passed [N/m] on the full width at z_k = k h */
+  private readonly stepFz: Float64Array;
+  private readonly bendQ: Float64Array;
+  private bendRef = 0;
+  private bendSince = 0;
+  private bendSum = 0;
+  private bendCount = 0;
+  /** the deflection has settled (true with rigid rolls) */
+  bendSettled: boolean;
   /** the rolls follow the pass (flattening 'hitchcock' or gapControl 'reduction'), and whether they have settled (true with rolls that do not) */
   readonly rollsAdjusted: boolean;
   rollsSettled: boolean;
@@ -283,6 +306,17 @@ export class Sim3 {
 
     const R = start.R;
     this.roll = { cy: R + this.gap / 2, R, omega: r.rollSpeed / R, vR: 0, vcy: 0 };
+    const rb = P.solid.rollBend;
+    if (rb && rb.barrel > 0) {
+      const span = rb.span && rb.span > 0 ? rb.span : rb.barrel;
+      if (span < P.solid.width) throw new Error('the strip is wider than the distance between the roll supports');
+      this.beam = { D: 2 * r.rollRadius, span, E: r.rollE ?? ROLL_E, nu: r.rollNu ?? ROLL_NU };
+    } else this.beam = null;
+    this.bend = new Float64Array(this.nzN);
+    this.bendVel = new Float64Array(this.nzN);
+    this.stepFz = new Float64Array(this.nzN);
+    this.bendQ = new Float64Array(this.nzN);
+    this.bendSettled = this.beam === null;
     this.xExitProbe = Math.max(6 * h, Math.min(3 * r.h0, 2 * Lc));
     // the control's pace, as the section model's (solver.ts)
     this.rollsAdjusted = start.adjusted;
@@ -414,6 +448,60 @@ export class Sim3 {
     this.t += this.dt;
     this.step++;
     if (!this.rollsSettled) this.adjustRolls();
+    if (this.beam) this.updateBend();
+  }
+
+  /**
+   * The roll bends under the contact force of this step: the force by z column (the quarter's; the mid-width node's
+   * counts twice, the strip on the other side of z = 0 being its mirror image) low-passed over ctlTauF as the
+   * flattening's force is, then the beam's deflection at the columns (rollBend.ts). The contact sees the surface
+   * move at the deflection's rate. Settled once the mid-width deflection has held still over ctlWindow, as R does.
+   */
+  private updateBend(): void {
+    const { nzN, h, dt, stepFz, bendQ, bend, bendVel } = this;
+    const k = Math.min(1, dt / this.ctlTauF);
+    for (let iz = 1; iz < nzN; iz++) {
+      const q = ((iz === 1 ? 2 : 1) * stepFz[iz]) / h;
+      bendQ[iz - 1] += (q - bendQ[iz - 1]) * k;
+      stepFz[iz] = 0;
+    }
+    const d = beamDeflection(bendQ, h, this.beam!, nzN - 1);
+    for (let iz = 1; iz < nzN; iz++) {
+      bendVel[iz] = (d[iz - 1] - bend[iz]) / dt;
+      bend[iz] = d[iz - 1];
+    }
+    bend[0] = bend[2];
+    bendVel[0] = bendVel[2];
+    // the force ripples a few % as the points cross the cells, so the deflection is averaged over windows of
+    // ctlWindow: settled when one window's mean is within 2 % (or the gap control's tolerance on 2δ) of the last one's
+    this.bendSum += bend[1];
+    this.bendCount++;
+    if (this.t - this.bendSince >= this.ctlWindow) {
+      const mean = this.bendSum / this.bendCount;
+      const tol = Math.max(0.02 * Math.abs(mean), 0.5 * CTL_TOL_H * this.params.rolling.h0);
+      this.bendSettled = this.headX() >= this.xExitProbe && Math.abs(mean - this.bendRef) <= tol;
+      this.bendRef = mean;
+      this.bendSum = 0;
+      this.bendCount = 0;
+      this.bendSince = this.t;
+    }
+  }
+
+  /** the deflection of the roll's axis over z [m] (linear between the columns) and its rate [m/s] */
+  bendAt(z: number): number {
+    if (!this.beam) return 0;
+    const g = z / this.h;
+    const k = Math.max(0, Math.min(this.nzN - 3, Math.floor(g)));
+    const f = Math.max(0, Math.min(1, g - k));
+    return this.bend[k + 1] * (1 - f) + this.bend[k + 2] * f;
+  }
+
+  private bendVelAt(z: number): number {
+    if (!this.beam) return 0;
+    const g = z / this.h;
+    const k = Math.max(0, Math.min(this.nzN - 3, Math.floor(g)));
+    const f = Math.max(0, Math.min(1, g - k));
+    return this.bendVel[k + 1] * (1 - f) + this.bendVel[k + 2] * f;
   }
 
   /**
@@ -518,6 +606,7 @@ export class Sim3 {
     const halfDp = 0.5 * this.dp;
     const hh = 0.5 * h;
     const { cy, R } = this.roll;
+    const bending = this.beam !== null;
     const pushing = this.pusherActive;
     const tailEnd = this.NJ * this.NK; // the points of the tail column come first
     // force per gripped point [N] per unit of its deformed section and of its grip weight (see gripScale)
@@ -582,7 +671,7 @@ export class Sim3 {
 
       // penetration of the point's top edge (its half size along the deformed y edge) into the roll
       const ex = xp;
-      const ey = yp - cy;
+      const ey = yp - cy - (bending ? this.bendAt(zp) : 0);
       let pen = INF;
       let nx = 0;
       let ny = 0;
@@ -676,7 +765,9 @@ export class Sim3 {
     const { cy, R, omega } = this.roll;
     // the surface of a roll that is being adjusted moves along its normal by vcy n_y + vR besides turning (solver.ts Roll)
     const un0 = this.roll.vR;
-    const vcy = this.roll.vcy;
+    const vcy0 = this.roll.vcy;
+    const { bend, bendVel, stepFz } = this;
+    const bending = this.beam !== null;
     const mMin = 1e-12 * this.mass[0];
     let fyAcc = 0;
     let tqAcc = 0;
@@ -702,7 +793,8 @@ export class Sim3 {
           if (iz === 1 || planeStrain) vz = 0;
           if (gpen[idx] < 0) {
             const rx = xi;
-            const ry = yi - cy;
+            const ry = yi - cy - bend[iz];
+            const vcy = vcy0 + bendVel[iz];
             const d = Math.hypot(rx, ry);
             const nx = rx / d;
             const ny = ry / d;
@@ -733,6 +825,7 @@ export class Sim3 {
               tqAcc += -(rx * fy - ry * fx);
               const fn = fx * nx + fy * ny;
               accFz[iz] += fn;
+              if (bending) stepFz[iz] += fn;
               if (b >= 0 && b < nBinsX) accMap[b * nzN + iz] += fn;
               vx = nvx;
               vy = iy === 1 ? 0 : nvy;
@@ -814,11 +907,11 @@ export class Sim3 {
       wz[1] = 0.75 - (fz - 1) * (fz - 1);
       wz[2] = 0.5 * (fz - 0.5) * (fz - 0.5);
       const rx = px[p];
-      const ry = py[p] - cy;
+      const ry = py[p] - cy - this.bendAt(pz[p]);
       const d = Math.hypot(rx, ry);
       const nx = rx / d;
       const ny = ry / d;
-      const un = this.roll.vcy * ny + this.roll.vR;
+      const un = (this.roll.vcy + this.bendVelAt(pz[p])) * ny + this.roll.vR;
       const ux = -omega * R * ny + un * nx;
       const uy = omega * R * nx + un * ny;
       let e = 0;
@@ -1400,7 +1493,7 @@ export class Sim3 {
     if (head < -this.contactLength) return 'approach';
     if (head < this.xExitProbe) return 'bite';
     if (tail > -this.contactLength) return 'tail-out';
-    return this.rollsSettled && this.tensionsOn() ? 'steady' : 'adjusting';
+    return this.rollsSettled && this.bendSettled && this.tensionsOn() ? 'steady' : 'adjusting';
   }
 
   /** the sheet no longer moves though it is between the rolls (the rolls cannot draw it in) */
