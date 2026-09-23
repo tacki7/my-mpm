@@ -9,10 +9,10 @@ import type { GpuInfo } from '../mpm/solid/gpu/stepper.ts';
 import type { Track } from './protocol.ts';
 
 /** what the strip's faces can be coloured by */
-export type SolidFieldName = 'seq' | 'ep' | 'pres' | 'eta' | 'sxx' | 'syy' | 'szz' | 'damage' | 'spread';
+export type SolidFieldName = 'seq' | 'ep' | 'pres' | 'eta' | 'sxx' | 'syy' | 'szz' | 'damage' | 'spread' | 'rate';
 /** the order of the fields in a face's `vals`: every frame carries all of them, so the page colours the strip by
  *  itself (a field tab needs no round trip to the worker) and a recorded frame can be shown in any field */
-export const SOLID_FIELD_IDS: readonly SolidFieldName[] = ['seq', 'ep', 'pres', 'eta', 'sxx', 'syy', 'szz', 'damage', 'spread'];
+export const SOLID_FIELD_IDS: readonly SolidFieldName[] = ['seq', 'ep', 'pres', 'eta', 'sxx', 'syy', 'szz', 'damage', 'spread', 'rate'];
 
 export type ToSolidWorker =
   | { type: 'init'; params: SimParams; solid: SolidSettings; stands: number; handoff: Handoff; stopAfter: number | null; compute: Compute; threads: number }

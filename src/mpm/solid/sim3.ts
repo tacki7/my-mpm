@@ -33,7 +33,7 @@ import { CTL_EVERY, CTL_TOL_H, CTL_TOL_R, presetRolls } from '../solver.ts';
 import { adiabaticRise, elasticConstants, hmFractureStrain, homologousTemperature, jcFractureStrain, plasticIncrement, staticStrength, strengthFactor, type Elastic } from '../material.ts';
 import { GpuStepper } from './gpu/stepper.ts';
 import { f64, grid3Buffers, grid3From, makeGrid3, u8, PHASES, PH_FOLA, PH_FOLB, PH_G2PU, PH_G2PV, PH_GRID, PH_P2G, PH_VMEAN, PT_COUNT, PT_FIRST, PT_FY, PT_IXHI, PT_IXLO, PT_NFAIL, PT_TQ, PT_WORK, SY_BACK_NOW, SY_BACK_SCALE, SY_BOUNDS, SY_COUNT, SY_CY, SY_FRONT_NOW, SY_FRONT_SCALE, SY_IXHI, SY_IXLO, SY_IXPREVHI, SY_IXPREVLO, SY_OMEGA, SY_PUSHING, SY_R, SY_STEP, SY_T, SY_VCY, SY_VR, type Grid3, type Grid3Buffers } from './grid3.ts';
-import { PSTRIDE, P_ACTIVE, P_C, P_DCL, P_DHM, P_DJC, P_EP, P_ETA, P_F, P_FAILED, P_FAILSTEP, P_MASS, P_PRES, P_S, P_SEQ, P_STR, P_STREP, P_TEMP, P_TH, P_TOUCH, P_V, P_VOL0, P_VR, P_WORK, P_X, P_YSIZE, U, U_INTS } from './gpu/kernels.ts';
+import { PSTRIDE, P_ACTIVE, P_C, P_DCL, P_DHM, P_DJC, P_EP, P_ETA, P_F, P_FAILED, P_FAILSTEP, P_MASS, P_PRES, P_RATE, P_S, P_SEQ, P_STR, P_STREP, P_TEMP, P_TH, P_TOUCH, P_V, P_VOL0, P_VR, P_WORK, P_X, P_YSIZE, U, U_INTS } from './gpu/kernels.ts';
 
 export interface SolidSettings {
   /** full strip width at the entry [m] */
@@ -155,7 +155,7 @@ export interface Sim3Options {
 }
 
 /** the names of the Float64 particle arrays (shared with a team's workers as they are) */
-const PARTICLE_F64 = ['px', 'py', 'pz', 'vx', 'vy', 'vz', 'C', 'F', 'mass', 'vol0', 'sxx', 'syy', 'szz', 'sxy', 'syz', 'szx', 'pres', 'ep', 'temp', 'seq', 'eta', 'dJC', 'dHM', 'dCL', 'strength', 'strengthEp', 'vr', 'th'] as const;
+const PARTICLE_F64 = ['px', 'py', 'pz', 'vx', 'vy', 'vz', 'C', 'F', 'mass', 'vol0', 'sxx', 'syy', 'szz', 'sxy', 'syz', 'szx', 'pres', 'ep', 'temp', 'seq', 'eta', 'rate', 'dJC', 'dHM', 'dCL', 'strength', 'strengthEp', 'vr', 'th'] as const;
 const PARTICLE_U8 = ['active', 'failed', 'touch', 'owner'] as const;
 
 export class Sim3 {
@@ -286,6 +286,8 @@ export class Sim3 {
   readonly temp: Float64Array;
   readonly seq: Float64Array;
   readonly eta: Float64Array;
+  /** equivalent strain rate of the last step [1/s] (the deviatoric rate of deformation at the mill speed, as the flow stress sees it) */
+  readonly rate: Float64Array;
   readonly dJC: Float64Array;
   readonly dHM: Float64Array;
   readonly dCL: Float64Array;
@@ -469,6 +471,7 @@ export class Sim3 {
     this.temp = A('temp');
     this.seq = A('seq');
     this.eta = A('eta');
+    this.rate = A('rate');
     this.dJC = A('dJC');
     this.dHM = A('dHM');
     this.dCL = A('dCL');
@@ -975,7 +978,7 @@ export class Sim3 {
       a[b + P_PRES] = this.pres[p]; a[b + P_MASS] = this.mass[p]; a[b + P_VOL0] = this.vol0[p]; a[b + P_EP] = this.ep[p]; a[b + P_TEMP] = this.temp[p];
       a[b + P_STR] = this.strength[p]; a[b + P_STREP] = this.strengthEp[p]; a[b + P_VR] = this.vr[p]; a[b + P_TH] = this.th[p];
       a[b + P_SEQ] = this.seq[p]; a[b + P_ETA] = this.eta[p]; a[b + P_TOUCH] = this.touch[p]; a[b + P_ACTIVE] = this.active[p]; a[b + P_FAILED] = this.failed[p];
-      a[b + P_WORK] = 0; a[b + P_YSIZE] = this.ySize[p % NK]; a[b + P_DJC] = this.dJC[p]; a[b + P_DHM] = this.dHM[p]; a[b + P_DCL] = this.dCL[p]; a[b + P_FAILSTEP] = -1;
+      a[b + P_WORK] = 0; a[b + P_YSIZE] = this.ySize[p % NK]; a[b + P_DJC] = this.dJC[p]; a[b + P_DHM] = this.dHM[p]; a[b + P_DCL] = this.dCL[p]; a[b + P_FAILSTEP] = -1; a[b + P_RATE] = this.rate[p];
     }
     return a;
   }
@@ -999,7 +1002,7 @@ export class Sim3 {
       this.pres[p] = a[b + P_PRES]; this.ep[p] = a[b + P_EP]; this.temp[p] = a[b + P_TEMP];
       this.strength[p] = a[b + P_STR]; this.strengthEp[p] = a[b + P_STREP]; this.vr[p] = a[b + P_VR]; this.th[p] = a[b + P_TH];
       this.seq[p] = a[b + P_SEQ]; this.eta[p] = a[b + P_ETA]; this.touch[p] = a[b + P_TOUCH]; this.active[p] = a[b + P_ACTIVE];
-      this.dJC[p] = a[b + P_DJC]; this.dHM[p] = a[b + P_DHM]; this.dCL[p] = a[b + P_DCL];
+      this.dJC[p] = a[b + P_DJC]; this.dHM[p] = a[b + P_DHM]; this.dCL[p] = a[b + P_DCL]; this.rate[p] = a[b + P_RATE];
       const failed = a[b + P_FAILED] !== 0;
       this.failed[p] = failed ? 1 : 0;
       if (failed) {
@@ -1873,6 +1876,7 @@ export class Sim3 {
       const wyz = 0.5 * (l12 - l21);
       const wzx = 0.5 * (l20 - l02);
       const epsDot = Math.sqrt((2 / 3) * (exx * exx + eyy * eyy + ezz * ezz + 2 * (exy * exy + eyz * eyz + ezx * ezx))) * rateScale;
+      this.rate[p] = epsDot;
 
       // Jaumann: s ← s + dt (W s − s W), W = [[0, wxy, −wzx], [−wxy, 0, wyz], [wzx, −wyz, 0]]
       let sx = sxx[p], sy = syy[p], sz = szz[p], sa = sxy[p], sb = syz[p], sc = szx[p];

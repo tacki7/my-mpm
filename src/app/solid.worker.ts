@@ -84,6 +84,8 @@ function fieldValue(s: Sim3, f: SolidFieldName): (p: number) => number {
       return (p) => s.governingDamage(p);
     case 'spread':
       return (p) => (s.pz[p] - ((p % s.NK) + 0.5) * s.dz) * 1e3;
+    case 'rate':
+      return (p) => s.rate[p];
   }
 }
 

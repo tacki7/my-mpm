@@ -40,7 +40,7 @@ const FIELDS: [string, (s: Sim3) => ArrayLike<number>, number][] = [
   ['vx', (s) => s.vx, 1], ['vy', (s) => s.vy, 1], ['vz', (s) => s.vz, 1],
   ['C', (s) => s.C, 9], ['F', (s) => s.F, 9],
   ['sxx', (s) => s.sxx, 1], ['syy', (s) => s.syy, 1], ['szz', (s) => s.szz, 1], ['sxy', (s) => s.sxy, 1], ['syz', (s) => s.syz, 1], ['szx', (s) => s.szx, 1],
-  ['pres', (s) => s.pres, 1], ['ep', (s) => s.ep, 1], ['temp', (s) => s.temp, 1], ['seq', (s) => s.seq, 1], ['eta', (s) => s.eta, 1],
+  ['pres', (s) => s.pres, 1], ['ep', (s) => s.ep, 1], ['temp', (s) => s.temp, 1], ['seq', (s) => s.seq, 1], ['eta', (s) => s.eta, 1], ['rate', (s) => s.rate, 1],
   ['dJC', (s) => s.dJC, 1], ['dHM', (s) => s.dHM, 1], ['dCL', (s) => s.dCL, 1], ['touch', (s) => s.touch, 1], ['active', (s) => s.active, 1], ['failed', (s) => s.failed, 1],
 ];
 
