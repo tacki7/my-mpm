@@ -402,12 +402,12 @@ export class SolidMode {
     for (const b of this.$('solid-tools').querySelectorAll<HTMLButtonElement>('.look-from button')) b.setAttribute('aria-checked', String(b.dataset.look === id));
   }
 
-  /** drag turns the drawing, the wheel zooms, a double click puts it back; the arrow keys and + − do the same */
+  /** drag moves the drawing, Shift+drag (or the middle button) turns it, the wheel zooms, a double click puts it back; the arrow keys and + − do the same */
   private buildPointer(): void {
     const c = this.$<HTMLCanvasElement>('solid-canvas');
     let drag: { x: number; y: number; pan: boolean } | null = null;
     c.addEventListener('pointerdown', (e) => {
-      drag = { x: e.clientX, y: e.clientY, pan: e.shiftKey || e.button === 1 };
+      drag = { x: e.clientX, y: e.clientY, pan: !(e.shiftKey || e.button === 1) };
       c.setPointerCapture(e.pointerId);
       c.classList.add('dragging');
     });
