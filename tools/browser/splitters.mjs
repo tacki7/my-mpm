@@ -51,7 +51,8 @@ try {
   await c.waitFor('__mpm.done', 180000);
   await painted();
   const handles = await c.evaluate("Array.from(document.querySelectorAll('.splitter')).map((e) => [e.dataset.size, e.getAttribute('role'), e.getAttribute('aria-orientation'), e.tabIndex, getComputedStyle(e).display])");
-  ok(handles.length === 5 && handles.every((h) => h[1] === 'separator' && h[3] === 0 && h[4] !== 'none'), 'five handles, each a focusable separator', JSON.stringify(handles));
+  // six: left, charts, c12, c23, charts3 (the 3D picture over its charts), right
+  ok(handles.length === 6 && handles.every((h) => h[1] === 'separator' && h[3] === 0 && h[4] !== 'none'), 'six handles, each a focusable separator', JSON.stringify(handles));
 
   // the conditions pane: drag right 80 px
   const l0 = (await box('.conditions')).w;
