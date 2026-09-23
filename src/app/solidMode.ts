@@ -23,6 +23,8 @@ import { stopPhrase } from './standTable.ts';
 import { Explorer, standColor } from './explorer.ts';
 import { SOLID_FIELDS, SolidView, solidFieldInfo, type ViewPreset } from './solidView.ts';
 import { Tape } from './tape.ts';
+import { recordVideo, videoSupported, type VideoResult } from './solidVideo.ts';
+import { download } from './export.ts';
 
 export type Dim = '2' | '3';
 
@@ -32,6 +34,10 @@ const STEEL = '#5f6b75';
 /** the worker's frame cadence [ms] while it runs (solid.worker.ts FRAME_MS): playback at ×1 shows the frames at the rate they came */
 const FRAME_MS = 80;
 const SPEEDS = [0.25, 0.5, 1, 2, 4];
+/** the width of a video's frames [px]; the height follows the canvas on screen (even, for the encoder) */
+const VIDEO_WIDTH = 1280;
+/** a value of the legend's ends */
+const fmtEnd = (v: number) => (Math.abs(v) >= 100 ? v.toFixed(0) : Math.abs(v) >= 1 ? v.toFixed(2) : v.toFixed(3));
 
 /** what a frame holds in memory: the faces' vertices and values (the rest is small) */
 function frameBytes(f: SolidFrame): number {
@@ -138,6 +144,8 @@ export class SolidMode {
   private readonly tape = new Tape<SolidFrame>(frameBytes);
   /** playback: which frame of the tape is on show and whether it is playing; null while the live frame is shown */
   private replay: { at: number; playing: boolean; timer: ReturnType<typeof setInterval> | null } | null = null;
+  /** a video of the tape being written (solidVideo.ts); null otherwise */
+  private video: AbortController | null = null;
   private speed = 1;
   private params: SimParams | null = null;
   private field: SolidFieldName;
@@ -719,8 +727,13 @@ export class SolidMode {
       if (this.replay?.playing) this.play();
     });
     speed.append(sel);
+    const video = button('solid-video', '動画に保存', '記録した絵を、今の見る向き・色の量・速さで動画ファイルに（このブラウザの中で作る。H.264 の MP4、できないブラウザでは VP9 の WebM）', () => (this.video ? this.video.abort() : void this.saveVideo()));
+    if (!videoSupported()) {
+      video.disabled = true;
+      video.title = 'このブラウザは動画のエンコード（WebCodecs）に対応していない';
+    }
     const hint = el('span', undefined, '計算が止まっている間、記録した絵を見直せる。色の量のタブも効く。「続ける」「やり直す」で今の絵に戻る');
-    bar.append(rewind, play, scrub, at, speed, hint);
+    bar.append(rewind, play, scrub, at, speed, video, hint);
   }
 
   /** the bar is shown while the run is stopped and there is something recorded; its state follows the playback */
@@ -740,6 +753,92 @@ export class SolidMode {
     this.$('solid-replay-at').textContent = d ? `${at + 1} / ${n} 枚目　t = ${(d.t * 1e3).toFixed(2)} ms　${d.step.toLocaleString()} step` : '';
     this.$('solid-play').textContent = r?.playing ? '一時停止' : '再生';
     (this.$('solid-rewind') as HTMLButtonElement).disabled = at === 0;
+  }
+
+  // ── the tape as a video file ───────────────────────────────────────────────
+  /**
+   * The recorded frames written to a video file and downloaded: drawn off the page at a fixed size with the look on
+   * screen (the angles, zoom, pan, cut, field), a legend and the time in the corners, at the playback's speed.
+   * Resolves to what was written, or null when nothing was (nothing recorded, a run going, or stopped by the button).
+   */
+  async saveVideo(): Promise<(VideoResult & { name: string }) | null> {
+    const n = this.tape.length;
+    if (n < 2 || this.running || this.video) return null;
+    const frames = this.tape.frames;
+    const src = this.$<HTMLCanvasElement>('solid-canvas').getBoundingClientRect();
+    const width = VIDEO_WIDTH;
+    const height = 2 * Math.round((width * Math.max(0.4, Math.min(1, src.height / Math.max(1, src.width)))) / 2);
+    const offCanvas = document.createElement('canvas');
+    const off = new SolidView(offCanvas);
+    off.setSize(width, height, 1);
+    const paper = getComputedStyle(document.documentElement).getPropertyValue('--sheet').trim() || '#f4f5f3';
+    const stands = this.geometry?.stands ?? 1;
+    const btn = this.$<HTMLButtonElement>('solid-video');
+    const label = btn.textContent;
+    const abort = new AbortController();
+    this.video = abort;
+    btn.textContent = 'やめる';
+    btn.setAttribute('aria-busy', 'true');
+    const progress = this.$('solid-replay-at');
+    try {
+      const out = await recordVideo({
+        width,
+        height,
+        frameUs: (FRAME_MS * 1e3) / this.speed,
+        n,
+        signal: abort.signal,
+        draw: (i, cv) => {
+          const f = frames[i];
+          off.frame = f;
+          const g0 = this.geometries[f.diag.stand] ?? this.geometry;
+          if (g0) off.geometry = { ...g0, gap: f.diag.gap, rollRadius: f.diag.rollRadius };
+          off.sameLook(this.view);
+          off.draw();
+          const ctx = cv.getContext('2d')!;
+          ctx.setTransform(1, 0, 0, 1, 0, 0);
+          ctx.fillStyle = paper;
+          ctx.fillRect(0, 0, width, height);
+          ctx.drawImage(offCanvas, 0, 0);
+          this.videoCaption(ctx, off, f, stands);
+        },
+        onProgress: (k) => {
+          progress.textContent = `動画を作っている… ${k} / ${n} 枚`;
+        },
+      });
+      const name = `rolling-3d-${this.field}-${n}frames.${out.ext}`;
+      download(name, out.blob);
+      progress.textContent = `${name} を保存した（${out.width}×${out.height}、${out.seconds.toFixed(1)} 秒）`;
+      return { ...out, name };
+    } catch (e) {
+      progress.textContent = e instanceof DOMException && e.name === 'AbortError' ? '動画の書き出しをやめた' : `動画を作れなかった: ${e instanceof Error ? e.message : String(e)}`;
+      if (!(e instanceof DOMException && e.name === 'AbortError')) console.error(e);
+      return null;
+    } finally {
+      this.video = null;
+      btn.textContent = label;
+      btn.removeAttribute('aria-busy');
+    }
+  }
+
+  /** the legend (top left) and the time (bottom left) on a video's frame */
+  private videoCaption(ctx: CanvasRenderingContext2D, off: SolidView, f: SolidFrame, stands: number): void {
+    const info = solidFieldInfo(off.field);
+    const [lo, hi] = off.range;
+    const w = ctx.canvas.width;
+    const h = ctx.canvas.height;
+    const bar = ctx.createLinearGradient(16, 0, 216, 0);
+    for (let k = 0; k <= 10; k++) bar.addColorStop(k / 10, css(info.scale === 'diverging' ? split(k / 10) : temper(k / 10)));
+    ctx.fillStyle = bar;
+    ctx.fillRect(16, 16, 200, 10);
+    ctx.fillStyle = INK;
+    ctx.font = `${Math.round(w / 80)}px system-ui, sans-serif`;
+    ctx.textBaseline = 'top';
+    const unit = info.unit ? ` ${info.unit}` : '';
+    ctx.fillText(`${info.label}　${fmtEnd(lo)} 〜 ${fmtEnd(hi)}${unit}`, 16, 32);
+    const d = f.diag;
+    ctx.textBaseline = 'bottom';
+    const phase = d.stopped ? stopPhrase(d.stopped, this.standResults.length) : phaseText[d.phase];
+    ctx.fillText(`${stands > 1 ? `#${d.stand + 1}　` : ''}t = ${(d.t * 1e3).toFixed(2)} ms　${d.step.toLocaleString()} step　${phase}`, 16, h - 16);
   }
 
   /** show the tape's frame i (the latest one leaves playback) */
@@ -1187,6 +1286,11 @@ export class SolidMode {
       /** the frame on show (the tape's while playing back): its faces */
       get frameShown() {
         return self.shownFrame();
+      },
+      /** the tape written to a video file and downloaded: what was written (null: nothing) */
+      video: () => self.saveVideo().then((r) => (r ? { name: r.name, ext: r.ext, width: r.width, height: r.height, frames: r.frames, seconds: r.seconds, bytes: r.blob.size } : null)),
+      get videoBusy() {
+        return self.video !== null;
       },
       setDim: (d: Dim) => self.setDim(d),
       setField: (id: SolidFieldName) => self.setField(id),

@@ -15,7 +15,7 @@ Hancock-MacKenzie、破壊した粒子の応力の扱い）。式と出典の対
 | `src/mpm/params.ts` / `presets.ts` | 入力（SI 単位）と、名前付きの条件 |
 | `src/mpm/tandem.ts` | タンデム（`TandemSim`: スタンドを 1 つずつ解き、材料の状態を次のスタンドの新しい格子へ写す）。`node tools/tandem.mjs --stands 3 [--handoff steady]`（`run.mjs` と同じ引数） |
 | `src/mpm/planview/` | 平面図モデル（x 圧延方向・z 板幅方向、板厚は粒子の状態）。耳割れ用。`node tools/planview.mjs --W 20`。定常の読み方は `steady.ts`（ツールと画面の平面図で共通） |
-| `src/mpm/solid/` | 3 次元モデル（`Sim3`: x・y・z を解く 1/4 モデル、幅広がり・板幅方向の荷重分布）。画面の「3 次元」のタブ（`src/app/solidMode.ts`・`solidView.ts`・`solid.worker.ts`。止まったあとの巻き戻し再生は `tape.ts`）。タンデム・定常になるまでの板長は `tandem3.ts`（`Tandem3`）、ロール偏平・圧下率一定は `Sim3.adjustRolls`。`node tools/solid.mjs --W 8 --L 12 --cells 4 [--plane-strain] [--length steady] [--stands 3 --handoff steady] [--flatten hitchcock --control reduction]`（4 セルで約 2.5 分） |
+| `src/mpm/solid/` | 3 次元モデル（`Sim3`: x・y・z を解く 1/4 モデル、幅広がり・板幅方向の荷重分布）。画面の「3 次元」のタブ（`src/app/solidMode.ts`・`solidView.ts`・`solid.worker.ts`。止まったあとの巻き戻し再生は `tape.ts`、その動画ファイルは `solidVideo.ts`（WebCodecs）と `mux.ts`（MP4・WebM を自前で書く。`tools/checks/mux.mjs` が ffmpeg の本物のフレームで検証））。タンデム・定常になるまでの板長は `tandem3.ts`（`Tandem3`）、ロール偏平・圧下率一定は `Sim3.adjustRolls`。`node tools/solid.mjs --W 8 --L 12 --cells 4 [--plane-strain] [--length steady] [--stands 3 --handoff steady] [--flatten hitchcock --control reduction]`（4 セルで約 2.5 分） |
 | `src/app/` | ワーカー（`sim.worker.ts`）、描画（`view.ts`）、グラフ、条件パネル |
 | `tools/check.mjs` | 回帰関門。`// @check` の付いたスクリプトを集めて回す |
 | `tools/run.mjs` | ヘッドレスで 1 回圧延して数値を出す（`npm run sim -- --cells 6 --L 8`） |
@@ -88,7 +88,7 @@ tools/browser/browser.sh stop <cdp>; tools/browser/browser.sh stop <dev>
 Math.exp・log の最後の 1 ビットが違うのでビット一致はしない）、もう一度回してビット一致、タブ、16 mm の注、亀裂の記録、URL、断面に戻る・切り替えで一時停止・
 時計が表示中のビュー・未反映の編集は切り替えで反映しない・やり直すは両方、700 px。`pv-*.png` を自分で見る）。
 2 次元・3 次元のタブや 3 次元の画面（`solidMode.ts`・`solidView.ts`・3 次元のワーカー・`tracker3.ts` の応力状態と破断軌跡・`tape.ts` の巻き戻し再生）を触ったら `CDP_PORT=<cdp> node tools/browser/solid.mjs http://localhost:<dev>/ <作業用ディレクトリ>/sol`
-`solid`（3 次元のタブ: `active` `ready` `running` `frames` `done` `diag`（`steady` が定常の平均、SI）`geometry`（今のスタンドの。`stand` `stands` `sheetLength` も）`stand` `stands` `standResults`（済んだスタンドの `Stand3Result`）`stopped` `settings` `params` `field` `range` `url` `view`（向き・拡大・切る・ロール・`pan`・`pivot` = 回転の中心 [m]）`screenOfPoint(x, y, z)`（板の座標 [m] の画面座標）`tracks`（追っている点: 最初の亀裂・損傷最大）`explorer`（表示中の点）`screenOf(role)`（追っている点の丸の印の画面座標）`replay`（巻き戻し再生: `length` 記録した枚数・`at` 表示中の枚（生の絵なら null）・`playing`・`shown` 表示中の diag・`seek(i)` `play()` `pause()`）`frameShown`（表示中のフレーム）`setDim('2'|'3')` `setField()` `run()` `drawMs()`）
+`solid`（3 次元のタブ: `active` `ready` `running` `frames` `done` `diag`（`steady` が定常の平均、SI）`geometry`（今のスタンドの。`stand` `stands` `sheetLength` も）`stand` `stands` `standResults`（済んだスタンドの `Stand3Result`）`stopped` `settings` `params` `field` `range` `url` `view`（向き・拡大・切る・ロール・`pan`・`pivot` = 回転の中心 [m]）`screenOfPoint(x, y, z)`（板の座標 [m] の画面座標）`tracks`（追っている点: 最初の亀裂・損傷最大）`explorer`（表示中の点）`screenOf(role)`（追っている点の丸の印の画面座標）`replay`（巻き戻し再生: `length` 記録した枚数・`at` 表示中の枚（生の絵なら null）・`playing`・`shown` 表示中の diag・`seek(i)` `play()` `pause()`）`video()`（記録を動画ファイルにしてダウンロード。書いたものの名前・形式・大きさ・枚数・秒を返す）`videoBusy``frameShown`（表示中のフレーム）`setDim('2'|'3')` `setField()` `run()` `drawMs()`）
 2 次元に戻って断面が動く・3 次元を出すと一時停止、条件の欄で 2 スタンド・定常で引き継ぎ・定常になるまでの板長・ロール偏平・圧下率一定を選んで最後まで（#1 は相対 1e-5、#2 は荷重 1 %）、条件の欄の前後張力で最後まで（`params`・URL・結果の表の行・荷重が下がる）、700 px。`sol-*.png` を自分で見る）。
 荷重・フリクションヒルのグラフ（スラブ法の重ね描き・移動平均・凡例）を触ったら `CDP_PORT=<cdp> node tools/browser/slab-overlay.mjs http://localhost:<dev>/ <作業用ディレクトリ>/ov`
 （約 40 秒。スラブ法の値を node の `karman()` と比べ、方法の外の条件の凡例、定常の移動平均の揺れ、狭い幅の凡例。`ov-*.png` を自分で見る）。
@@ -102,7 +102,7 @@ Math.exp・log の最後の 1 ビットが違うのでビット一致はしな�
 ポートは必ず渡す（既定値は無い）。`window.__mpm` は `frames` `eta`（表示中の残り時間 [s]。速さが読めるまでは null。`plan.eta`・`solid.eta` も）`running` `ready` `done` `diag` `cracks`
 `geometry` `params` `history` `slab`（スラブ法の荷重・中立点・方法の外の理由、`delta` = 平均板厚 / 接触長、`steadyForce` = 定常の荷重をステップ数で重み付けした平均 [N/m]、`ratio` = MPM / スラブ法。定常の前と方法の外では null）`forceChart`（荷重のグラフに描いた生の値と移動平均）`explorer`（表示中の点）`tracks`（追っている点と経路）`view`（拡大率・パン・倍率・主応力の向き）
 `plan`（平面図: `active` `ready` `running` `done` `diag`（`steady` が定常の平均、SI）`cracks` `settings` `url` `setMode()` `setField()` `drawMs()`）
-（約 12 分、うちタンデムの節が約 9 分。実クリックでタブを移り、板幅 4 mm を最後まで回して `node tools/solid.mjs` と比べる（相対 1e-5）、巻き戻し再生（実クリックで巻き戻す・再生・一時停止・スライダーの端、再生中の色の量のタブ）、色の量のタブ、実ドラッグで動かす・Shift+ドラッグで回す・動かしたあと矢印キーで画面の中央を軸に回る・ホイール・ダブルクリック、見る向き、URL、
+（約 12 分、うちタンデムの節が約 9 分。実クリックでタブを移り、板幅 4 mm を最後まで回して `node tools/solid.mjs` と比べる（相対 1e-5）、巻き戻し再生（実クリックで巻き戻す・再生・一時停止・スライダーの端、再生中の色の量のタブ）、「動画に保存」で実際にダウンロードした MP4 を ffprobe で読む（枚数・幅・長さ。ffprobe が無ければ飛ばす）、色の量のタブ、実ドラッグで動かす・Shift+ドラッグで回す・動かしたあと矢印キーで画面の中央を軸に回る・ホイール・ダブルクリック、見る向き、URL、
 応力状態の表と `__mpm.solid.explorer` の一致・破断軌跡の描画、亀裂になる条件（`cond` で D2 0.15）で最初の亀裂の点と役のボタンの実クリック・絵の上の丸の印（`__mpm.solid.screenOf(role)` の周りの画素の色）、
 `stand` `stands` `standResults` `standFrames` `stopped`（タンデム: 表示中のスタンド（0 始まり）・スタンド数・済んだスタンドの結果・並んだ枠の状態・最後のスタンドまで行かずに止まった理由 'stalled' | 'separated' | 'lost'、ふだんは null）と
 `run()` `restart()` `setField(id)` `screenOf(id)`（粒子の画面座標）`drawMs(n)`（今のフレームを n 回描いた 1 回の ms）、
