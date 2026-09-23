@@ -13,6 +13,7 @@ import { applyQuery, stopAfterOf } from './app/query.ts';
 import { Overview } from './app/overview.ts';
 import { PlanMode } from './app/planMode.ts';
 import { SolidMode } from './app/solidMode.ts';
+import { SweepMode } from './app/sweepMode.ts';
 import { BiteView } from './app/view.ts';
 import { StandViews } from './app/standViews.ts';
 import { StandTable, stopPhrase } from './app/standTable.ts';
@@ -183,7 +184,8 @@ const solid = new SolidMode(
       $('reset').classList.add('pending');
     },
     onDim: (dim) => {
-      if (dim === '3') {
+      sweep.setActive(dim === 'c');
+      if (dim !== '2') {
         if (running) {
           running = false;
           send({ type: 'pause' });
@@ -200,6 +202,20 @@ const solid = new SolidMode(
   stopAfter,
 );
 
+// the 条件の比較 tab (src/app/sweepMode.ts): the 3D tandem for a row of conditions, a worker per condition, the
+// results side by side. Its base is the 3D tab's (the shared conditions and 「板と格子（3 次元）」)
+const sweep: SweepMode = new SweepMode({
+  query,
+  panelRoot: $('panel'),
+  conditions: () => params,
+  solidBase: (c) => solid.solidBase(c),
+  solidQuery: (c) => solid.solidQuery(c),
+  onEdit: () => {
+    edited = true;
+    $('reset').classList.add('pending');
+  },
+});
+
 presetSel.addEventListener('change', () => {
   presetId = presetSel.value;
   params = presetById(presetId)!.build();
@@ -208,6 +224,7 @@ presetSel.addEventListener('change', () => {
   restart();
   plan.applyConditions(params);
   solid.applyConditions(params);
+  sweep.applyConditions();
 });
 
 // ── field tabs ──────────────────────────────────────────────────────────────
@@ -253,7 +270,7 @@ function startWorker() {
       view.geometry = geometry;
       standGeometries = [geometry];
       standViews.setup(runStands, geometry);
-      if (query.get('autorun') === '1' && frames === 0 && !plan.active && !solid.active) run();
+      if (query.get('autorun') === '1' && frames === 0 && !plan.active && !solid.active && !sweep.active) run();
     } else if (m.type === 'frame') {
       if (!awaitingReady) onFrame(m);
     } else if (m.type === 'stand') {
@@ -346,8 +363,9 @@ function run() {
   updateButtons();
 }
 
-$('run').addEventListener('click', () => (solid.active ? solid.run() : plan.active ? plan.run() : run()));
+$('run').addEventListener('click', () => (sweep.active ? sweep.run() : solid.active ? solid.run() : plan.active ? plan.run() : run()));
 $('pause').addEventListener('click', () => {
+  if (sweep.active) return sweep.pause();
   if (solid.active) return solid.pause();
   if (plan.active) return plan.pause();
   running = false;
@@ -359,9 +377,11 @@ $('reset').addEventListener('click', () => {
   restart();
   plan.applyConditions(params);
   solid.applyConditions(params);
+  sweep.applyConditions();
 });
 
 function updateButtons() {
+  if (sweep.active) return sweep.updateButtons();
   if (solid.active) return solid.updateButtons();
   if (plan.active) return plan.updateButtons();
   const done = !!last?.passDone;
@@ -507,7 +527,7 @@ function updateStandTable() {
 
 /** the shared clock, from the section model's last frame, while the section view is shown */
 function showClock() {
-  if (solid.active || plan.active) return;
+  if (sweep.active || solid.active || plan.active) return;
   const d = last?.diag;
   const t = (last?.tOffset ?? 0) + (d?.t ?? 0);
   const step = (last?.stepOffset ?? 0) + (d?.step ?? 0);
@@ -800,6 +820,8 @@ window.__mpm = {
   plan: plan.hook(),
   /** the 3 次元 tab (tools/browser/solid.mjs) */
   solid: solid.hook(),
+  /** the 条件の比較 tab (tools/browser/sweep.mjs) */
+  sweep: sweep.hook(),
 };
 
 startWorker();
@@ -821,4 +843,4 @@ setField(field);
 restart();
 requestAnimationFrame(frameLoop);
 if (query.get('view') === 'plan') plan.setMode('plan');
-if (query.get('dim') === '3') solid.setDim('3');
+if (query.get('dim') === '3' || query.get('dim') === 'c') solid.setDim(query.get('dim') as '3' | 'c');

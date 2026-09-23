@@ -5,7 +5,7 @@
 // Everything the page had before is the 2 次元 tab, left as it is; main.ts routes the shared buttons here while
 // the 3 次元 tab is shown.
 import { cloneParams, type SimParams } from '../mpm/params.ts';
-import type { SolidPhase, SolidSettings } from '../mpm/solid/sim3.ts';
+import type { Solid3Params, SolidPhase, SolidSettings } from '../mpm/solid/sim3.ts';
 import type { SolidSteady } from '../mpm/solid/steady.ts';
 import type { Stand3Result } from '../mpm/solid/tandem3.ts';
 import { drawChart } from './charts.ts';
@@ -27,7 +27,8 @@ import { recordVideo, videoSupported, type VideoResult } from './solidVideo.ts';
 import { download } from './export.ts';
 import { frameMs } from './frameRate.ts';
 
-export type Dim = '2' | '3';
+/** the tabs: the section and plan view, the 3D model, the comparison of conditions (src/app/sweepMode.ts) */
+export type Dim = '2' | '3' | 'c';
 
 const mm = 1e-3;
 const INK = '#1d2a3a';
@@ -296,6 +297,7 @@ export class SolidMode {
     for (const [dim, label, about] of [
       ['2', '2 次元', '板の断面（平面ひずみ）と平面図。板幅方向の変形は考えない'],
       ['3', '3 次元', '板幅方向の変形（幅広がり・幅方向の荷重分布）も解く'],
+      ['c', '条件の比較', '板厚・板幅・ロール径・摩擦係数を振って、3 次元のタンデムの結果（板クラウン・荷重・幅広がり）を並べて比べる'],
     ] as [Dim, string, string][]) {
       const b = el('button', undefined, label);
       b.type = 'button';
@@ -310,7 +312,9 @@ export class SolidMode {
       b.addEventListener('keydown', (e) => {
         if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight' && e.key !== 'Home' && e.key !== 'End') return;
         e.preventDefault();
-        const next: Dim = e.key === 'Home' ? '2' : e.key === 'End' ? '3' : this.dim === '2' ? '3' : '2';
+        const order: Dim[] = ['2', '3', 'c'];
+        const at = order.indexOf(this.dim);
+        const next: Dim = e.key === 'Home' ? '2' : e.key === 'End' ? 'c' : order[(at + (e.key === 'ArrowRight' ? 1 : order.length - 1)) % order.length];
         this.setDim(next);
         this.tabButtons.find((t) => t.dataset.dim === next)?.focus();
       });
@@ -686,6 +690,33 @@ export class SolidMode {
     const row = el('div', 'export-url');
     row.append(copy, url);
     box.append(el('h2', undefined, '結果の書き出し'), row, status);
+  }
+
+  /**
+   * The 3D model's params from these shared conditions and the panel's 「板と格子（3 次元）」 and 「ロールの撓み」 (as a run
+   * would start with them): the 条件の比較 tab's base
+   */
+  solidBase(params: SimParams): Solid3Params {
+    const s = this.readSettings();
+    const P = cloneParams(params);
+    P.numerics.cellsThrough = s.cells;
+    P.rolling.sheetLength = s.length;
+    delete P.rolling.stands;
+    delete P.rolling.handoff;
+    const crown = Math.max(-0.5 * P.rolling.h0, Math.min(0.5 * P.rolling.h0, s.crown));
+    return { ...P, solid: { width: s.width, planeStrain: s.planeStrain, ...(s.full ? { fullThickness: true } : {}), rollBend: rollBendOf(s), ...(crown !== 0 ? { crownIn: crown } : {}) } };
+  }
+
+  /** the conditions URL of these shared conditions and the panel's 3D settings (the 条件の比較 tab's) */
+  solidQuery(params: SimParams): URLSearchParams {
+    const keep = { settings: this.settings, params3d: this.params3d };
+    this.settings = this.readSettings();
+    this.params3d = params;
+    const q = this.query();
+    this.settings = keep.settings;
+    this.params3d = keep.params3d;
+    for (const k of ['stands', 'handoff', 'length', 'gpu3', 'threads3']) q.delete(k);
+    return q;
   }
 
   /** the conditions URL: the shared keys, and the tab and the 3D settings */
