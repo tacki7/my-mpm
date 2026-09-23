@@ -89,7 +89,7 @@ Math.exp・log の最後の 1 ビットが違うのでビット一致はしな�
 時計が表示中のビュー・未反映の編集は切り替えで反映しない・やり直すは両方、700 px。`pv-*.png` を自分で見る）。
 2 次元・3 次元のタブや 3 次元の画面（`solidMode.ts`・`solidView.ts`・3 次元のワーカー・`tracker3.ts` の応力状態と破断軌跡・`tape.ts` の巻き戻し再生）を触ったら `CDP_PORT=<cdp> node tools/browser/solid.mjs http://localhost:<dev>/ <作業用ディレクトリ>/sol`
 `solid`（3 次元のタブ: `active` `ready` `running` `frames` `done` `diag`（`steady` が定常の平均、SI）`geometry`（今のスタンドの。`stand` `stands` `sheetLength` も）`stand` `stands` `standResults`（済んだスタンドの `Stand3Result`）`stopped` `settings` `params` `field` `range` `url` `view`（向き・拡大・切る・ロール・`pan`・`pivot` = 回転の中心 [m]）`screenOfPoint(x, y, z)`（板の座標 [m] の画面座標）`tracks`（追っている点: 最初の亀裂・損傷最大）`explorer`（表示中の点）`screenOf(role)`（追っている点の丸の印の画面座標）`replay`（巻き戻し再生: `length` 記録した枚数・`at` 表示中の枚（生の絵なら null）・`playing`・`shown` 表示中の diag・`seek(i)` `play()` `pause()`）`frameShown`（表示中のフレーム）`setDim('2'|'3')` `setField()` `run()` `drawMs()`）
-2 次元に戻って断面が動く・3 次元を出すと一時停止、条件の欄で 2 スタンド・定常で引き継ぎ・定常になるまでの板長・ロール偏平・圧下率一定を選んで最後まで（#1 は相対 1e-5、#2 は荷重 1 %）、700 px。`sol-*.png` を自分で見る）。
+2 次元に戻って断面が動く・3 次元を出すと一時停止、条件の欄で 2 スタンド・定常で引き継ぎ・定常になるまでの板長・ロール偏平・圧下率一定を選んで最後まで（#1 は相対 1e-5、#2 は荷重 1 %）、条件の欄の前後張力で最後まで（`params`・URL・結果の表の行・荷重が下がる）、700 px。`sol-*.png` を自分で見る）。
 荷重・フリクションヒルのグラフ（スラブ法の重ね描き・移動平均・凡例）を触ったら `CDP_PORT=<cdp> node tools/browser/slab-overlay.mjs http://localhost:<dev>/ <作業用ディレクトリ>/ov`
 （約 40 秒。スラブ法の値を node の `karman()` と比べ、方法の外の条件の凡例、定常の移動平均の揺れ、狭い幅の凡例。`ov-*.png` を自分で見る）。
 タンデムの画面（スタンドの枠・スタンドごとの表・負荷経路の色分け）を触ったら `CDP_PORT=<cdp> node tools/browser/tandem.mjs http://localhost:<dev>/ <作業用ディレクトリ>/tan`

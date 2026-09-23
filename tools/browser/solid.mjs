@@ -56,7 +56,7 @@ try {
   await click('#dim-tab-3');
   await c.waitFor('__mpm.solid.active && __mpm.solid.ready', 60000);
   ok((await visible('#solid-canvas')) && !(await visible('#bite')) && !(await visible('#plan-canvas')) && !(await visible('.view-switch')), 'a click on 3 次元 shows the 3D picture; the section, the plan view and their switch are gone');
-  ok((await visible('[name="solid-width"]')) && !(await visible('[name="tb"]')) && !(await visible('[name="L"]')) && (await visible('[name="stands"]')) && (await visible('[name="flatten"]')) && (await visible('[name="control"]')) && (await visible('[name="length"]')) && (await visible('[name="mu"]')), 'the panel has the 3D strip and the shared conditions (the stands, the rolls that follow the pass, the length steady), not the tensions or the section\'s length');
+  ok((await visible('[name="solid-width"]')) && (await visible('[name="tb"]')) && (await visible('[name="tf"]')) && !(await visible('[name="L"]')) && (await visible('[name="stands"]')) && (await visible('[name="flatten"]')) && (await visible('[name="control"]')) && (await visible('[name="length"]')) && (await visible('[name="mu"]')), 'the panel has the 3D strip and the shared conditions (the stands, the rolls that follow the pass, the length steady, the tensions), not the section\'s length');
   ok(await c.evaluate(`document.getElementById('dim-tab-3').getAttribute('aria-selected') === 'true' && document.getElementById('dim-panel').getAttribute('aria-labelledby') === 'dim-tab-3'`), 'the 3 次元 tab is selected and names the panel');
 
   // ── roll a 4 mm strip to the end; the tool, same condition
@@ -306,6 +306,25 @@ try {
   ok(rel(res[0].thicknessOut, 0.75e-3) < 2e-3 && rel(res[1].thicknessOut, target2) < 2e-3, 'a constant reduction: each stand\'s strip comes out at 75 % of what came in', `${(res[0].thicknessOut * 1e3).toFixed(4)}, ${(res[1].thicknessOut * 1e3).toFixed(4)} mm`);
   const tUrl = await c.evaluate('__mpm.solid.url');
   ok(/stands=2/.test(tUrl) && /handoff=steady/.test(tUrl) && /length=steady/.test(tUrl) && /flatten=hitchcock/.test(tUrl) && /control=reduction/.test(tUrl) && /dim=3/.test(tUrl), 'the conditions URL carries the tandem and the rolls', tUrl);
+
+  // ── the tensions: set in the panel, reach the 3D model, show in the results and the URL
+  await c.navigate(page('?dim=3&W3=2'));
+  await c.waitFor('__mpm.solid.active && __mpm.solid.ready', 60000);
+  await choose('tb', '60');
+  await choose('tf', '40');
+  await click('#reset');
+  await c.waitFor('__mpm.solid.ready && __mpm.solid.params.rolling.backTension === 60e6', 60000);
+  const tp = await c.evaluate('__mpm.solid.params.rolling');
+  ok(tp.backTension === 60e6 && tp.frontTension === 40e6, 'the tensions typed in the panel are the 3D model\'s', `${tp.backTension * 1e-6} / ${tp.frontTension * 1e-6} MPa`);
+  ok(/tb=60/.test(await c.evaluate('__mpm.solid.url')) && /tf=40/.test(await c.evaluate('__mpm.solid.url')), 'and the conditions URL carries them');
+  await click('#run');
+  await c.waitFor('__mpm.solid.diag.phase === "steady"', 600000);
+  await c.waitFor('__mpm.solid.done', 600000);
+  const td = await c.evaluate('__mpm.solid.diag');
+  const trow = await c.evaluate(`[...document.querySelectorAll('#solid-results tr')].map((r) => r.textContent).filter((t) => /張力/.test(t))`);
+  ok(td.backTension === 0 && Math.abs(td.frontTension - 40e6) < 1 && trow.length === 2 && /後方張力.*0 \/ 60MPa/.test(trow[0]) && /前方張力.*40 \/ 40MPa/.test(trow[1]), 'at the end the front tension is on and the back one let go (the tail is past the rolls); the results say so', `${td.backTension * 1e-6} / ${td.frontTension * 1e-6} MPa, rows ${JSON.stringify(trow)}`);
+  const tension0 = JSON.parse(execFileSync('node', ['tools/solid.mjs', '--W', '2', '--cells', '4', '--json'], { encoding: 'utf8' }));
+  ok(td.steady && td.steady.force < 0.98 * tension0.steady.force_kN * 1e3, 'the tensions lower the steady force by more than 2 %', `${(td.steady?.force * 1e-3).toFixed(2)} vs ${tension0.steady.force_kN.toFixed(2)} kN without`);
 
   // ── a narrow screen
   await c.setViewport(700, 1000);
