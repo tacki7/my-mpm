@@ -50,6 +50,11 @@ export interface SolidSettings {
    * parabola across the width, h(z) = h0 − crownIn (z / half width)². Negative: thinner at the middle. Absent: flat
    */
   crownIn?: number;
+  /**
+   * The whole thickness solved, with both rolls (the mid-thickness plane is no plane of symmetry): the strip's
+   * y runs from −h/2 to h/2 and the lattice has 2 NJ rows. Absent: the quarter model (the top half, y ≥ 0)
+   */
+  fullThickness?: boolean;
 }
 
 export interface Solid3Params extends SimParams {
@@ -208,8 +213,25 @@ export class Sim3 {
   private ctlRRef: number;
   private ctlRSince = 0;
   private ctlHSince = Infinity;
-  // grid: node (ix, iy, iz) at (ox + ix h, (iy − 1) h, (iz − 1) h), index (ix nyN + iy) nzN + iz
+  // grid: node (ix, iy, iz) at (ox + ix h, (iy − gyOff) h, (iz − 1) h), index (ix nyN + iy) nzN + iz
   readonly ox: number;
+  /**
+   * The whole thickness solved (SolidSettings.fullThickness): no fold, mirror or held row at iy = 1, the strip's
+   * y runs both ways and the bottom roll is the top roll seen through the mid-thickness plane (a node or point
+   * below it is tested against the top roll with y → −y and vy → −vy, the answer turned back). The sums over
+   * both rolls are halved where one roll's are read (rollShare)
+   */
+  readonly fullThickness: boolean;
+  /** the row of nodes on y = 0: gy = y / h + gyOff (1 in the quarter model, whose row iy = 0 is the ghost layer) */
+  readonly gyOff: number;
+  /** the first row of nodes that is the strip's own (1 in the quarter model, 0 in the full one) */
+  readonly iyLo: number;
+  /** one roll's share of the sums over the rolls (½ in the full model, 1 in the quarter) */
+  readonly rollShare: number;
+  /** the lattice row on y = 0 in the full model (0 in the quarter: its rows start at the plane) */
+  readonly jOff: number;
+  /** a point past this y (or −yMax in the full model) has left the grid [m] */
+  readonly yMax: number;
   readonly nxN: number;
   readonly nyN: number;
   readonly nzN: number;
@@ -354,7 +376,15 @@ export class Sim3 {
     const xEnd = 2 * r.h0 + 2 * h + elongated * 1.1 + 8 * h;
     this.ox = xTail0 - tailMargin(h, offset);
     this.nxN = Math.ceil((xEnd - this.ox) / h) + 1;
-    this.nyN = Math.ceil((r.h0 / 2 + 4 * h) / h) + 2;
+    const full = P.solid.fullThickness === true;
+    this.fullThickness = full;
+    // the quarter: the ghost row, the plane's row, and rows up past the surface; the full strip: the same both ways
+    const rowsUp = Math.ceil((r.h0 / 2 + 4 * h) / h);
+    this.nyN = full ? 2 * rowsUp + 1 : rowsUp + 2;
+    this.gyOff = full ? rowsUp : 1;
+    this.iyLo = full ? 0 : 1;
+    this.rollShare = full ? 0.5 : 1;
+    this.yMax = (this.nyN - 3 - this.gyOff) * h;
     // room for the spread: a quarter of the half width, and four cells
     this.nzN = Math.ceil((hw * 1.25 + 4 * h) / h) + 2;
     const NN = this.nxN * this.nyN * this.nzN;
@@ -408,7 +438,8 @@ export class Sim3 {
     this.ctlRRef = R;
 
     const NI = Math.round(r.sheetLength / dp);
-    const NJ = Math.round(r.h0 / 2 / dp);
+    const NJ = full ? Math.round(r.h0 / dp) : Math.round(r.h0 / 2 / dp);
+    this.jOff = full ? NJ / 2 : 0;
     const NK = Math.max(1, Math.round(hw / dp));
     this.NI = NI;
     this.NJ = NJ;
@@ -470,7 +501,7 @@ export class Sim3 {
         for (let k = 0; k < NK; k++, p++) {
           const sy = this.ySize[k];
           this.px[p] = xTail0 + (i + 0.5) * dp;
-          this.py[p] = (j + 0.5) * dp * sy;
+          this.py[p] = (j + 0.5 - this.jOff) * dp * sy;
           this.pz[p] = (k + 0.5) * dz;
           this.vx[p] = this.vIn;
           this.F[9 * p] = 1;
@@ -717,7 +748,9 @@ export class Sim3 {
     }
     own.fill(0, PT_FY, PT_COUNT);
     own[PT_FIRST] = -1;
-    // the sheet pushes the roll up: the force on the roll is minus the force on the sheet
+    // the sheet pushes the roll up: the force on the roll is minus the force on the sheet (one roll's: rollShare)
+    fy *= this.rollShare;
+    tq *= this.rollShare;
     this.accFy += -fy;
     this.accTq += tq;
     if (!this.rollsSettled) this.ctlForce += ((-2 * fy) / this.ctlWidth - this.ctlForce) * Math.min(1, this.dt / this.ctlTauF);
@@ -862,6 +895,8 @@ export class Sim3 {
       const b = ix - binCol0;
       if (b >= 0 && b < nBinsX) accMap[b * nzN + iz] += fc + ff;
     }
+    fy *= this.rollShare;
+    tq *= this.rollShare;
     this.accFy += -fy;
     this.accTq += tq;
     this.accSteps += K;
@@ -909,11 +944,12 @@ export class Sim3 {
       dp: this.dp, mu: r.mu, planeStrain: this.params.solid.planeStrain ? 1 : 0, vPush: this.vIn,
       mMin: 1e-12 * this.mass[0], K: this.el.K, G: this.el.G, jcA: mat.jcA, jcB: mat.jcB, jcN: mat.jcN, jcC: mat.jcC, jcM: mat.jcM,
       epsDot0: mat.epsDot0, tRoom: mat.tRoom, tMelt: mat.tMelt, rho: mat.rho, cp: mat.cp, chi: mat.chi, rateScale: r.millSpeed / r.rollSpeed,
-      xMin: this.ox + 2 * this.h, xMax: (this.nxN - 3) * this.h + this.ox, yMax: (this.nyN - 4) * this.h, zMax: (this.nzN - 4) * this.h,
+      xMin: this.ox + 2 * this.h, xMax: (this.nxN - 3) * this.h + this.ox, yMax: this.yMax, yMin: this.fullThickness ? -this.yMax : -INF, zMax: (this.nzN - 4) * this.h,
       tailEnd: this.NJ * this.NK, ng: this.nxN * this.nyN * this.nzN, swift: mat.hardening === 'swift' ? 1 : 0, swK: mat.swK, swE0: mat.swE0, swN: mat.swN,
       bending: this.beam ? 1 : 0, gripCols: this.gripCols, NI: this.NI, dz: this.dz,
       dmgModel: dmg.model === 'none' ? 0 : dmg.model === 'hancock-mackenzie' ? 2 : dmg.model === 'cockcroft-latham' ? 3 : 1,
       etaCutoff: dmg.etaCutoff, D1: dmg.D1, D2: dmg.D2, D3: dmg.D3, D4: dmg.D4, D5: dmg.D5, clCrit: dmg.clCrit,
+      full: this.fullThickness ? 1 : 0, gyOff: this.gyOff,
     };
     for (const [k, i] of Object.entries(U)) {
       if (!(k in v)) continue;
@@ -990,7 +1026,7 @@ export class Sim3 {
         y: this.py[p],
         z: this.pz[p],
         sheetX: (this.NI - 1 - i + 0.5) * this.dp,
-        sheetY: (j + 0.5) * this.dp,
+        sheetY: (j + 0.5 - this.jOff) * this.dp,
         sheetZ: (k + 0.5) * this.dz,
         point: p,
         eta: this.eta[p],
@@ -1011,7 +1047,7 @@ export class Sim3 {
     const { nzN, h, stepFz, bendQ, bend, bendVel } = this;
     const k = Math.min(1, dt / this.ctlTauF);
     for (let iz = 1; iz < nzN; iz++) {
-      const q = ((iz === 1 ? 2 : 1) * stepFz[iz]) / steps / h;
+      const q = ((iz === 1 ? 2 : 1) * this.rollShare * stepFz[iz]) / steps / h;
       bendQ[iz - 1] += (q - bendQ[iz - 1]) * k;
       stepFz[iz] = 0;
     }
@@ -1145,11 +1181,11 @@ export class Sim3 {
     }
     if (!(wsum > 0)) return null;
     hw /= wsum;
-    return { thickness: (2 * vol) / (w * hw), halfWidth: hw };
+    return { thickness: (2 * this.rollShare * vol) / (w * hw), halfWidth: hw };
   }
 
   private p2g(): void {
-    const { n, active, px, py, pz, vx, vy, vz, C, F, mass, vol0, dt, h, ox, nyN, nzN, pLo, pHi, owner } = this;
+    const { n, active, px, py, pz, vx, vy, vz, C, F, mass, vol0, dt, h, ox, nyN, nzN, pLo, pHi, owner, gyOff, fullThickness: full } = this;
     const me = this.rank + 1;
     const { m: gm, vx: gvx, vy: gvy, vz: gvz, pen: gpen, push: gpush } = this.g;
     const { sxx, syy, szz, sxy, syz, szx, pres, touch } = this;
@@ -1177,12 +1213,14 @@ export class Sim3 {
       const yp = py[p];
       const zp = pz[p];
       const gx = (xp - ox) * invH;
-      const gy = yp * invH + 1;
+      const gy = yp * invH + gyOff;
       const gz = zp * invH + 1;
       const bx = Math.floor(gx - 0.5);
       const by = Math.floor(gy - 0.5);
       const bz = Math.floor(gz - 0.5);
       if (bx < pLo || bx >= pHi) continue;
+      // the full strip's lower half sees the bottom roll: the top roll through the mid-thickness plane
+      const sr = full && yp < 0 ? -1 : 1;
       owner[p] = me;
       if (bx < ixLo) ixLo = bx;
       if (bx > ixHi) ixHi = bx;
@@ -1225,7 +1263,7 @@ export class Sim3 {
 
       // penetration of the point's top edge (its half size along the deformed y edge) into the roll
       const ex = xp;
-      const ey = yp - cy - (bending ? this.bendAt(zp) : 0);
+      const ey = sr * yp - cy - (bending ? this.bendAt(zp) : 0);
       let pen = INF;
       let nx = 0;
       let ny = 0;
@@ -1249,7 +1287,7 @@ export class Sim3 {
           const dy = (j - fy) * h;
           const wij = wi * wy[j];
           const row = ((bx + i) * nyN + by + j) * nzN + bz;
-          const onSide = inRoll && dx * nx + dy * ny <= hh;
+          const onSide = inRoll && dx * nx + sr * dy * ny <= hh;
           const bxv = mvx + a00 * dx + a01 * dy;
           const byv = mvy + a10 * dx + a11 * dy;
           const bzv = mvz + a20 * dx + a21 * dy;
@@ -1281,11 +1319,11 @@ export class Sim3 {
 
   /** the ghost layers (iy = 0, iz = 0) onto their mirror images (iy = 2, iz = 2): sums, the normal momentum negated */
   private foldMomentum(): void {
-    const { nyN, nzN } = this;
+    const { nyN, nzN, iyLo } = this;
     const { m: gm, vx: gvx, vy: gvy, vz: gvz, pen: gpen, push: gpush } = this.G;
     for (let ix = this.colLo, hi = this.colHi; ix < hi; ix++) {
       const col = ix * nyN * nzN;
-      for (let iz = 0; iz < nzN; iz++) {
+      if (!this.fullThickness) for (let iz = 0; iz < nzN; iz++) {
         const g = col + iz; // iy = 0
         if (gm[g] === 0) continue;
         const m = g + 2 * nzN;
@@ -1297,7 +1335,7 @@ export class Sim3 {
         if (gpush[g]) gpush[m] = 1;
         gm[g] = 0;
       }
-      for (let iy = 1; iy < nyN; iy++) {
+      for (let iy = iyLo; iy < nyN; iy++) {
         const g = col + iy * nzN; // iz = 0
         if (gm[g] === 0) continue;
         const m = g + 2;
@@ -1314,7 +1352,7 @@ export class Sim3 {
 
   /** the nodes of this worker's columns: the velocities, the contact with the roll (Coulomb), the pusher */
   private gridNodes(): void {
-    const { nyN, nzN, h, ox, dt, accFz, accMap, binCol0, nBinsX } = this;
+    const { nyN, nzN, h, ox, dt, accFz, accMap, binCol0, nBinsX, gyOff, iyLo, fullThickness: full } = this;
     const { m: gm, vx: gvx, vy: gvy, vz: gvz, pen: gpen, push: gpush, con: gcon, slipX: gslipX, slipY: gslipY, slipZ: gslipZ } = this.G;
     const mu = this.params.rolling.mu;
     const planeStrain = this.params.solid.planeStrain === true;
@@ -1333,8 +1371,10 @@ export class Sim3 {
     for (let ix = this.colLo, hi = this.colHi; ix < hi; ix++) {
       const xi = ox + ix * h;
       const b = ix - binCol0;
-      for (let iy = 1; iy < nyN; iy++) {
-        const yi = (iy - 1) * h;
+      for (let iy = iyLo; iy < nyN; iy++) {
+        const yi = (iy - gyOff) * h;
+        // below the mid-thickness plane of the full strip: the bottom roll, as the top roll seen through the plane
+        const sr = full && yi < 0 ? -1 : 1;
         const row = (ix * nyN + iy) * nzN;
         for (let iz = 1; iz < nzN; iz++) {
           const idx = row + iz;
@@ -1346,13 +1386,13 @@ export class Sim3 {
             continue;
           }
           let vx = gvx[idx] / m;
-          let vy = gvy[idx] / m;
+          let vy = sr * (gvy[idx] / m);
           let vz = gvz[idx] / m;
-          if (iy === 1) vy = 0;
+          if (iy === 1 && !full) vy = 0;
           if (iz === 1 || planeStrain) vz = 0;
           if (gpen[idx] < 0) {
             const rx = xi;
-            const ry = yi - cy - bend[iz];
+            const ry = sr * yi - cy - bend[iz];
             const vcy = vcy0 + bendVel[iz];
             const d = Math.hypot(rx, ry);
             const nx = rx / d;
@@ -1376,7 +1416,7 @@ export class Sim3 {
               const nvz = s * tz;
               gcon[idx] = 1;
               gslipX[idx] = s * tx;
-              gslipY[idx] = s * ty;
+              gslipY[idx] = sr * (s * ty);
               gslipZ[idx] = iz === 1 || planeStrain ? 0 : s * tz;
               const fx = m * (nvx - vx) * invDt;
               const fy = m * (nvy - vy) * invDt;
@@ -1387,13 +1427,13 @@ export class Sim3 {
               if (bending) stepFz[iz] += fn;
               if (b >= 0 && b < nBinsX) accMap[b * nzN + iz] += fn;
               vx = nvx;
-              vy = iy === 1 ? 0 : nvy;
+              vy = iy === 1 && !full ? 0 : nvy;
               vz = iz === 1 || planeStrain ? 0 : nvz;
             }
           }
           if (pushing && gpush[idx] && vx < vPush) vx = vPush;
           gvx[idx] = vx;
-          gvy[idx] = vy;
+          gvy[idx] = sr * vy;
           gvz[idx] = vz;
         }
       }
@@ -1404,17 +1444,17 @@ export class Sim3 {
 
   /** the mirrored velocity back to the ghost layers: iz = 0 from iz = 2, then iy = 0 from iy = 2 (the corner too) */
   private mirrorBack(): void {
-    const { nyN, nzN } = this;
+    const { nyN, nzN, iyLo } = this;
     const { vx: gvx, vy: gvy, vz: gvz } = this.G;
     for (let ix = this.colLo, hi = this.colHi; ix < hi; ix++) {
       const col = ix * nyN * nzN;
-      for (let iy = 1; iy < nyN; iy++) {
+      for (let iy = iyLo; iy < nyN; iy++) {
         const g = col + iy * nzN;
         gvx[g] = gvx[g + 2];
         gvy[g] = gvy[g + 2];
         gvz[g] = -gvz[g + 2];
       }
-      for (let iz = 0; iz < nzN; iz++) {
+      if (!this.fullThickness) for (let iz = 0; iz < nzN; iz++) {
         const g = col + iz;
         const m = g + 2 * nzN;
         gvx[g] = gvx[m];
@@ -1435,7 +1475,7 @@ export class Sim3 {
    * (followNodes), which add to the force on the sheet along y and the torque on the roll.
    */
   private followScatter(): void {
-    const { n, active, touch, px, py, pz, F, mass, h, ox, nyN, nzN, owner } = this;
+    const { n, active, touch, px, py, pz, F, mass, h, ox, nyN, nzN, owner, gyOff, fullThickness: full } = this;
     const me = this.rank + 1;
     const { vx: gvx, vy: gvy, con: gcon } = this.G;
     const { folN: gfolN, folD: gfolD } = this.g;
@@ -1448,8 +1488,9 @@ export class Sim3 {
     const wz = [0, 0, 0];
     for (let p = 0; p < n; p++) {
       if (!active[p] || !touch[p] || owner[p] !== me) continue;
+      const sr = full && py[p] < 0 ? -1 : 1;
       const gx = (px[p] - ox) * invH;
-      const gy = py[p] * invH + 1;
+      const gy = py[p] * invH + gyOff;
       const gz = pz[p] * invH + 1;
       const bx = Math.floor(gx - 0.5);
       const by = Math.floor(gy - 0.5);
@@ -1467,7 +1508,7 @@ export class Sim3 {
       wz[1] = 0.75 - (fz - 1) * (fz - 1);
       wz[2] = 0.5 * (fz - 0.5) * (fz - 0.5);
       const rx = px[p];
-      const ry = py[p] - cy - this.bendAt(pz[p]);
+      const ry = sr * py[p] - cy - this.bendAt(pz[p]);
       const d = Math.hypot(rx, ry);
       const nx = rx / d;
       const ny = ry / d;
@@ -1481,13 +1522,13 @@ export class Sim3 {
         for (let j = 0; j < 3; j++) {
           const wij = wx[i] * wy[j];
           const row = ((bx + i) * nyN + by + j) * nzN;
-          const along = ((i - fx) * nx + (j - fy) * ny) * h;
+          const along = ((i - fx) * nx + sr * (j - fy) * ny) * h;
           for (let k = 0; k < 3; k++) {
             const w = wij * wz[k];
             // the ghost layer holds its mirror image's velocity already only after the copy back: read the mirror
             const iz = bz + k;
             const idx = row + (iz === 0 ? 2 : iz);
-            const vnode = gvx[idx] * nx + gvy[idx] * ny;
+            const vnode = gvx[idx] * nx + sr * gvy[idx] * ny;
             e += w * (vnode - ux * nx - uy * ny);
             dnn += w * vnode * along;
             if (gcon[idx]) W += w;
@@ -1517,7 +1558,7 @@ export class Sim3 {
   }
 
   private followNodes(): void {
-    const { h, ox, nyN, nzN, dt, accFz, accMap, binCol0, nBinsX } = this;
+    const { h, ox, nyN, nzN, dt, accFz, accMap, binCol0, nBinsX, gyOff, fullThickness: full } = this;
     const { vx: gvx, vy: gvy, vz: gvz, m: gm, folN: gfolN, folD: gfolD, slipX: gslipX, slipY: gslipY, slipZ: gslipZ } = this.G;
     const mu = this.params.rolling.mu;
     const { cy } = this.roll;
@@ -1531,15 +1572,17 @@ export class Sim3 {
       const iy = Math.floor((idx - ix * slab) / nzN);
       const iz = idx - ix * slab - iy * nzN;
       const rx = ox + ix * h;
-      const ry = (iy - 1) * h - cy;
+      const yi = (iy - gyOff) * h;
+      const sr = full && yi < 0 ? -1 : 1;
+      const ry = sr * yi - cy;
       const d = Math.hypot(rx, ry);
       const nx = rx / d;
       const ny = ry / d;
       gvx[idx] += dv * nx;
-      gvy[idx] += dv * ny;
+      gvy[idx] += sr * (dv * ny);
       const mi = gm[idx];
       const sx = gslipX[idx];
-      const sy = gslipY[idx];
+      const sy = sr * gslipY[idx];
       const sz = gslipZ[idx];
       const sl = Math.sqrt(sx * sx + sy * sy + sz * sz);
       let tx = 0;
@@ -1550,11 +1593,11 @@ export class Sim3 {
         tx = c * sx;
         ty = c * sy;
         gvx[idx] += tx;
-        gvy[idx] += ty;
+        gvy[idx] += sr * ty;
         gvz[idx] += c * sz;
         const stuck = ds >= sl;
         gslipX[idx] = stuck ? 0 : sx + tx;
-        gslipY[idx] = stuck ? 0 : sy + ty;
+        gslipY[idx] = stuck ? 0 : sr * (sy + ty);
         gslipZ[idx] = stuck ? 0 : sz + c * sz;
       }
       const f = mi * dv * invDt;
@@ -1571,7 +1614,7 @@ export class Sim3 {
   }
 
   private g2pVelocity(): void {
-    const { n, active, px, py, pz, vx, vy, vz, C, F, mass, h, ox, nyN, nzN, failed, pres, vr, th, owner } = this;
+    const { n, active, px, py, pz, vx, vy, vz, C, F, mass, h, ox, nyN, nzN, failed, pres, vr, th, owner, gyOff } = this;
     const me = this.rank + 1;
     const { vx: gvx, vy: gvy, vz: gvz } = this.G;
     const { Th: gTh, Je: gJe, B: gB, Mv: gMv } = this.g;
@@ -1584,7 +1627,7 @@ export class Sim3 {
     for (let p = 0; p < n; p++) {
       if (!active[p] || owner[p] !== me) continue;
       const gx = (px[p] - ox) * invH;
-      const gy = py[p] * invH + 1;
+      const gy = py[p] * invH + gyOff;
       const gz = pz[p] * invH + 1;
       const bx = Math.floor(gx - 0.5);
       const by = Math.floor(gy - 0.5);
@@ -1673,11 +1716,12 @@ export class Sim3 {
 
   /** the volume averaging's sums by node: the ghost layers' onto their mirror images, the means, and the means back to the ghosts */
   private volumeMeans(): void {
-    const { nyN, nzN } = this;
+    const { nyN, nzN, iyLo } = this;
+    const full = this.fullThickness;
     const { Th: gTh, Je: gJe, B: gB, Mv: gMv } = this.G;
     for (let ix = this.colLo, hi = this.colHi; ix < hi; ix++) {
       const col = ix * nyN * nzN;
-      for (let iz = 0; iz < nzN; iz++) {
+      if (!full) for (let iz = 0; iz < nzN; iz++) {
         const g = col + iz;
         if (gMv[g] === 0) continue;
         const m = g + 2 * nzN;
@@ -1687,7 +1731,7 @@ export class Sim3 {
         gMv[m] += gMv[g];
         gMv[g] = 0;
       }
-      for (let iy = 1; iy < nyN; iy++) {
+      for (let iy = iyLo; iy < nyN; iy++) {
         const g = col + iy * nzN;
         if (gMv[g] === 0) continue;
         const m = g + 2;
@@ -1697,7 +1741,7 @@ export class Sim3 {
         gMv[m] += gMv[g];
         gMv[g] = 0;
       }
-      for (let idx = col + nzN; idx < col + nyN * nzN; idx++) {
+      for (let idx = col + iyLo * nzN; idx < col + nyN * nzN; idx++) {
         const m = gMv[idx];
         if (m > 0) {
           gTh[idx] /= m;
@@ -1706,13 +1750,13 @@ export class Sim3 {
           gJe[idx] = (b * gJe[idx]) / m;
         }
       }
-      for (let iy = 1; iy < nyN; iy++) {
+      for (let iy = iyLo; iy < nyN; iy++) {
         const g = col + iy * nzN;
         gTh[g] = gTh[g + 2];
         gJe[g] = gJe[g + 2];
         gB[g] = gB[g + 2];
       }
-      for (let iz = 0; iz < nzN; iz++) {
+      if (!full) for (let iz = 0; iz < nzN; iz++) {
         const g = col + iz;
         const m = g + 2 * nzN;
         gTh[g] = gTh[m];
@@ -1723,7 +1767,7 @@ export class Sim3 {
   }
 
   private g2pUpdate(): void {
-    const { n, active, px, py, pz, vx, vy, vz, C, F, dt, h, ox, nxN, nyN, nzN, failed, pres, vr, owner, part } = this;
+    const { n, active, px, py, pz, vx, vy, vz, C, F, dt, h, ox, nxN, nyN, nzN, failed, pres, vr, owner, part, gyOff, fullThickness: full } = this;
     const me = this.rank + 1;
     const { Th: gTh, Je: gJe, B: gB } = this.G;
     const { sxx, syy, szz, sxy, syz, szx, temp, vol0, dJC, dHM, dCL, strength, strengthEp } = this;
@@ -1735,7 +1779,8 @@ export class Sim3 {
     const rateScale = P.rolling.millSpeed / P.rolling.rollSpeed;
     const xMax = (nxN - 3) * h + ox;
     const xMin = ox + 2 * h;
-    const yMax = (nyN - 4) * h;
+    const yMax = this.yMax;
+    const yMin = full ? -yMax : -INF;
     const zMax = (nzN - 4) * h;
     const wx = [0, 0, 0];
     const wy = [0, 0, 0];
@@ -1748,7 +1793,7 @@ export class Sim3 {
       let cor = 1;
       if (!((failed[p] && !(pres[p] > 0)) || !(Jold > 0))) {
         const gx = (px[p] - ox) * invH;
-        const gy = py[p] * invH + 1;
+        const gy = py[p] * invH + gyOff;
         const gz = pz[p] * invH + 1;
         const bx = Math.floor(gx - 0.5);
         const by = Math.floor(gy - 0.5);
@@ -1792,9 +1837,10 @@ export class Sim3 {
       const nyp = py[p] + dt * vy[p];
       const nzp = pz[p] + dt * vz[p];
       px[p] = nxp;
-      py[p] = nyp < 0 ? -nyp : nyp;
+      // a point across a plane of symmetry is folded back; the full strip's y is free both ways
+      py[p] = nyp < 0 && !full ? -nyp : nyp;
       pz[p] = nzp < 0 ? -nzp : nzp;
-      if (nxp < xMin || nxp > xMax || nyp > yMax || nzp > zMax) {
+      if (nxp < xMin || nxp > xMax || nyp > yMax || nyp < yMin || nzp > zMax) {
         active[p] = 0;
         continue;
       }
@@ -1937,7 +1983,7 @@ export class Sim3 {
       y: this.py[p],
       z: this.pz[p],
       sheetX: (this.NI - 1 - i + 0.5) * this.dp,
-      sheetY: (j + 0.5) * this.dp,
+      sheetY: (j + 0.5 - this.jOff) * this.dp,
       sheetZ: (k + 0.5) * this.dz,
       point: p,
       eta: this.eta[p],
@@ -2104,11 +2150,11 @@ export class Sim3 {
   readContact(): { force: number; torque: number; steps: number; byZ: Float64Array; map: Float64Array } | null {
     const s = this.accSteps;
     if (s === 0) return null;
-    const { nzN, h, nBinsX } = this;
+    const { nzN, h, nBinsX, rollShare } = this;
     const byZ = new Float64Array(nzN - 1);
-    for (let iz = 1; iz < nzN; iz++) byZ[iz - 1] = this.accFz[iz] / s / (iz === 1 ? h / 2 : h);
+    for (let iz = 1; iz < nzN; iz++) byZ[iz - 1] = (rollShare * this.accFz[iz]) / s / (iz === 1 ? h / 2 : h);
     const map = new Float64Array(nBinsX * (nzN - 1));
-    for (let b = 0; b < nBinsX; b++) for (let iz = 1; iz < nzN; iz++) map[b * (nzN - 1) + iz - 1] = this.accMap[b * nzN + iz] / s / (h * (iz === 1 ? h / 2 : h));
+    for (let b = 0; b < nBinsX; b++) for (let iz = 1; iz < nzN; iz++) map[b * (nzN - 1) + iz - 1] = (rollShare * this.accMap[b * nzN + iz]) / s / (h * (iz === 1 ? h / 2 : h));
     const out = { force: (2 * this.accFy) / s, torque: (2 * this.accTq) / s, steps: s, byZ, map };
     this.accFy = 0;
     this.accTq = 0;
@@ -2145,7 +2191,13 @@ export class Sim3 {
       for (let k = 0; k < NK; k++) {
         const p = this.lattice(i, NJ - 1, k);
         if (!active[p] || Math.abs(px[p] - x) > band / 2) continue;
-        thick[k] += py[p] + 0.5 * dp * ySize[k] * F[9 * p + 4];
+        const top = py[p] + 0.5 * dp * ySize[k] * F[9 * p + 4];
+        if (this.fullThickness) {
+          // half the distance between the top face and the bottom one
+          const q = this.lattice(i, 0, k);
+          if (!active[q]) continue;
+          thick[k] += 0.5 * (top - (py[q] - 0.5 * dp * ySize[k] * F[9 * q + 4]));
+        } else thick[k] += top;
         zc[k] += pz[p];
         count[k]++;
         v += vx[p];

@@ -2,7 +2,7 @@
 // (tools/browser/browser.sh start with BROWSER_GPU=1; a Chrome without an adapter makes this a SKIP, not a
 // FAIL: the CI's runners have no GPU, so this is not a `@check`):
 // - tools/gpu/check.html: the same state stepped once on each side, field by field; a batch of steps the same
-//   way; whole passes to steady for each condition (plain, tensions, adjusted rolls, bending, damage), the
+//   way; whole passes to steady for each condition (plain, tensions, whole thickness, adjusted rolls, bending, damage), the
 //   steady means compared within the tolerances docs/validation.md「GPU」records
 // - the app: a pass on the GPU (`gpu3=1`) reports the GPU, gives the CPU's force, and is faster; the conditions
 //   URL keeps the choice; the note under the select
@@ -60,8 +60,8 @@ try {
   const pool = await c.evaluate('__gpucheck.pool()');
   ok(pool.length >= 1 && pool.some((p) => p.vendor === info.vendor && p.architecture === info.architecture), 'the pool holds the adapter the app uses', pool.map((p) => `${p.vendor} ${p.architecture} ${p.device}`.trim()).join(' | '));
 
-  // ── in sync: one step, then a batch, from the same state (a plain pass and the bending: the extra kernel path)
-  for (const v of ['plain', 'bend']) {
+  // ── in sync: one step, then a batch, from the same state (a plain pass, the bending and the whole thickness: the extra kernel paths)
+  for (const v of ['plain', 'bend', 'full']) {
     const r = await c.evaluate(`__gpucheck.sync(${JSON.stringify(v)}, 2, 4, 1600)`);
     for (const [label, tol, diff] of [
       ['one step', ONE, r.one],
@@ -95,6 +95,12 @@ try {
   rigid(plain);
   const tension = await pass('tension', 2);
   rigid(tension);
+  {
+    // the whole thickness with both rolls: the same steady as the quarter (the conditions are symmetric)
+    const r = await pass('full', 2);
+    rigid(r);
+    if (r.cpu && plain.cpu) near(r.cpu.force, plain.cpu.force, 1e-6, 'full: the CPU pass agrees with the quarter model');
+  }
   {
     // two passes at once round the pool (one device here: both on it; two: one each), the same steady means
     const all = await c.evaluate('__gpucheck.passesAll(["plain", "tension"], 2, 4)');

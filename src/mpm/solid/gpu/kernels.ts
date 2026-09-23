@@ -47,10 +47,10 @@ export const U = {
   dz: 48, dmgModel: 49, etaCutoff: 50, D1: 51,
   D2: 52, D3: 53, D4: 54, D5: 55,
   clCrit: 56, stepIndex: 57, backOn: 58, frontOn: 59,
-  gapHalf: 60,
+  gapHalf: 60, full: 61, gyOff: 62, yMin: 63,
 } as const;
 /** the u32 entries of U (the rest are f32) */
-export const U_INTS = new Set<number>([U.n, U.nxN, U.nyN, U.nzN, U.planeStrain, U.pushing, U.tailEnd, U.ng, U.swift, U.bending, U.gripCols, U.NI, U.dmgModel, U.stepIndex, U.backOn, U.frontOn]);
+export const U_INTS = new Set<number>([U.n, U.nxN, U.nyN, U.nzN, U.planeStrain, U.pushing, U.tailEnd, U.ng, U.swift, U.bending, U.gripCols, U.NI, U.dmgModel, U.stepIndex, U.backOn, U.frontOn, U.full]);
 
 export const WGSL = /* wgsl */ `
 struct U {
@@ -69,7 +69,7 @@ struct U {
   dz: f32, dmgModel: u32, etaCutoff: f32, D1: f32,
   D2: f32, D3: f32, D4: f32, D5: f32,
   clCrit: f32, stepIndex: u32, backOn: u32, frontOn: u32,
-  gapHalf: f32,
+  gapHalf: f32, full: u32, gyOff: f32, yMin: f32,
 };
 @group(0) @binding(0) var<uniform> u: U;
 @group(0) @binding(1) var<storage, read_write> P: array<f32>;
@@ -148,7 +148,7 @@ fn gripWeight(i: u32, end: u32) -> f32 {
   let b = p * S;
   if (P[b + ${P_ACTIVE}u] == 0.0) { return; }
   let xp = P[b]; let yp = P[b + 1u]; let zp = P[b + 2u];
-  let gx = (xp - u.ox) * u.invH; let gy = yp * u.invH + 1.0; let gz = zp * u.invH + 1.0;
+  let gx = (xp - u.ox) * u.invH; let gy = yp * u.invH + u.gyOff; let gz = zp * u.invH + 1.0;
   let bx = i32(floor(gx - 0.5)); let by = i32(floor(gy - 0.5)); let bz = i32(floor(gz - 0.5));
   if (bx < 0 || by < 0 || bz < 0 || bx + 2 >= i32(u.nxN) || by + 2 >= i32(u.nyN) || bz + 2 >= i32(u.nzN)) { return; }
   let fx = gx - f32(bx); let fy = gy - f32(by); let fz = gz - f32(bz);
@@ -178,8 +178,10 @@ fn gripWeight(i: u32, end: u32) -> f32 {
   }
   // penetration of the point's top edge into the roll. d − R is lost in f32 (both about 0.1 m, the penetration
   // 1e-8): with e = ey + R = y − gap / 2 − bend, small, d − R = (ex² + e (e − 2 R)) / (d + R) keeps it
+  // the full strip's lower half sees the bottom roll: the top roll through the mid-thickness plane
+  let sr = select(1.0, -1.0, u.full == 1u && yp < 0.0);
   let ex = xp;
-  let e = yp - u.gapHalf - bendAt(zp);
+  let e = sr * yp - u.gapHalf - bendAt(zp);
   let ey = e - u.R;
   var pen = INF; var nx = 0.0; var ny = 0.0;
   let halfDp = 0.5 * u.dp;
@@ -201,7 +203,7 @@ fn gripWeight(i: u32, end: u32) -> f32 {
       let dy = (f32(j) - fy) * u.h;
       let wij = wx[i] * wy[j];
       let row = u32((bx + i) * i32(u.nyN) + by + j) * u.nzN + u32(bz);
-      let onSide = inRoll && dx * nx + dy * ny <= hh;
+      let onSide = inRoll && dx * nx + sr * dy * ny <= hh;
       let bxv = mvx + a00 * dx + a01 * dy;
       let byv = mvy + a10 * dx + a11 * dy;
       let bzv = mvz + a20 * dx + a21 * dy;
@@ -226,7 +228,9 @@ fn gripWeight(i: u32, end: u32) -> f32 {
   if (ix >= u.nxN) { return; }
   let ng = u.ng;
   let c = ix * u.nyN * u.nzN;
+  let iyLo = select(1u, 0u, u.full == 1u);
   for (var iz = 0u; iz < u.nzN; iz++) {
+    if (u.full == 1u) { break; }
     let g = c + iz; // iy = 0
     if (ld(${G_M}u * ng + g) == 0.0) { continue; }
     let m = g + 2u * u.nzN;
@@ -239,7 +243,7 @@ fn gripWeight(i: u32, end: u32) -> f32 {
     if (ld(${G_PUSH}u * ng + g) != 0.0) { st(${G_PUSH}u * ng + m, ld(${G_PUSH}u * ng + g)); }
     st(${G_M}u * ng + g, 0.0);
   }
-  for (var iy = 1u; iy < u.nyN; iy++) {
+  for (var iy = iyLo; iy < u.nyN; iy++) {
     let g = c + iy * u.nzN; // iz = 0
     if (ld(${G_M}u * ng + g) == 0.0) { continue; }
     let m = g + 2u;
@@ -263,16 +267,19 @@ fn gripWeight(i: u32, end: u32) -> f32 {
   let ix = idx / slab;
   let iy = (idx - ix * slab) / u.nzN;
   let iz = idx - ix * slab - iy * u.nzN;
-  if (iy == 0u || iz == 0u) { return; }
+  if ((iy == 0u && u.full == 0u) || iz == 0u) { return; }
   let m = ld(${G_M}u * ng + idx);
   if (m <= u.mMin) {
     st(${G_VX}u * ng + idx, 0.0); st(${G_VY}u * ng + idx, 0.0); st(${G_VZ}u * ng + idx, 0.0);
     return;
   }
+  let yi = (f32(iy) - u.gyOff) * u.h;
+  // below the mid-thickness plane of the full strip: the bottom roll, as the top roll seen through the plane
+  let sr = select(1.0, -1.0, u.full == 1u && yi < 0.0);
   var vx = ld(${G_VX}u * ng + idx) / m;
-  var vy = ld(${G_VY}u * ng + idx) / m;
+  var vy = sr * (ld(${G_VY}u * ng + idx) / m);
   var vz = ld(${G_VZ}u * ng + idx) / m;
-  let yHeld = iy == 1u;
+  let yHeld = iy == 1u && u.full == 0u;
   let zHeld = iz == 1u || u.planeStrain == 1u;
   if (yHeld) { vy = 0.0; }
   if (zHeld) { vz = 0.0; }
@@ -281,7 +288,7 @@ fn gripWeight(i: u32, end: u32) -> f32 {
     let rx = u.ox + f32(ix) * u.h;
     var bz = 0.0; var bvz = 0.0;
     if (u.bending == 1u) { bz = bend[iz]; bvz = bend[u.nzN + iz]; }
-    let ry = f32(iy - 1u) * u.h - u.cy - bz;
+    let ry = sr * yi - u.cy - bz;
     let vcy = u.vcy + bvz;
     let d = sqrt(rx * rx + ry * ry);
     let nx = rx / d; let ny = ry / d;
@@ -298,7 +305,7 @@ fn gripWeight(i: u32, end: u32) -> f32 {
       let nvx = ux + s * tx; let nvy = uy + s * ty; let nvz = s * tz;
       st(${G_CON}u * ng + idx, 1.0);
       st(${G_SLX}u * ng + idx, s * tx);
-      st(${G_SLY}u * ng + idx, s * ty);
+      st(${G_SLY}u * ng + idx, sr * (s * ty));
       st(${G_SLZ}u * ng + idx, select(s * tz, 0.0, zHeld));
       let fx = m * (nvx - vx) / u.dt;
       let fy = m * (nvy - vy) / u.dt;
@@ -311,7 +318,7 @@ fn gripWeight(i: u32, end: u32) -> f32 {
     }
   }
   if (u.pushing == 1u && ld(${G_PUSH}u * ng + idx) != 0.0 && vx < u.vPush) { vx = u.vPush; }
-  st(${G_VX}u * ng + idx, vx); st(${G_VY}u * ng + idx, vy); st(${G_VZ}u * ng + idx, vz);
+  st(${G_VX}u * ng + idx, vx); st(${G_VY}u * ng + idx, sr * vy); st(${G_VZ}u * ng + idx, vz);
 }
 
 // followRoll, the points' half (sim3.ts followRoll, the first loop): what a point inside the roll lacks to keep
@@ -323,13 +330,14 @@ fn gripWeight(i: u32, end: u32) -> f32 {
   if (P[b + ${P_ACTIVE}u] == 0.0 || P[b + ${P_TOUCH}u] == 0.0) { return; }
   let ng = u.ng;
   let xp = P[b]; let yp = P[b + 1u]; let zp = P[b + 2u];
-  let gx = (xp - u.ox) * u.invH; let gy = yp * u.invH + 1.0; let gz = zp * u.invH + 1.0;
+  let gx = (xp - u.ox) * u.invH; let gy = yp * u.invH + u.gyOff; let gz = zp * u.invH + 1.0;
   let bx = i32(floor(gx - 0.5)); let by = i32(floor(gy - 0.5)); let bz = i32(floor(gz - 0.5));
   if (bx < 0 || by < 0 || bz < 0 || bx + 2 >= i32(u.nxN) || by + 2 >= i32(u.nyN) || bz + 2 >= i32(u.nzN)) { return; }
   let fx = gx - f32(bx); let fy = gy - f32(by); let fz = gz - f32(bz);
   let wx = w3(fx); let wy = w3(fy); let wz = w3(fz);
+  let sr = select(1.0, -1.0, u.full == 1u && yp < 0.0);
   let rx = xp;
-  let ry = yp - u.cy - bendAt(zp);
+  let ry = sr * yp - u.cy - bendAt(zp);
   let d = sqrt(rx * rx + ry * ry);
   let nx = rx / d; let ny = ry / d;
   let un = (u.vcy + bendVelAt(zp)) * ny + u.vR;
@@ -340,13 +348,13 @@ fn gripWeight(i: u32, end: u32) -> f32 {
     for (var j = 0; j < 3; j++) {
       let wij = wx[i] * wy[j];
       let row = u32((bx + i) * i32(u.nyN) + by + j) * u.nzN;
-      let along = ((f32(i) - fx) * nx + (f32(j) - fy) * ny) * u.h;
+      let along = ((f32(i) - fx) * nx + sr * (f32(j) - fy) * ny) * u.h;
       for (var k = 0; k < 3; k++) {
         let w = wij * wz[k];
         // the ghost layer holds its mirror image's velocity only after the copy back: read the mirror
         let iz = u32(bz + k);
         let idx = row + select(iz, 2u, iz == 0u);
-        let vnode = ld(${G_VX}u * ng + idx) * nx + ld(${G_VY}u * ng + idx) * ny;
+        let vnode = ld(${G_VX}u * ng + idx) * nx + sr * ld(${G_VY}u * ng + idx) * ny;
         e += w * (vnode - ux * nx - uy * ny);
         dnn += w * vnode * along;
         if (ld(${G_CON}u * ng + idx) != 0.0) { W += w; }
@@ -388,14 +396,16 @@ fn gripWeight(i: u32, end: u32) -> f32 {
   let ix = idx / slab;
   let iy = (idx - ix * slab) / u.nzN;
   let rx = u.ox + f32(ix) * u.h;
-  let ry = f32(iy - 1u) * u.h - u.cy;
+  let yi = (f32(iy) - u.gyOff) * u.h;
+  let sr = select(1.0, -1.0, u.full == 1u && yi < 0.0);
+  let ry = sr * yi - u.cy;
   let d = sqrt(rx * rx + ry * ry);
   let nx = rx / d; let ny = ry / d;
   var vx = ld(${G_VX}u * ng + idx) + dv * nx;
-  var vy = ld(${G_VY}u * ng + idx) + dv * ny;
+  var vy = sr * ld(${G_VY}u * ng + idx) + dv * ny;
   var vz = ld(${G_VZ}u * ng + idx);
   let mi = ld(${G_M}u * ng + idx);
-  let sx = ld(${G_SLX}u * ng + idx); let sy = ld(${G_SLY}u * ng + idx); let sz = ld(${G_SLZ}u * ng + idx);
+  let sx = ld(${G_SLX}u * ng + idx); let sy = sr * ld(${G_SLY}u * ng + idx); let sz = ld(${G_SLZ}u * ng + idx);
   let sl = sqrt(sx * sx + sy * sy + sz * sz);
   var tx = 0.0; var ty = 0.0;
   if (sl > 0.0) {
@@ -405,10 +415,10 @@ fn gripWeight(i: u32, end: u32) -> f32 {
     vx += tx; vy += ty; vz += c * sz;
     let stuck = ds >= sl;
     st(${G_SLX}u * ng + idx, select(sx + tx, 0.0, stuck));
-    st(${G_SLY}u * ng + idx, select(sy + ty, 0.0, stuck));
+    st(${G_SLY}u * ng + idx, select(sr * (sy + ty), 0.0, stuck));
     st(${G_SLZ}u * ng + idx, select(sz + c * sz, 0.0, stuck));
   }
-  st(${G_VX}u * ng + idx, vx); st(${G_VY}u * ng + idx, vy); st(${G_VZ}u * ng + idx, vz);
+  st(${G_VX}u * ng + idx, vx); st(${G_VY}u * ng + idx, sr * vy); st(${G_VZ}u * ng + idx, vz);
   let f = mi * dv / u.dt;
   let fx = f * nx + mi * tx / u.dt;
   let fy = f * ny + mi * ty / u.dt;
@@ -423,8 +433,9 @@ fn gripWeight(i: u32, end: u32) -> f32 {
   if (ix >= u.nxN) { return; }
   let ng = u.ng;
   let c = ix * u.nyN * u.nzN;
+  let iyLo = select(1u, 0u, u.full == 1u);
   var fy = 0.0; var tq = 0.0;
-  for (var iy = 1u; iy < u.nyN; iy++) {
+  for (var iy = iyLo; iy < u.nyN; iy++) {
     for (var iz = 1u; iz < u.nzN; iz++) {
       let g = c + iy * u.nzN + iz;
       fy += ld(${G_FY}u * ng + g);
@@ -438,6 +449,7 @@ fn gripWeight(i: u32, end: u32) -> f32 {
     st(${G_VZ}u * ng + g, -ld(${G_VZ}u * ng + g + 2u));
   }
   for (var iz = 0u; iz < u.nzN; iz++) {
+    if (u.full == 1u) { break; }
     let g = c + iz;
     let m = g + 2u * u.nzN;
     st(${G_VX}u * ng + g, ld(${G_VX}u * ng + m));
@@ -454,7 +466,7 @@ fn gripWeight(i: u32, end: u32) -> f32 {
   let b = p * S;
   if (P[b + ${P_ACTIVE}u] == 0.0) { return; }
   let ng = u.ng;
-  let gx = (P[b] - u.ox) * u.invH; let gy = P[b + 1u] * u.invH + 1.0; let gz = P[b + 2u] * u.invH + 1.0;
+  let gx = (P[b] - u.ox) * u.invH; let gy = P[b + 1u] * u.invH + u.gyOff; let gz = P[b + 2u] * u.invH + 1.0;
   let bx = i32(floor(gx - 0.5)); let by = i32(floor(gy - 0.5)); let bz = i32(floor(gz - 0.5));
   if (bx < 0 || by < 0 || bz < 0 || bx + 2 >= i32(u.nxN) || by + 2 >= i32(u.nyN) || bz + 2 >= i32(u.nzN)) { return; }
   let fx = gx - f32(bx); let fy = gy - f32(by); let fz = gz - f32(bz);
@@ -515,7 +527,9 @@ fn gripWeight(i: u32, end: u32) -> f32 {
   if (ix >= u.nxN) { return; }
   let ng = u.ng;
   let c = ix * u.nyN * u.nzN;
+  let iyLo = select(1u, 0u, u.full == 1u);
   for (var iz = 0u; iz < u.nzN; iz++) {
+    if (u.full == 1u) { break; }
     let g = c + iz;
     if (ld(${G_MV}u * ng + g) == 0.0) { continue; }
     let m = g + 2u * u.nzN;
@@ -525,7 +539,7 @@ fn gripWeight(i: u32, end: u32) -> f32 {
     st(${G_MV}u * ng + m, ld(${G_MV}u * ng + m) + (ld(${G_MV}u * ng + g)));
     st(${G_MV}u * ng + g, 0.0);
   }
-  for (var iy = 1u; iy < u.nyN; iy++) {
+  for (var iy = iyLo; iy < u.nyN; iy++) {
     let g = c + iy * u.nzN;
     if (ld(${G_MV}u * ng + g) == 0.0) { continue; }
     let m = g + 2u;
@@ -535,7 +549,7 @@ fn gripWeight(i: u32, end: u32) -> f32 {
     st(${G_MV}u * ng + m, ld(${G_MV}u * ng + m) + (ld(${G_MV}u * ng + g)));
     st(${G_MV}u * ng + g, 0.0);
   }
-  for (var idx = c + u.nzN; idx < c + u.nyN * u.nzN; idx++) {
+  for (var idx = c + iyLo * u.nzN; idx < c + u.nyN * u.nzN; idx++) {
     let m = ld(${G_MV}u * ng + idx);
     if (m > 0.0) {
       st(${G_TH}u * ng + idx, ld(${G_TH}u * ng + idx) / (m));
@@ -544,13 +558,14 @@ fn gripWeight(i: u32, end: u32) -> f32 {
       st(${G_JE}u * ng + idx, (bb * ld(${G_JE}u * ng + idx)) / m);
     }
   }
-  for (var iy = 1u; iy < u.nyN; iy++) {
+  for (var iy = iyLo; iy < u.nyN; iy++) {
     let g = c + iy * u.nzN;
     st(${G_TH}u * ng + g, ld(${G_TH}u * ng + g + 2u));
     st(${G_JE}u * ng + g, ld(${G_JE}u * ng + g + 2u));
     st(${G_B}u * ng + g, ld(${G_B}u * ng + g + 2u));
   }
   for (var iz = 0u; iz < u.nzN; iz++) {
+    if (u.full == 1u) { break; }
     let g = c + iz;
     let m = g + 2u * u.nzN;
     st(${G_TH}u * ng + g, ld(${G_TH}u * ng + m));
@@ -635,7 +650,7 @@ fn jcFractureStrain(eta: f32, epsDotStar: f32, Ts: f32) -> f32 {
   let pres0 = P[b + ${P_PRES}u];
   let failed = P[b + ${P_FAILED}u] != 0.0;
   if (!((failed && !(pres0 > 0.0)) || !(Jold > 0.0))) {
-    let gx = (P[b] - u.ox) * u.invH; let gy = P[b + 1u] * u.invH + 1.0; let gz = P[b + 2u] * u.invH + 1.0;
+    let gx = (P[b] - u.ox) * u.invH; let gy = P[b + 1u] * u.invH + u.gyOff; let gz = P[b + 2u] * u.invH + 1.0;
     let bx = i32(floor(gx - 0.5)); let by = i32(floor(gy - 0.5)); let bz = i32(floor(gz - 0.5));
     if (bx < 0 || by < 0 || bz < 0 || bx + 2 >= i32(u.nxN) || by + 2 >= i32(u.nyN) || bz + 2 >= i32(u.nzN)) { return; }
     let fx = gx - f32(bx); let fy = gy - f32(by); let fz = gz - f32(bz);
@@ -663,8 +678,9 @@ fn jcFractureStrain(eta: f32, epsDotStar: f32, Ts: f32) -> f32 {
   let nxp = P[b] + dt * P[b + 3u];
   let nyp = P[b + 1u] + dt * P[b + 4u];
   let nzp = P[b + 2u] + dt * P[b + 5u];
-  P[b] = nxp; P[b + 1u] = abs(nyp); P[b + 2u] = abs(nzp);
-  if (nxp < u.xMin || nxp > u.xMax || nyp > u.yMax || nzp > u.zMax) { P[b + ${P_ACTIVE}u] = 0.0; return; }
+  // a point across a plane of symmetry is folded back; the full strip's y is free both ways
+  P[b] = nxp; P[b + 1u] = select(abs(nyp), nyp, u.full == 1u); P[b + 2u] = abs(nzp);
+  if (nxp < u.xMin || nxp > u.xMax || nyp > u.yMax || nyp < u.yMin || nzp > u.zMax) { P[b + ${P_ACTIVE}u] = 0.0; return; }
   let g00 = cor * (1.0 + dt * l00); let g01 = cor * dt * l01; let g02 = cor * dt * l02;
   let g10 = cor * dt * l10; let g11 = cor * (1.0 + dt * l11); let g12 = cor * dt * l12;
   let g20 = cor * dt * l20; let g21 = cor * dt * l21; let g22 = cor * (1.0 + dt * l22);

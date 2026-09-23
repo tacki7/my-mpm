@@ -2,15 +2,15 @@
 // - in sync: the same state stepped once on each side, field by field (the largest |GPU − CPU| over the field's
 //   largest |CPU|), then a batch of CTL_EVERY steps the same way
 // - whole passes to steady on each side, the steady means compared (force, thickness, spread, slip, the bend)
-// The conditions cover the tensions, the roll's adjustment (Hitchcock + reduction control), the bending and a
-// damage model, so that every uniform and every kernel path is exercised.
+// The conditions cover the tensions, the roll's adjustment (Hitchcock + reduction control), the bending, a
+// damage model and the whole thickness (both rolls), so that every uniform and every kernel path is exercised.
 import { defaultParams, type SimParams } from '../../src/mpm/params.ts';
 import { Sim3, solidParams, type Solid3Params } from '../../src/mpm/solid/sim3.ts';
 import { CTL_EVERY } from '../../src/mpm/solver.ts';
 import { READ_STEPS, SolidSampler, type SolidSteady } from '../../src/mpm/solid/steady.ts';
 import { requestGpu, requestGpuPool } from '../../src/mpm/solid/gpu/stepper.ts';
 
-export type Variant = 'plain' | 'tension' | 'adjust' | 'bend' | 'damage';
+export type Variant = 'plain' | 'tension' | 'adjust' | 'bend' | 'damage' | 'full';
 
 /** the damage variant's D2 (the section model's checks make a crack with 0.15 at 6 cells; the coarse 3D lattice needs less) */
 let D2 = 0.05;
@@ -31,7 +31,7 @@ function params(v: Variant, W: number, cells: number): Solid3Params {
     P.rolling.flattening = 'hitchcock';
     P.rolling.gapControl = 'reduction';
   }
-  const solid = { width: W * 1e-3, ...(v === 'bend' ? { rollBend: { barrel: 0.3, span: 0.4 } } : {}) };
+  const solid = { width: W * 1e-3, ...(v === 'bend' ? { rollBend: { barrel: 0.3, span: 0.4 } } : {}), ...(v === 'full' ? { fullThickness: true } : {}) };
   return solidParams(P, solid);
 }
 

@@ -129,7 +129,7 @@ Math.exp・log の最後の 1 ビットが違うのでビット一致はしな�
 `&yield=von-mises|gtn&nucleation=tension|always&f0=0.005&fc=0.05`
 `&field=seq|eta|s1|pres|ep|damage|sxx|syy|sxy|dT|lagrange|porosity|loc|drucker&autorun=1&stopafter=<step>`
 `&view=plan&W=20&wcells=10&notch=0&pfield=sxx|szz|seq|eta|damage|spread`（平面図。板幅 mm・半幅のセル数・端の切り欠きの半径 mm）
-`&dim=3&W3=8&L3=12&cells3=4&ps3=1&f3=seq|ep|pres|eta|sxx|syy|szz|damage|spread`（3 次元のタブ。板幅 mm・板の長さ mm・板厚方向のセル数（偶数 4〜8）・平面ひずみで解く・色の量。
+`&dim=3&W3=8&L3=12&cells3=4&ps3=1&full3=1&f3=seq|ep|pres|eta|sxx|syy|szz|damage|spread`（3 次元のタブ。板幅 mm・板の長さ mm・板厚方向のセル数（偶数 4〜8）・平面ひずみで解く・板厚の全体をロール 2 本で解く（既定は 1/4 モデル。`Sim3.fullThickness`、`tools/solid.mjs --full`、`tools/checks/solid3-full.mjs`）・色の量。
 `&gpu3=1` = 1 ステップを WebGPU で（無ければ CPU。`__mpm.solid.compute` が `{compute, gpu, note, threads}`）。`&threads3=N` = CPU の 1 ステップを N 本のスレッドで（1〜論理コア数。cross-origin isolated でないページでは 1 で `note` に理由。GPU のときは使わない）。`&bend3=1&barrel3=300&support3=bearing&span3=400` = ロールの撓み（バレル長 mm・支点を軸受に・支点間距離 mm。`support3` が無ければバレルの端。`diag.rollBend`・`steady.rollBend`）。`&crown3=40` = 入側の板クラウン µm（幅方向に 2 次。`steady.crownIn`・`crownOut`・`flatness`）。ほかの条件は 2 次元と共通で、`stands`・`handoff`・`length`・`flatten`・`rollE`・`control` は 3 次元にも効く。`tb`・`tf` も効く。`crack`・`L`・`cells`・GTN は 3 次元では使わない）
 `&escatter=0&ewidth=1&elen=1&eseed=1`（端の延性のばらつき。大きさ %・帯の幅 mm・相関長 mm・種。`escatter=0`（既定）で無し）
 `&stands=1..5`（タンデムのスタンド数。どのスタンドも同じ条件で、圧下率は各スタンドの入側板厚に対して。断面の画面だけ）
