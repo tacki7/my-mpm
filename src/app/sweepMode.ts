@@ -21,8 +21,12 @@ const INK = '#1d2a3a';
 const STEEL = '#8a949c';
 const mm = 1e-3;
 const CORES = Math.max(1, (typeof navigator !== 'undefined' && navigator.hardwareConcurrency) || 4);
-/** conditions rolled at once by default: the cores less one (the page), at most 8 */
-const DEFAULT_JOBS = Math.max(1, Math.min(8, CORES - 1));
+/**
+ * The conditions are rolled one after another, each on this many threads by default (the 3D tab's multi-threaded
+ * step): four, the most that still pays on a machine of performance and efficiency cores (docs/validation.md「CPU の
+ * 複数スレッド」), fewer on a smaller one (the page keeps a core)
+ */
+const DEFAULT_THREADS = Math.max(1, Math.min(4, CORES - 1));
 
 /** the URL's short names of the varied quantities (sv=h0:0.8:1.2,W:4:8) */
 const SHORT: Record<SweepKey, string> = { h0: 'h0', width: 'W', rollDiameter: 'D', mu: 'mu' };
@@ -79,7 +83,9 @@ export class SweepMode {
   active = false;
   running = false;
   private spec: SweepSpec;
-  private jobs = DEFAULT_JOBS;
+  private threads = DEFAULT_THREADS;
+  /** the threads the last condition ran on, and why fewer than asked for (null: as asked) */
+  private ranOn: { threads: number; note: string | null } | null = null;
   private cases: Case[] = [];
   private workers: { w: Worker; index: number | null }[] = [];
   /** the spec and base the cases were made from (the URL's), and the shared conditions then */
@@ -91,7 +97,7 @@ export class SweepMode {
   private countInput!: HTMLInputElement;
   private standsInput!: HTMLInputElement;
   private handoffSelect!: HTMLSelectElement;
-  private jobsInput!: HTMLInputElement;
+  private threadsInput!: HTMLInputElement;
   private readonly checks: (() => void)[] = [];
   private readonly legends: Record<'force' | 'profile' | 'width', HTMLElement>;
 
@@ -145,7 +151,7 @@ export class SweepMode {
       return Number.isInteger(v) && v >= lo && v <= hi ? v : d;
     };
     const h = q.get('sh');
-    this.jobs = int('sj', 1, CORES, DEFAULT_JOBS);
+    this.threads = int('st', 1, CORES, DEFAULT_THREADS);
     return {
       vary: sv ? vary : { ...DEFAULT_VARY },
       count: int('sn', 2, MAX_CASES, 10),
@@ -226,8 +232,8 @@ export class SweepMode {
     hBox.append(this.handoffSelect);
     hRow.append(hBox);
     fs.append(hRow);
-    this.jobsInput = number('sweep-jobs', '同時に回す数', 1, CORES, `/ ${CORES}`, `条件をいくつ並べて回すか（1 つに 1 スレッド）。この機械は ${CORES} コア`);
-    fs.append(el('p', 'hint', '板の長さは条件ごとに「定常状態になるまで」。板幅（振らないとき）・セル数・入側の板クラウン・ロールの撓みは「板と格子（3 次元）」「ロールの撓み（3 次元）」の欄、材料・圧下率・張力・ロール偏平は共通の欄。計算は CPU（GPU・コア数の欄は使わない）。4 セル・板幅 4 mm・4 パスの 10 条件は 5 つ同時で約 50 分（M2）'));
+    this.threadsInput = number('sweep-threads', 'CPU のコア数', 1, CORES, `/ ${CORES}`, `条件は 1 つずつ順に回す。その 1 条件を何本のスレッドで計算するか（3 次元のタブの「CPU のコア数」と同じ。4 本から先はほとんど速くならない）`);
+    fs.append(el('p', 'hint', '板の長さは条件ごとに「定常状態になるまで」。板幅（振らないとき）・セル数・入側の板クラウン・ロールの撓みは「板と格子（3 次元）」「ロールの撓み（3 次元）」の欄、材料・圧下率・張力・ロール偏平は共通の欄。計算は CPU（GPU の欄は使わない）。4 セル・板幅 4 mm・4 パスは 4 スレッドで 1 条件約 3.5 分（M2）'));
     const note = this.o.panelRoot.querySelector('.note-more') ?? this.o.panelRoot.querySelector('.preset-note');
     if (note) note.after(fs);
     else this.o.panelRoot.prepend(fs);
@@ -247,7 +253,7 @@ export class SweepMode {
     this.countInput.value = String(s.count);
     this.standsInput.value = String(s.stands);
     this.handoffSelect.value = s.handoff;
-    this.jobsInput.value = String(this.jobs);
+    this.threadsInput.value = String(this.threads);
     this.lockVary();
   }
 
@@ -277,7 +283,7 @@ export class SweepMode {
       const v = parseInt(i.value, 10);
       return Number.isInteger(v) ? Math.min(hi, Math.max(lo, v)) : d;
     };
-    this.jobs = int(this.jobsInput, 1, CORES, DEFAULT_JOBS);
+    this.threads = int(this.threadsInput, 1, CORES, DEFAULT_THREADS);
     const h = this.handoffSelect.value;
     return {
       vary,
@@ -299,7 +305,7 @@ export class SweepMode {
     q.set('sn', String(s.count));
     q.set('sp', String(s.stands));
     if (s.handoff !== 'steady') q.set('sh', s.handoff);
-    if (this.jobs !== DEFAULT_JOBS) q.set('sj', String(this.jobs));
+    if (this.threads !== DEFAULT_THREADS) q.set('st', String(this.threads));
     return q;
   }
 
@@ -420,6 +426,7 @@ export class SweepMode {
     const base = this.o.solidBase(conditions);
     const spec = this.spec;
     this.made = { spec, base, conditions };
+    this.ranOn = null;
     this.cases = sweepValues(base, spec).map((values) => ({ values, P: null, state: 'waiting', progress: 0, stand: 0, result: null, summary: null, seconds: 0, message: '' }));
   }
 
@@ -428,7 +435,7 @@ export class SweepMode {
     if (!this.cases.length) this.make();
     this.running = true;
     this.since = performance.now();
-    while (this.workers.length < Math.min(this.jobs, this.cases.length)) this.workers.push(this.startWorker());
+    if (!this.workers.length) this.workers.push(this.startWorker());
     for (const w of this.workers) {
       if (w.index !== null) this.post(w.w, { type: 'resume' });
       else this.give(w);
@@ -478,7 +485,7 @@ export class SweepMode {
     c.state = 'running';
     c.P = sweepCase(this.made.base, c.values);
     slot.index = i;
-    this.post(slot.w, { type: 'run', index: i, P: c.P, values: c.values, stands: this.made.spec.stands, handoff: this.made.spec.handoff });
+    this.post(slot.w, { type: 'run', index: i, P: c.P, values: c.values, stands: this.made.spec.stands, handoff: this.made.spec.handoff, threads: this.threads });
     this.dirty = true;
   }
 
@@ -497,6 +504,7 @@ export class SweepMode {
         c.stand = m.result.stands.length - 1;
         c.state = m.result.stopped ? 'stopped' : 'done';
         c.message = m.result.stopped ?? '';
+        this.ranOn = { threads: m.threads, note: m.note };
       } else {
         c.state = 'error';
         c.message = m.message;
@@ -548,8 +556,9 @@ export class SweepMode {
     if (!this.active) return;
     const n = this.cases.length;
     const done = this.cases.filter((c) => c.state === 'done' || c.state === 'stopped' || c.state === 'error').length;
-    const now = this.cases.filter((c) => c.state === 'running').length;
-    this.$('clock').textContent = n ? `条件 ${done} / ${n} 済み　${this.running ? `${now} つ計算中　` : ''}${duration(this.seconds())}` : '条件の比較';
+    // one condition at a time, on the threads asked for (the last one's, if it could not have them)
+    const on = this.ranOn?.note ? `${this.ranOn.threads} スレッド（複数スレッドが使えない）で` : this.threads > 1 ? `${this.threads} スレッドで` : '';
+    this.$('clock').textContent = n ? `条件 ${done} / ${n} 済み　${this.running ? `1 つずつ${on}計算中　` : ''}${duration(this.seconds())}` : '条件の比較';
     this.$('eta').textContent = etaText(this.eta, n > 0, this.finished);
   }
 
@@ -821,8 +830,12 @@ export class SweepMode {
       get spec() {
         return JSON.parse(JSON.stringify(self.made?.spec ?? self.spec));
       },
-      get jobs() {
-        return self.jobs;
+      /** the threads a condition is rolled on (asked for), and what the last one ran on */
+      get threads() {
+        return self.threads;
+      },
+      get ranOn() {
+        return self.ranOn ? { ...self.ranOn } : null;
       },
       get cases() {
         return self.cases.map((c) => ({ values: { ...c.values }, state: c.state, progress: c.progress, stand: c.stand, seconds: c.seconds, message: c.message }));
