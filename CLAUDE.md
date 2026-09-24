@@ -47,7 +47,7 @@ npm run sim -- --cells 6 --L 8 --every 2000   # 粗い圧延を 1 回（約 6 �
 ```
 
 CI（`.github/workflows/check.yml`）が push のたびに `npm ci` → `npm run check` → `npm run build` を回す（ubuntu・Node 24、
-1 回約 9.5 分: 関門のスクリプトの合計 552 s のうち roll-flattening.mjs 93 s・solid3.mjs 85 s、2026-09-21。ランナーの速さで 1.5 倍ほど揺れる（同じ日の前の回は合計 339 s・roll-flattening 63 s）。2026-09-22 に solid3-tandem.mjs（手元で 69 s）と solid3-threads.mjs（手元で 150 s。2 コアの CI では 180 s の既定の上限を超えるので `// @check 600s`）を足した。上限 30 分）。
+1 回約 9.5 分: 関門のスクリプトの合計 552 s のうち roll-flattening.mjs 93 s・solid3.mjs 85 s、2026-09-21。ランナーの速さで 1.5 倍ほど揺れる（同じ日の前の回は合計 339 s・roll-flattening 63 s）。2026-09-22 に solid3-tandem.mjs（手元で 69 s）と solid3-threads.mjs（手元で 150 s。2 コアの CI では 180 s の既定の上限を超えるので `// @check 600s`）を足した。上限 45 分: 2026-09-24 の main（条件の比較の直列化・3 次元の荷重が横ばいで定常を入れたあと）はスクリプトの合計 1,788 s（sweep.mjs 205 s・solid3-threads.mjs 253 s・solid3-full.mjs 204 s）で 30 分を超えて打ち切られた）。
 PR にはその枝の push の結果が付く。
 
 node は 22.18 以降（型の除去が既定で有効）。`src/` は**消去できる構文だけ**（enum・namespace・
