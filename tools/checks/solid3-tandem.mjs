@@ -1,5 +1,5 @@
 // The 3D model's tandem, steady length and rolls that follow the pass (src/mpm/solid/tandem3.ts, Sim3.adjustRolls),
-// 4 cells, a strip 1 mm wide with the width direction held (the 2D section's problem), about 2.5 min in all:
+// 4 cells, a strip 1 mm wide with the width direction held (the 2D section's problem), about 3 min in all:
 // - solidScales() is the Sim3's own grid and clock; one stand of Tandem3 is Sim3 with a SolidSampler, bit for bit
 // - the length 'steady' gives the steady looks a 'steady' handoff needs
 // - two stands, handoff 'steady': the next stand's entry strip is the measured one, and both stands' force per
@@ -7,7 +7,7 @@
 // - remap3 carries the strip's shape: a strip given a crown and an edge barrel comes out of the handoff with them,
 //   and with the whole strip its plan view (a width that grows along x); the lattice's stripes are damped
 // - flattening 'hitchcock' with a constant reduction: the rolls settle, R' and the gap agree with the section
-//   model's, and the strip's mean thickness is the target
+//   model's, and the strip's mean thickness is the target; held by a flat force (W 2 mm), 'steady' waits for the gauge
 // @check
 import { ok, between, near, done } from './lib.mjs';
 import { defaultParams } from '../../src/mpm/params.ts';
@@ -104,6 +104,25 @@ near(s3.gap, A2.gap, 3e-3, "the gap = the section model's");
 const target = s3.params.rolling.h0 * (1 - s3.params.rolling.reduction);
 near(s3.gauge().thickness, target, 1.5e-3, 'the strip at the gauge is the target thickness');
 ok(s3.roll.R > 1.1 * s3.params.rolling.rollRadius && A3.sampler.count <= 1, "a flattened roll: R' above R, and the phase waited for it", `R' ${(s3.roll.R * 1e3).toFixed(1)} mm, ${A3.sampler.count} steady looks at settling`);
+// held by a flat force before the control has closed: on a strip free to spread (W 2 mm, 20 mm long) the strip in the bite still
+// carries the control's last swing (+0.3 % at the gauge just after the hold), and 'steady' (what a 'steady' handoff
+// samples) waits for the gauge to come onto the target
+{
+  const B = new Tandem3(solidParams(base((r) => { adj(r); r.sheetLength = 20e-3; delete r.lengthMode; }), { width: 2e-3 }), 1);
+  const b = B.sim;
+  while (!B.done && !b.forceFlat) B.advance();
+  const held = b.step;
+  while (!B.done && b.phase() !== 'steady') B.advance();
+  const t0 = b.step;
+  let sum = 0;
+  let n = 0;
+  while (!B.done && b.step < t0 + 1000) {
+    B.advance();
+    const m = b.step % 20 === 0 ? b.gauge() : null;
+    if (m) (sum += m.thickness, n++);
+  }
+  near(sum / n, target, 1.5e-3, 'W 2 mm: steady begins with the strip at the gauge on the target (its mean over the next 1000 steps)', `held at step ${held}, steady at ${t0}`);
+}
 
 // ── the shape goes into the next stand: a strip (W 2 mm, unrolled) given a crown across the width (the top surface
 //    12 µm higher at mid-width than at the edge), an edge barrel (the edge 10 µm wider at mid-thickness) and a

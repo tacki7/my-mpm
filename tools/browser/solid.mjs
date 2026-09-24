@@ -320,7 +320,7 @@ try {
   await click('#reset');
   await c.waitFor('__mpm.solid.ready && __mpm.solid.stands === 2', 60000);
   const autoL = await c.evaluate(`({ shown: parseFloat(document.querySelector('[name="solid-length"]').value), L: __mpm.solid.geometry.sheetLength * 1e3, p: __mpm.solid.params.rolling })`);
-  ok(Math.abs(autoL.shown - autoL.L) < 0.051 && autoL.L > 20 && autoL.p.flattening === 'hitchcock' && autoL.p.gapControl === 'reduction', 'the field shows the length worked out (longer for the rolls to settle)', `${autoL.shown} mm`);
+  ok(Math.abs(autoL.shown - autoL.L) < 0.051 && autoL.L > 15 && autoL.p.flattening === 'hitchcock' && autoL.p.gapControl === 'reduction', 'the field shows the length worked out (longer for the rolls to settle)', `${autoL.shown} mm`);
   await click('#run');
   await c.waitFor('__mpm.solid.stand === 1 && __mpm.solid.diag.phase === "bite"', 600000);
   await painted();

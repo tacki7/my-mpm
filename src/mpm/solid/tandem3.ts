@@ -74,8 +74,11 @@ export function steadyLength3(P: Solid3Params): number {
   const r = P.rolling;
   const look = READ_STEPS * s.dt * s.vIn;
   const out = Math.max((3 * r.h0 + s.contactLength) * (1 - r.reduction), s.xExitProbe * (1 - r.reduction) + STEADY_LOOKS * look);
-  // rolls that follow the pass settle 1.5 transit times after the head is out, and the stretch is the strip rolled after that (tandem.ts)
-  const settle = s.rollsAdjusted ? 2 * s.contactLength + 3 * r.h0 * (1 - r.reduction) : 0;
+  // rolls that follow the pass are held once the force is flat (Sim3.forceFlat: FLAT_WINDOWS quarter transits after
+  // the head is out, about one transit where the force still climbs as they flatten), and the stretch is the strip
+  // rolled after that; under gapControl 'reduction' up to one more transit for the gauge to come onto the target
+  // (Sim3.gaugeWait)
+  const settle = s.rollsAdjusted ? (r.gapControl === 'reduction' ? 2 : 1) * s.contactLength : 0;
   const base = s.contactLength + out + settle + look + r.h0;
   // a front tension ramps up after the head is out, and 'steady' waits for it (tandem.ts steadyLength)
   if (r.frontTension === 0) return base;

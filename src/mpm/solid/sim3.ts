@@ -83,6 +83,11 @@ export interface SolidCrack {
 }
 
 const INF = 1e30;
+/** the roll force is flat (Sim3.forceFlat): this many windows, each mean within this fraction of their average */
+export const FLAT_WINDOWS = 3;
+export const FLAT_TOL = 0.01;
+/** after the rolls are held by forceFlat under gapControl 'reduction', the gauge's window mean within this of the target */
+export const FLAT_GAUGE_TOL = 0.001;
 
 export function solidParams(base: SimParams, solid: SolidSettings): Solid3Params {
   return { ...cloneParams(base), solid: { ...solid } };
@@ -194,6 +199,31 @@ export class Sim3 {
   rollsSettled: boolean;
   /** when the rolls settled [s] (−∞ with rolls that are not adjusted, NaN until then) */
   settledT = NaN;
+  /**
+   * The roll force has held still: FLAT_WINDOWS consecutive windows of flatWindow (a quarter of the bite's transit,
+   * several cells' crossings to average the ripple out) with the head past the exit probe and the tensions on, each
+   * window's mean within FLAT_TOL of their average. The pass is steady from then on even if the rolls' own control has
+   * not settled yet (they are held where they are), and so is a bending roll's deflection, which follows the force.
+   */
+  forceFlat = false;
+  private readonly flatWindow: number;
+  private flatSum = 0;
+  private flatSteps = 0;
+  private flatSince = NaN;
+  private readonly flatMeans: number[] = [];
+  /** the gap control's gauge over the same windows: the thickness read and the gap then, summed, and each window's means */
+  private flatThSum = 0;
+  private flatGapSum = 0;
+  private flatThN = 0;
+  private readonly flatTh: number[] = [];
+  private readonly flatGap: number[] = [];
+  /**
+   * The rolls were held by forceFlat before the gap control closed (gapControl 'reduction'): the strip already in the
+   * bite still carries the control's last swing (±0.3 % at the gauge), so the pass is steady only once a window's mean
+   * thickness at the gauge is within FLAT_GAUGE_TOL of the target, or a transit after the hold
+   */
+  gaugeWait = false;
+  private gaugeSteps = 0;
   /** where the gap control measures the strip: one entry thickness past the roll centres, in a Hann window of half-width gaugeBand */
   readonly xGauge: number;
   readonly gaugeBand: number;
@@ -436,6 +466,7 @@ export class Sim3 {
     this.ctlTauG = 2 * delay;
     this.ctlWindow = transit / 2;
     this.ctlTransit = transit;
+    this.flatWindow = Math.max(transit / 4, (4 * h) / r.rollSpeed);
     this.gaugeBand = Math.min((4 * dp) / (1 - r.reduction), 0.8 * r.h0);
     this.ctlRRef = R;
 
@@ -758,6 +789,7 @@ export class Sim3 {
     this.accTq += tq;
     if (!this.rollsSettled) this.ctlForce += ((-2 * fy) / this.ctlWidth - this.ctlForce) * Math.min(1, this.dt / this.ctlTauF);
     this.accSteps++;
+    if (!this.forceFlat || this.gaugeWait) this.watchForce(-fy, 1);
     this.plasticWork += work;
     this.nFailed += nFailed;
     if (first >= 0 && !this.firstCrack) this.recordFirstCrack(first);
@@ -903,6 +935,7 @@ export class Sim3 {
     this.accFy += -fy;
     this.accTq += tq;
     this.accSteps += K;
+    if (!this.forceFlat || this.gaugeWait) this.watchForce(-fy, K, dtEff);
     if (!this.rollsSettled) this.ctlForce += ((-2 * fy) / K / this.ctlWidth - this.ctlForce) * Math.min(1, dtEff / this.ctlTauF);
     this.ixPrevLo = 0;
     this.ixPrevHi = nxN;
@@ -1116,6 +1149,9 @@ export class Sim3 {
         if (m) {
           const k = Math.min(1, (CTL_EVERY * this.dt) / this.ctlTauH);
           this.ctlThick = Number.isNaN(this.ctlThick) ? m.thickness : this.ctlThick + (m.thickness - this.ctlThick) * k;
+          this.flatThSum += m.thickness;
+          this.flatGapSum += this.gap;
+          this.flatThN++;
           this.gap -= (this.ctlThick - target) * Math.min(1, (CTL_EVERY * this.dt) / this.ctlTauG);
           const km = Math.min(1, (2 * CTL_EVERY * this.dt) / this.ctlTransit);
           this.ctlThickRef = Number.isNaN(this.ctlThickRef) ? this.ctlThick : this.ctlThickRef + (this.ctlThick - this.ctlThickRef) * km;
@@ -1142,6 +1178,79 @@ export class Sim3 {
       if (red) this.gap = this.ctlGapRef;
       this.setRoll(R, false);
     }
+  }
+
+  /**
+   * The roll force of the last `steps` steps (their sum, one roll's [N]) into the windows of forceFlat. A window is
+   * begun only with the head past the exit probe and the tensions on; the step closing the one that makes the force
+   * flat holds the rolls where they are.
+   */
+  private watchForce(f: number, steps: number, dt = this.dt): void {
+    if (this.gaugeWait) return this.waitGauge(steps, dt);
+    if (this.headX() < this.xExitProbe || !this.tensionsOn()) {
+      this.flatSince = NaN;
+      this.flatMeans.length = this.flatTh.length = this.flatGap.length = 0;
+      return;
+    }
+    if (Number.isNaN(this.flatSince)) {
+      this.flatSince = this.t + dt;
+      this.flatSum = this.flatThSum = this.flatGapSum = 0;
+      this.flatSteps = this.flatThN = 0;
+      return;
+    }
+    this.flatSum += f;
+    this.flatSteps += steps;
+    if (this.t + dt - this.flatSince < this.flatWindow) return;
+    const means = this.flatMeans;
+    means.push(this.flatSum / this.flatSteps);
+    this.flatTh.push(this.flatThN ? this.flatThSum / this.flatThN : NaN);
+    this.flatGap.push(this.flatThN ? this.flatGapSum / this.flatThN : NaN);
+    if (means.length > FLAT_WINDOWS) (means.shift(), this.flatTh.shift(), this.flatGap.shift());
+    this.flatSum = this.flatThSum = this.flatGapSum = 0;
+    this.flatSteps = this.flatThN = 0;
+    this.flatSince = this.t + dt;
+    if (means.length < FLAT_WINDOWS) return;
+    const avg = means.reduce((a, b) => a + b, 0) / means.length;
+    if (!(avg > 0) || means.some((m) => Math.abs(m - avg) > FLAT_TOL * avg)) return;
+    this.forceFlat = true;
+    if (!this.rollsSettled) {
+      this.rollsSettled = true;
+      this.settledT = this.t + dt;
+      // gapControl 'reduction': the control may not have closed on the target yet (its tolerance is 0.05 %, the force
+      // is flat within 1 %), so the gap is held at its mean over the flat windows less the error of the thickness read
+      // over them (the thickness follows the gap one to one, as the control's integral takes it). Not the low-passed
+      // gap a settled control takes: that lags by up to a transit
+      const r = this.params.rolling;
+      if (r.gapControl === 'reduction' && this.flatTh.every(Number.isFinite)) {
+        const avg = (v: number[]) => v.reduce((a, b) => a + b, 0) / v.length;
+        this.gap = avg(this.flatGap) - (avg(this.flatTh) - r.h0 * (1 - r.reduction));
+        this.gaugeWait = true;
+        this.flatSince = this.t + dt;
+        this.flatThSum = this.flatThN = this.gaugeSteps = 0;
+      }
+      this.setRoll(this.roll.R, false);
+    }
+  }
+
+  /** gaugeWait: the thickness at the gauge every CTL_EVERY steps, its mean by window of flatWindow */
+  private waitGauge(steps: number, dt: number): void {
+    this.gaugeSteps += steps;
+    if (this.gaugeSteps >= CTL_EVERY) {
+      this.gaugeSteps = 0;
+      const m = this.gauge();
+      if (m) (this.flatThSum += m.thickness, this.flatThN++);
+    }
+    const t = this.t + dt;
+    if (t - this.settledT >= this.ctlTransit) {
+      this.gaugeWait = false;
+      return;
+    }
+    if (t - this.flatSince < this.flatWindow) return;
+    const r = this.params.rolling;
+    const target = r.h0 * (1 - r.reduction);
+    if (this.flatThN && Math.abs(this.flatThSum / this.flatThN - target) <= FLAT_GAUGE_TOL * target) this.gaugeWait = false;
+    this.flatSince = t;
+    this.flatThSum = this.flatThN = 0;
   }
 
   /** the roll at radius R and the gap now; `moving`: the contact sees the surface move there over this step */
@@ -2135,7 +2244,7 @@ export class Sim3 {
     if (head < -this.contactLength) return 'approach';
     if (head < this.xExitProbe) return 'bite';
     if (tail > -this.contactLength) return 'tail-out';
-    return this.rollsSettled && this.bendSettled && this.tensionsOn() ? 'steady' : 'adjusting';
+    return !this.gaugeWait && (this.forceFlat || (this.rollsSettled && this.bendSettled && this.tensionsOn())) ? 'steady' : 'adjusting';
   }
 
   /** the sheet no longer moves though it is between the rolls (the rolls cannot draw it in) */
