@@ -24,7 +24,7 @@ stress triaxiality and ductile crack initiation, in 2D section, plan view and 3D
 - [構成](#構成)
 - [開発](#開発)
 - [モデルの限界](#モデルの限界)
-- [文書](#文書) ・ [参考文献](#参考文献)
+- [文書](#文書) ・ [参考文献](#参考文献) ・ [ライセンス](#ライセンス)
 
 ## できること
 
@@ -245,3 +245,7 @@ npm run preview  # ビルドしたものを COOP / COEP 付きで配る（3 次�
 - B. Banerjee, *Material Point Method Simulations of Fragmenting Cylinders*, arXiv:1201.2439 —
   Johnson-Cook / MTS の流動応力、GTN、Johnson-Cook 損傷、Hancock-MacKenzie、破壊した粒子の応力の扱い
 - 式ごとの出典（Kármán、Bland & Ford、Hitchcock、Cockcroft-Latham、Bao-Wierzbicki、Taylor-Quinney など）は [docs/model.md](docs/model.md)
+
+## ライセンス
+
+[MIT](LICENSE)
