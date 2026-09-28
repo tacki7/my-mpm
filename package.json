@@ -3,6 +3,7 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
+  "license": "MIT",
   "description": "Material point method (MPM) simulator for cold rolling of thin sheet, with stress-state dependent crack initiation",
   "scripts": {
     "dev": "vite",
