@@ -1,7 +1,7 @@
 // The README's pictures (docs/img/), taken in a headless Chrome: the page laid out at 1600 × 1000 and drawn by
 // Chrome at 0.75, so 1200 × 750 with sharp text and under 300 KB (a 1600 px shot shrunk afterwards is blurrier and
 // larger). Each scene waits for its signal (the stop step, a crack, the end of the pass), never a fixed time.
-// Not a `@check`. About 5 minutes (the front tension and the three stands are most of it): run it under the CPU lock.
+// Not a `@check`. About 8 minutes (the front tension, the three stands and the sweep are most of it): run it under the CPU lock.
 //
 //   CDP_PORT=<cdp> node tools/browser/readme-shots.mjs <url> <out dir> [scene …]
 //
@@ -16,6 +16,8 @@
 //   plan          the plan view: the edge cracking as a band along the edge (Cockcroft-Latham 0.1, damage)
 //   plan-dfg      the same with the faces split ('dfg')
 //   tandem        three stands: the slots, the stand table and the loading path coloured by stand
+//   solid         the 3 次元 tab: W 8 mm, 4 cells, paused in the steady phase (σeq, oblique), then the spread seen from above
+//   sweep         the 条件の比較 tab: three mother-plate thicknesses through two passes (W 4 mm), all done
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { connect } from './cdp.mjs';
@@ -173,6 +175,23 @@ const scenes = {
     await open('?stands=3&cells=6&L=8&field=seq&autorun=1');
     await c.waitFor('__mpm.done', 900000);
     await shot('tandem.png');
+  },
+  async solid() {
+    await open('?dim=3&W3=8&L3=12&cells3=4&f3=seq&threads3=4&autorun=1');
+    await c.waitFor('__mpm.solid.diag?.phase === "steady"', 900000);
+    const f0 = await c.evaluate('__mpm.solid.frames');
+    await c.waitFor(`__mpm.solid.frames >= ${f0} + 20`, 300000);
+    await c.evaluate(`document.getElementById('pause').click()`);
+    await c.waitFor('!__mpm.solid.running', 20000);
+    await shot('solid-seq.png');
+    await c.evaluate(`__mpm.solid.setField('spread')`);
+    await c.evaluate(`document.querySelector('.look-from button[data-look="top"]').click()`);
+    await shot('solid-spread.png');
+  },
+  async sweep() {
+    await open('?dim=c&W3=4&cells3=4&sv=h0:0.8:1.2&sn=3&sp=2&sh=steady&st=4&autorun=1');
+    await c.waitFor('__mpm.sweep.done', 1800000);
+    await shot('sweep.png');
   },
 };
 
