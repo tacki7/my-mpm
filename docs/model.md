@@ -341,7 +341,7 @@ GTN の降伏条件では評価しない（`loc` = 1、`drucker` = 0）。
 ## 平面図モデル（耳割れ、`src/mpm/planview/`）
 
 断面モデルには板幅が無いので耳割れは出ない。平面図モデルは板幅を解き、板厚方向は平均する別の 2D MPM（x 圧延方向・z 板幅方向）。
-画面では表題の行の「平面図」で切り替える（T34、README「平面図」）。node からは `PlanSim`・`tools/planview.mjs`・`tools/checks/planview.mjs`。
+画面では表題の行の「平面図」で切り替える（T34、usage.md「平面図」）。node からは `PlanSim`・`tools/planview.mjs`・`tools/checks/planview.mjs`。
 
 - 粒子の状態に板厚 h を持つ。質量 m = ρ A0 h0、体積 V = A h（A は面内の F の行列式 × A0）
 - 板幅の中央 z = 0 で対称: z < 0 のゴースト節点の質量・運動量を鏡の節点に（z 成分の符号を反転して）畳み、z = 0 の節点は v_z = 0（v_x は自由）、

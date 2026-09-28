@@ -21,7 +21,7 @@ Hancock-MacKenzie、破壊した粒子の応力の扱い）。式と出典の対
 | `tools/check.mjs` | 回帰関門。`// @check` の付いたスクリプトを集めて回す |
 | `tools/run.mjs` | ヘッドレスで 1 回圧延して数値を出す（`npm run sim -- --cells 6 --L 8`。`--half` = 板厚方向の対称モデル、上半分だけ） |
 | `tools/browser/` | 自分専用のヘッドレス Chrome（CDP）を操作する道具 |
-| `docs/` | モデル（`model.md`）、検証値（`validation.md`）、デザイン（`design.md`）、条件（`presets.md`） |
+| `docs/` | 画面の手引き（`usage.md`）、モデル（`model.md`）、検証値（`validation.md`）、デザイン（`design.md`）、条件（`presets.md`） |
 
 ## 検証の基本
 
