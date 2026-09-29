@@ -2,7 +2,7 @@
 // busy each machine is — CPU, GPU and memory, read every POLL_MS from this machine's dev server (/__stats,
 // vite.config.ts) and the remote server (/stats, tools/remote/server.mjs). The machine that computes is inked;
 // the other stays in steel. A machine that does not answer says so (the remote one: how to start it).
-import { REMOTE_ADDR, REMOTE_NAME, choosePlace, placeLabel, remote, type Place } from './remote.ts';
+import { BROWSER_ON_REMOTE, LOCAL_NAME, REMOTE_ADDR, REMOTE_NAME, choosePlace, placeLabel, remote, type Place } from './remote.ts';
 import { radioGroup } from './radioGroup.ts';
 
 /** one machine's reading (tools/remote/stats.mjs) */
@@ -93,7 +93,7 @@ function machineRow(place: Place, name: string): MachineRow {
 
 function showRow(row: MachineRow, place: Place): void {
   const m = readings[place];
-  row.root.classList.toggle('computing', remote.place === place);
+  row.root.classList.toggle('computing', computingRow() === place);
   row.root.classList.toggle('down', !m);
   const parts = [row.cpu, row.gpu, row.vram, row.mem];
   for (const g of parts) g.root.hidden = !m;
@@ -123,6 +123,11 @@ function showRow(row: MachineRow, place: Place): void {
   row.mem.root.title = '使っているメモリ / 積んでいるメモリ';
 }
 
+/** the row of the machine that computes: the page's own workers run where the browser is (winpc's, when opened there) */
+function computingRow(): Place {
+  return remote.place === 'winpc' || BROWSER_ON_REMOTE ? 'winpc' : 'mac';
+}
+
 /** the line, into `root` (the masthead's first row); the readings start at once */
 export function mountMachines(root: HTMLElement): void {
   root.replaceChildren();
@@ -131,7 +136,7 @@ export function mountMachines(root: HTMLElement): void {
   where.setAttribute('aria-label', '計算する場所');
   where.append(el('span', 'place-label', '計算する場所'));
   for (const [p, label, title] of [
-    ['mac', 'この Mac', 'このブラウザのワーカーで計算する'],
+    ['mac', LOCAL_NAME, `このブラウザのワーカーで計算する（${LOCAL_NAME}の CPU と、ブラウザが選ぶ GPU）`],
     ['winpc', REMOTE_NAME, `${REMOTE_NAME} で計算する（CPU のスレッドと GPU は ${REMOTE_NAME} のもの）。ページを開き直して、計算はやり直しになる`],
   ] as [Place, string, string][]) {
     const b = el('button', undefined, label);
@@ -146,7 +151,11 @@ export function mountMachines(root: HTMLElement): void {
     where.append(b);
   }
   radioGroup(where);
-  const rows: Record<Place, MachineRow> = { mac: machineRow('mac', 'この Mac'), winpc: machineRow('winpc', REMOTE_NAME) };
+  // the 'mac' row is the dev server's machine (/__stats): the Mac, which only serves the page when it is opened on winpc
+  const rows: Record<Place, MachineRow> = {
+    mac: machineRow('mac', BROWSER_ON_REMOTE ? 'Mac（ページの配信）' : 'この Mac'),
+    winpc: machineRow('winpc', BROWSER_ON_REMOTE ? `${REMOTE_NAME}（この PC）` : REMOTE_NAME),
+  };
   const note = el('span', 'place-note');
   // only when the page could not compute where it was asked to (the ink dot marks the machine that computes)
   note.textContent = remote.note ?? '';
@@ -174,5 +183,5 @@ export function mountMachines(root: HTMLElement): void {
 
 /** for headless checks (window.__mpm.machines) */
 export function machinesState() {
-  return { place: remote.place, want: remote.note ? REMOTE_NAME : remote.place, note: remote.note, hello: remote.hello, readings: { ...readings }, up: { ...up } };
+  return { place: remote.place, browserOnRemote: BROWSER_ON_REMOTE, computing: computingRow(), want: remote.note ? REMOTE_NAME : remote.place, note: remote.note, hello: remote.hello, readings: { ...readings }, up: { ...up } };
 }

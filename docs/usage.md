@@ -469,13 +469,17 @@ npm run remote        # Finder なら tools/remote/open-mac.command をダブル
    （winpc のネットワークには何も開かないので、ファイアウォールの設定は要らない）
 3. この Mac で開発サーバ（既定 5180）を立て、`http://localhost:5180/?at=winpc` をブラウザで開く
 
+同じ SSH の接続で、この Mac の開発サーバを winpc の `localhost:5180` にも逆向きに繋ぐので、**winpc のブラウザでも `http://localhost:5180/` を開ける**
+（localhost なので WebGPU・複数スレッドもそのまま使える）。winpc で開いたページでは、「計算する場所」の「この PC」がそのブラウザの中で（winpc の CPU と、
+ブラウザが選ぶ GPU で）、「winpc」が winpc の計算サーバで（node の Dawn が選ぶ単体の GPU で）計算する。上の帯の行は「Mac（ページの配信）」と「winpc（この PC）」。
+
 止めるのはそのターミナルで Ctrl+C（計算サーバ・トンネル・開発サーバが全部止まる）。`REMOTE_HOST`・`REMOTE_PORT`・`DEV_PORT`・`NO_OPEN=1` で変えられる。
 
 画面の一番上の帯:
 - **計算する場所**「この Mac」/「winpc」: 押すとページを開き直して、そちらで計算する（計算はやり直し。選んだ場所はブラウザに覚えさせ、URL は `at=mac|winpc`）
 - 機械ごとに **CPU**（全論理コアの平均の使用率）・**GPU**（使用率）・**VRAM**（専用メモリのある GPU だけ）・**メモリ**（使っている量 / 積んでいる量）を 1.5 秒ごとに。
   計算している機械の名前に黒い点が付く。90 % 以上の計器は下線が麦わら色になる。winpc は `nvidia-smi`、Mac は `ioreg`・`vm_stat` で読む
-- winpc が答えないとき、その行に「繋がっていない（…npm run remote を実行する）」と出る。winpc を選んでいて繋がらなければ、この Mac で計算して帯にそう出る
+- winpc が答えないとき、その行に「繋がっていない（…npm run remote を実行する）」と出る。winpc を選んでいて繋がらなければ、このブラウザ（この Mac / この PC）で計算して帯にそう出る
 
 winpc で計算しているとき、3 次元の「計算」の GPU と「CPU のコア数」の上限は winpc のもの（GPU の名前・論理コア数）。結果は同じ条件のこの Mac の計算と
 CPU なら同じ値（[validation.md](validation.md)）。計算サーバの場所は URL の `remote=host:port` で変えられる（既定 `localhost:8790`）。
