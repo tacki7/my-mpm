@@ -1518,6 +1518,43 @@ body:not([data-dim='c']) .sweep-only {
   display: none;
 }
 
+/* 平坦度の形 (src/app/flatView.ts): the strip on the table, two graphs wide and taller than a graph (the waves need
+   the room), its controls in a line under it */
+.solid-charts .flat3d {
+  grid-column: span 2;
+}
+
+.solid-charts #solid-chart-flat3d {
+  height: calc(var(--chart-h3, 160px) + 96px);
+  cursor: grab;
+}
+
+.solid-charts #solid-chart-flat3d:active {
+  cursor: grabbing;
+}
+
+.flat3d-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 16px;
+  padding: 4px 8px 6px;
+  font-size: var(--fs-xs);
+  color: var(--ink-soft);
+}
+
+.flat3d-tools label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.flat3d-tools select,
+.flat3d-tools button {
+  font-size: var(--fs-xs);
+  min-height: 24px;
+}
+
 /* ── 条件の比較 (src/app/sweepMode.ts) ─────────────────────────────────── */
 .sweep-stage {
   display: flex;
@@ -1857,6 +1894,9 @@ body:not([data-dim='c']) .sweep-only {
   }
   .solid-charts {
     grid-template-columns: 1fr;
+  }
+  .solid-charts .flat3d {
+    grid-column: auto;
   }
   .solid-charts figure {
     border-left: 0;
