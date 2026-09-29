@@ -31,6 +31,7 @@ import {
   adiabaticRise,
   elasticConstants,
   flowStress,
+  gtnFailurePorosity,
   gtnReturn,
   hmFractureStrain,
   homologousTemperature,
@@ -1786,6 +1787,8 @@ export class Sim {
     const rateScale = P.rolling.millSpeed / P.rolling.rollSpeed;
     const failMode = dmg.failure;
     const gtn = dmg.yield === 'gtn' ? dmg.gtn : null;
+    // the porosity at which f* is 1/q1 and the yield surface has shrunk to nothing (gtnFstar): no strength left
+    const fF = gtn ? gtnFailurePorosity(gtn) : Infinity;
     const nl = dmg.nonlocalLength > 0 ? (this.nlInc ??= [0, 1, 2].map(() => new Float64Array(n))) : null;
     if (nl) for (const a of nl) a.fill(0);
     const xMax = (nxN - 3) * h + ox;
@@ -1931,6 +1934,7 @@ export class Sim {
       let dep = 0;
       let flowRate = -1;
       const isFailed = failed[p] === 1;
+      const fUsed = gtn ? por[p] : 0; // the porosity this step's yield condition sees
       vr[p] = 0;
       if (isFailed) {
         sx = sy = sz = sh = 0;
@@ -2001,6 +2005,15 @@ export class Sim {
       this.eta[p] = eta;
       this.s1[p] = s1;
 
+      // GTN yield with another damage criterion: at fF the point has no strength left (its f* is capped at 1/q1,
+      // gtnFstar), so it fails as it would under the porosity criterion — once the porosity its yield condition
+      // sees, or the one it leaves, is there (before 2026-09-30 f* went past 1/q1 and the point looked elastic
+      // again). Not in the grip of a tension, and not with no criterion at all
+      if (gtn && !isFailed && (fUsed >= fF || por[p] >= fF) && dmg.model !== 'none' && !this.inGrip(p)) {
+        this.fail(p);
+        continue;
+      }
+
       if (dep > 0) {
         // pressure-projection stabilisation: the unresolved elastic volume relaxes at the rate the
         // plastic secant viscosity σeq/(3ε̇p) allows, β = c · 3K Δεp / σeq per step (docs/model.md)
@@ -2043,7 +2056,9 @@ export class Sim {
       this.dJC[p] += inc[0][p];
       this.dHM[p] += inc[1][p];
       this.dCL[p] += inc[2][p];
-      if (model !== 'none' && this.governingDamage(p) >= 1) this.fail(p);
+      // the grip of a tension does not fail, as on the local path (it failed here until 2026-09-30, and a failed
+      // point in the grip went on carrying the tension with no deviator)
+      if (model !== 'none' && this.governingDamage(p) >= 1 && !this.inGrip(p)) this.fail(p);
     }
   }
 

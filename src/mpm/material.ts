@@ -102,9 +102,27 @@ export function adiabaticRise(chi: number, work: number, J: number, rho0: number
   return (chi * work * J) / (rho0 * cp);
 }
 
-/** Effective porosity f* of the GTN yield condition: f up to fc, accelerated by k beyond (coalescence). */
+/**
+ * Effective porosity f* of the GTN yield condition: f up to fc, accelerated by k beyond (coalescence), and at most
+ * f*_u = 1/q1 (Tvergaard & Needleman 1984): with q3 = q1² the yield surface Φ = 0 has shrunk to the point q = σm = 0
+ * there (Φ(0, 0) = −(q1 f* − 1)²), and past it it would grow again — a point whose porosity kept growing under
+ * tension (yield 'gtn' with another damage criterion) looked elastic again and re-hardened (fixed 2026-09-30).
+ * The porosity f at which f* gets there is gtnFailurePorosity.
+ */
 export function gtnFstar(g: GtnParams, f: number): number {
-  return f <= g.fc ? f : g.fc + g.k * (f - g.fc);
+  const fs = f <= g.fc ? f : g.fc + g.k * (f - g.fc);
+  const fu = 1 / g.q1;
+  return fs < fu ? fs : fu;
+}
+
+/**
+ * The porosity fF at which f* reaches 1/q1 and the point has no strength left: fc + (1/q1 − fc) / k
+ * (fc itself when fc ≥ 1/q1; never, with k ≤ 0).
+ */
+export function gtnFailurePorosity(g: GtnParams): number {
+  const fu = 1 / g.q1;
+  if (g.fc >= fu) return g.fc;
+  return g.k > 0 ? g.fc + (fu - g.fc) / g.k : Infinity;
 }
 
 /** Strain-controlled nucleation rate A = df/dεM: a normal distribution of nucleation strains (Chu & Needleman 1980). */

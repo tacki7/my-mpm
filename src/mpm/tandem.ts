@@ -35,6 +35,12 @@ export const READ_STEPS = 2000;
 export type Handoff = 'done' | 'steady' | 'crop';
 /** steady readings a stand takes before a 'steady' handoff */
 export const STEADY_READS = 2;
+/**
+ * steadyLength: the sheet the default front-tension ramp (10 L / c) takes is at most this share of the sheet (half:
+ * past it the sheet is mostly ramp), so the length is at most base / (1 − RAMP_SHARE_MAX) = 2 base instead of running
+ * away as the wave speed c comes down to 10 vIn
+ */
+export const RAMP_SHARE_MAX = 0.5;
 
 export type StandCrack = Crack & { stand: number };
 
@@ -592,10 +598,16 @@ export function steadyLength(P: SimParams, every: number): number {
   const settle = probe.rollsAdjusted ? 2 * probe.contactLength + 3 * r.h0 * (1 - r.reduction) : 0;
   const base = probe.contactLength + out + settle + read + r.h0;
   // a front tension ramps up after the head is out, and 'steady' waits for it: the sheet that goes in meanwhile.
-  // The default ramp grows with the length (10 L / c), so the length is the one that holds its own ramp
+  // The default ramp grows with the length (10 L / c), so the length is the one that holds its own ramp,
+  // L = base / (1 − 10 vIn / c). That has a pole: with a mass scaling large enough for the wave speed c to come
+  // near 10 vIn the length runs away, and past c = 10 vIn (massScale about 6e5 for steel) no length holds its own
+  // ramp — the sheet is rolled faster than the tension comes on — and the formula went negative (2026-09-30).
+  // The ramp's stretch is allowed at most RAMP_SHARE_MAX of the sheet (from c = 20 vIn, massScale about 1.6e5 for
+  // steel, the length is base / (1 − RAMP_SHARE_MAX) = 2 base); past that a stand under the default ramp does not
+  // get steady before its tail is in, and rolls to 'done', handing the sheet on whole as a sheet too short does
   if (r.frontTension === 0) return base;
   if (r.tensionRamp && r.tensionRamp > 0) return base + r.tensionRamp * probe.vIn;
-  return base / (1 - (probe.tensionRamp / r.sheetLength) * probe.vIn);
+  return base / (1 - Math.min((probe.tensionRamp / r.sheetLength) * probe.vIn, RAMP_SHARE_MAX));
 }
 
 /**
