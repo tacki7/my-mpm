@@ -43,6 +43,14 @@ export const WANT: Place = asked === 'winpc' ? 'winpc' : 'mac';
 export const REMOTE_ADDR = query.get('remote') ?? stored(KEY_ADDR) ?? 'localhost:8790';
 export const REMOTE_NAME = 'winpc';
 
+const platform = typeof navigator !== 'undefined' ? navigator.platform || navigator.userAgent : 'Mac';
+/** the machine the browser runs on, which computes when the place is 'mac' (the page's own workers): 「この Mac」,
+ *  or 「この PC」 when the page is opened on a PC (winpc's browser, through start.sh's reverse tunnel) */
+export const LOCAL_NAME = /Mac/i.test(platform) ? 'この Mac' : 'この PC';
+/** the browser runs on winpc itself: a Windows browser on localhost, which is the Mac's dev server through the
+ *  launcher's reverse tunnel (the page's own workers then compute on winpc, and winpc's meters are this machine's) */
+export const BROWSER_ON_REMOTE = /Win/i.test(platform) && inPage && /^(localhost|127\.0\.0\.1|\[::1\])$/.test(location.hostname);
+
 async function hello(): Promise<RemoteHello | null> {
   try {
     const r = await fetch(`http://${REMOTE_ADDR}/hello`, { signal: AbortSignal.timeout(3000), cache: 'no-store' });
@@ -59,7 +67,7 @@ export const remote: { place: Place; hello: RemoteHello | null; note: string | n
   hello: answered,
   note:
     WANT === 'winpc' && !answered
-      ? `${REMOTE_NAME} に繋がらないので、この Mac で計算している`
+      ? `${REMOTE_NAME} の計算サーバに繋がらないので、${LOCAL_NAME}（このブラウザ）で計算している`
       : null,
 };
 
@@ -77,9 +85,9 @@ export const COMPUTE_GPU = remote.place === 'winpc' ? remoteGpu() !== null : typ
 export const COMPUTE_THREADS =
   remote.place === 'winpc' || (typeof crossOriginIsolated !== 'undefined' && crossOriginIsolated === true && typeof SharedArrayBuffer !== 'undefined');
 
-/** the machine that computes, in words: 「この Mac」 or 「winpc（<cores> コア・<GPU の名前>）」 */
+/** the machine that computes, in words: 「この Mac」「この PC」 or 「winpc（<cores> コア・<GPU の名前>）」 */
 export function placeLabel(): string {
-  if (remote.place === 'mac') return 'この Mac';
+  if (remote.place === 'mac') return LOCAL_NAME;
   const g = remoteGpu();
   return `${REMOTE_NAME}（${COMPUTE_CORES} コア${g ? `・${gpuName(g.device)}` : ''}）`;
 }
