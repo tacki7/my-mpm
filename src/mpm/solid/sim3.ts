@@ -29,6 +29,9 @@
 //   deflection to settle as it does for the rolls' radius.
 import { startOffset, tailMargin, biteGeometry, cloneParams, hitchcockRadius, ROLL_E, ROLL_NU, type DamageModel, type SimParams } from '../params.ts';
 import { beamDeflection, type Beam } from './rollBend.ts';
+
+/** points of the roll's deflection along the barrel that a look and the page carry (`Sim3.bendProfile`) */
+export const BEND_SAMPLES = 121;
 import { CTL_EVERY, CTL_TOL_H, CTL_TOL_R, presetRolls } from '../solver.ts';
 import { adiabaticRise, elasticConstants, hmFractureStrain, homologousTemperature, jcFractureStrain, plasticIncrement, staticStrength, strengthFactor, type Elastic } from '../material.ts';
 import { GpuStepper } from './gpu/stepper.ts';
@@ -185,6 +188,10 @@ export class Sim3 {
   readonly beam: Beam | null;
   readonly bend: Float64Array;
   private readonly bendVel: Float64Array;
+  /** the axis's deflection along the barrel to the support [m], BEND_SAMPLES points from the mid-width (z = 0) to
+   *  z = span / 2, bendProfileDz apart (the page's graph; the strip's columns are `bend`) */
+  readonly bendProfile: Float64Array;
+  readonly bendProfileDz: number;
   /** the contact force by z column over this step [N], and the load low-passed [N/m] on the full width at z_k = k h */
   private readonly stepFz: Float64Array;
   private readonly bendQ: Float64Array;
@@ -448,6 +455,8 @@ export class Sim3 {
     } else this.beam = null;
     this.bend = attach ? new Float64Array(attach.bend) : f64(this.nzN, shared);
     this.bendVel = attach ? new Float64Array(attach.bendVel) : f64(this.nzN, shared);
+    this.bendProfile = new Float64Array(BEND_SAMPLES);
+    this.bendProfileDz = this.beam ? this.beam.span / 2 / (BEND_SAMPLES - 1) : 0;
     this.stepFz = attach ? new Float64Array(attach.stepFz) : f64(this.nzN, shared);
     this.bendQ = new Float64Array(this.nzN);
     this.bendSettled = this.beam === null;
@@ -1087,13 +1096,23 @@ export class Sim3 {
       bendQ[iz - 1] += (q - bendQ[iz - 1]) * k;
       stepFz[iz] = 0;
     }
-    const d = beamDeflection(bendQ, h, this.beam!, nzN - 1);
+    // the whole half of the beam to the support (the solver integrates that far anyway): the strip's columns, and
+    // the profile the page draws, sampled along the barrel
+    const zS = this.beam!.span / 2;
+    const nFull = Math.ceil(zS / h - 1e-9) + 1;
+    const d = beamDeflection(bendQ, h, this.beam!, Math.max(nFull, nzN - 1));
     for (let iz = 1; iz < nzN; iz++) {
       bendVel[iz] = (d[iz - 1] - bend[iz]) / dt;
       bend[iz] = d[iz - 1];
     }
     bend[0] = bend[2];
     bendVel[0] = bendVel[2];
+    for (let j = 0; j < BEND_SAMPLES; j++) {
+      const g = (j * this.bendProfileDz) / h;
+      const k = Math.max(0, Math.min(nFull - 2, Math.floor(g)));
+      const f = Math.max(0, Math.min(1, g - k));
+      this.bendProfile[j] = d[k] * (1 - f) + d[k + 1] * f;
+    }
     // the force ripples a few % as the points cross the cells, so the deflection is averaged over windows of
     // ctlWindow: settled when one window's mean is within 2 % (or the gap control's tolerance on 2δ) of the last one's
     this.bendSum += bend[1];

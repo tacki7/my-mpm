@@ -17,6 +17,7 @@ import { existsSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { connect } from './cdp.mjs';
 import { ok, near, done } from '../checks/lib.mjs';
+import { hitchcockC } from '../../src/mpm/params.ts';
 
 const [target, shots] = process.argv.slice(2);
 if (!target || !process.env.CDP_PORT) {
@@ -403,11 +404,26 @@ try {
       return n;
     };
     const legend = (id) => [...document.getElementById(id).parentElement.querySelectorAll('.chart-legend .item')].map((e) => e.textContent);
-    return { overlaid: __mpm.solid.overlaid, px: ['solid-chart-width', 'solid-chart-crown', 'solid-chart-flat'].map(count), legends: ['solid-chart-width', 'solid-chart-crown', 'solid-chart-flat'].map(legend) };
+    const ids = ['solid-chart-width', 'solid-chart-crown', 'solid-chart-flat', 'solid-chart-flatten'];
+    return { overlaid: __mpm.solid.overlaid, px: ids.map(count), legends: ids.map(legend), bendLegend: legend('solid-chart-bend') };
   })()`);
   ok(JSON.stringify(over.overlaid) === '[0,1]', 'the width graphs draw both stands', JSON.stringify(over.overlaid));
-  ok(over.px.every(([a, b]) => a > 30 && b > 30), '  … each in its stand\'s colour (pixels of #1\'s and #2\'s colours on the load, crown and flatness graphs)', JSON.stringify(over.px));
+  ok(over.px.every(([a, b]) => a > 30 && b > 30), '  … each in its stand\'s colour (pixels of #1\'s and #2\'s colours on the load, crown, flatness and roll-flattening graphs)', JSON.stringify(over.px));
   ok(over.legends.every((l) => l.includes('#1') && l.includes('#2')) && over.legends[1][0] === '入側（#1）', '  … with a legend under each (the crown\'s with the entry)', JSON.stringify(over.legends));
+  ok(/計算のロールは一様な R′/.test(over.legends[3][0]) && over.bendLegend.length === 0, "  … the roll-flattening graph's legend says the solver's R′ is uniform; the rigid roll's bending graph has none", JSON.stringify([over.legends[3][0], over.bendLegend]));
+  // the flattening graph: Hitchcock on each column's steady load, against the page's own numbers (R, C, the stand's Δh)
+  const flatten = await c.evaluate(`(() => {
+    const r = __mpm.solid.standResults[1];
+    const st = r.steady;
+    const P = __mpm.solid.params.rolling;
+    const C = ${hitchcockC((await c.evaluate('__mpm.solid.params.rolling')))};
+    const q = st.forceByZ;
+    const mid = P.rollRadius * (1 + (C * q[0]) / (r.h0 - r.gap));
+    const edge = P.rollRadius * (1 + (C * q[q.length - 1]) / (r.h0 - r.gap));
+    const hm = [...document.getElementById('solid-chart-flatten').parentElement.querySelectorAll('.chart-legend .item')].map((e) => e.textContent);
+    return { R: P.rollRadius, Rp: r.rollRadius, mid, edge, C, hm };
+  })()`);
+  ok(flatten.mid > flatten.R && flatten.edge <= flatten.R + 1e-12 && flatten.mid > flatten.Rp * 0.9, "the mid-width column's local R′ is above R and the solver's R′ is between the middle's and the edge's (R′ local ≥ R where the load is 0)", `R ${(flatten.R * 1e3).toFixed(1)}, R′ ${(flatten.Rp * 1e3).toFixed(2)}, mid ${(flatten.mid * 1e3).toFixed(2)}, edge ${(flatten.edge * 1e3).toFixed(2)} mm`);
 
   // ── the handoff 'crop' from the panel: the 3D model's params and the URL
   await c.navigate(page('?dim=3&W3=2'));
@@ -471,6 +487,23 @@ try {
   ok(brow.length === 3 && /板幅の中央.*µm/.test(brow[0]) && /板の端.*µm/.test(brow[1]) && /クラウン.*µm/.test(brow[2]) && new RegExp((bd.steady?.rollBend?.centre * 1e6).toFixed(2)).test(brow[0]), 'the results show the deflection at the mid-width and the edge and the crown, in µm, the steady means', JSON.stringify(brow));
   const bendTool = JSON.parse(execFileSync('node', ['tools/solid.mjs', '--W', '2', '--cells', '4', '--R', '10', '--bend', '60', '--span', '80', '--json'], { encoding: 'utf8' }));
   ok(rel(bd.steady.force * 1e-3, bendTool.steady.force_kN) < 1e-5 && rel(bd.steady.rollBend.centre * 1e6, bendTool.steady.rollBend_um.centre) < 1e-5, 'page = tool: the steady force and the deflection (1e-5)', `${(bd.steady.force * 1e-3).toFixed(4)} kN, ${(bd.steady.rollBend.centre * 1e6).toFixed(4)} µm`);
+  // the bending graph: the steady profile along the barrel (121 points to the bearing at 40 mm), drawn in ink with the strip's edge and the supports marked
+  const prof = bd.steady.rollBend;
+  ok(prof.byZ.length === 121 && Math.abs(prof.dz * 120 - 0.04) < 1e-12 && prof.byZ[0] === prof.centre && prof.byZ[120] === 0 && prof.byZ.every((v, i) => i === 0 || v <= prof.byZ[i - 1] + 1e-15), 'the steady deflection profile: 121 points from the mid-width to the bearing (40 mm), the centre first, falling to 0', `${prof.byZ.length} × ${(prof.dz * 1e3).toFixed(3)} mm, ${(prof.byZ[0] * 1e6).toFixed(3)} → ${prof.byZ[120]}`);
+  const jEdge = 1e-3 / prof.dz;
+  const profEdge = prof.byZ[Math.floor(jEdge)] * (1 - (jEdge % 1)) + prof.byZ[Math.ceil(jEdge)] * (jEdge % 1);
+  ok(rel(profEdge, prof.edge) < 1e-9, "the profile at the strip's edge (1 mm) is the results' edge deflection", `${(profEdge * 1e6).toFixed(4)} vs ${(prof.edge * 1e6).toFixed(4)} µm`);
+  const bendGraph = await c.evaluate(`(() => {
+    const cv = document.getElementById('solid-chart-bend');
+    const d = cv.getContext('2d').getImageData(0, 0, cv.width, cv.height).data;
+    let ink = 0;
+    for (let i = 0; i < d.length; i += 4) if (Math.abs(d[i] - 29) + Math.abs(d[i + 1] - 42) + Math.abs(d[i + 2] - 58) < 24 && d[i + 3] > 200) ink++;
+    const legend = [...cv.parentElement.querySelectorAll('.chart-legend .item')].map((e) => e.textContent);
+    return { ink, legend, w: cv.width };
+  })()`);
+  await painted();
+  await shot('bend-graphs');
+  ok(bendGraph.ink > 200 && bendGraph.legend.length === 1 && /中央 \d+\.\d+ µm、板の端 \d+\.\d+ µm/.test(bendGraph.legend[0]) && new RegExp((prof.centre * 1e6).toFixed(2)).test(bendGraph.legend[0]), "the bending graph is drawn (ink pixels) and its legend gives the centre's and the edge's deflection in µm", `${bendGraph.ink} px, ${JSON.stringify(bendGraph.legend)}`);
   await c.navigate(page(`?${bUrl}`));
   await c.waitFor('__mpm.solid.active && __mpm.solid.ready', 60000);
   bs = await bendState();

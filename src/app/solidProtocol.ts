@@ -70,8 +70,9 @@ export interface SolidDiag {
   rollRadius: number;
   gap: number;
   rollsSettled: boolean;
-  /** the roll's deflection away from the strip now, at the mid-width and at the strip's edge [m]; null with a rigid roll */
-  rollBend: { centre: number; edge: number; settled: boolean } | null;
+  /** the roll's deflection away from the strip now, at the mid-width and at the strip's edge [m], and along the barrel
+   *  from the mid-width to the support (`byZ`, `dz` apart; Sim3.bendProfile); null with a rigid roll */
+  rollBend: { centre: number; edge: number; settled: boolean; byZ: number[]; dz: number } | null;
   phase: SolidPhase;
   /** how far the running stand is through its pass, 0..1 (src/mpm/progress.ts) */
   progress: number;

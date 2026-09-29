@@ -4,7 +4,7 @@
 // the load across the width, the contact pressure over the bite) and the conditions URL with the 3D keys.
 // Everything the page had before is the 2 次元 tab, left as it is; main.ts routes the shared buttons here while
 // the 3 次元 tab is shown.
-import { cloneParams, type SimParams } from '../mpm/params.ts';
+import { cloneParams, hitchcockC, type SimParams } from '../mpm/params.ts';
 import type { Solid3Params, SolidPhase, SolidSettings } from '../mpm/solid/sim3.ts';
 import type { SolidSteady } from '../mpm/solid/steady.ts';
 import type { Stand3Result } from '../mpm/solid/tandem3.ts';
@@ -228,7 +228,7 @@ export class SolidMode {
   /** a few words for a screen reader under each graph (canvases are not read), written when the steady reading first comes and at the end */
   private readonly summaries: HTMLElement[] = [];
   /** the legends under the width, crown and flatness graphs (a tandem's stands, by colour) */
-  private readonly legends: Record<'width' | 'crown' | 'flat', HTMLElement>;
+  private readonly legends: Record<'width' | 'crown' | 'flat' | 'bend' | 'flatten', HTMLElement>;
   /** 平坦度の形: the shown steady flatness as the strip's waves (flatView.ts) */
   private readonly flat3d: FlatView;
   /** for checks: a flatness drawn in 平坦度の形 in place of the steady reading's (`__mpm.solid.flatTry`) */
@@ -267,7 +267,7 @@ export class SolidMode {
       this.$(id).after(d);
       return d;
     };
-    this.legends = { width: legend('solid-chart-width'), crown: legend('solid-chart-crown'), flat: legend('solid-chart-flat') };
+    this.legends = { width: legend('solid-chart-width'), crown: legend('solid-chart-crown'), flat: legend('solid-chart-flat'), bend: legend('solid-chart-bend'), flatten: legend('solid-chart-flatten') };
     this.flat3d = new FlatView(this.$<HTMLCanvasElement>('solid-chart-flat3d'));
     this.flatTools();
     for (const id of ['solid-chart-force', 'solid-chart-width', 'solid-chart-map']) {
@@ -1460,8 +1460,105 @@ export class SolidMode {
     const stands = (extra: string[] = []) => (tandem ? [...extra, ...drawn.map(({ k }) => legendItem(standColor(k), `#${k + 1}${k === this.geometries.length - 1 && !this.finished ? '（圧延中）' : ''}`))] : extra);
     setLegend(this.legends.width, drawn.length ? stands() : []);
     this.drawProfileCharts(drawn, g, hwMax, tandem, stands);
+    this.drawRollCharts(drawn, g, hwMax, tandem, stands);
     this.drawPressureMap(st, g, tag);
     this.drawFlat3d(shown);
+  }
+
+  /**
+   * The roll across the width: its bending — the axis's deflection along the barrel from support to support (the
+   * beam's steady mean; Sim3.bendProfile) — and its flattening. The solver flattens the roll as one cylinder
+   * (Hitchcock's R′ from the mean force per width, docs/model.md「ロール偏平」); the graph puts the same formula on each
+   * column's steady load, R′(z) = R (1 + C q(z) / (h0 − gap)), to show where the roll is pressed flatter — a reading
+   * of the load, not a shape the solver uses. Both follow the stand on show and the replay, as the width graphs
+   */
+  private drawRollCharts(drawn: { k: number; st: SolidSteady; g: SolidGeometry }[], g: SolidGeometry, hwMax: number, tandem: boolean, stands: (extra: string[]) => string[]): void {
+    const color = (k: number) => (tandem ? standColor(k) : INK);
+    const tagOf = (k: number) => (tandem ? `#${k + 1}` : '');
+    // ── the bending along the barrel, mirrored about the mid-width; 0 at the supports
+    const bendCanvas = this.$<HTMLCanvasElement>('solid-chart-bend');
+    const bent = drawn.filter((d) => d.st.rollBend);
+    const rb = rollBendOf(this.settings);
+    if (bent.length && rb) {
+      const series = bent.map(({ k, st }) => {
+        const { byZ, dz } = st.rollBend!;
+        const x: number[] = [];
+        const y: number[] = [];
+        for (let j = byZ.length - 1; j >= 0; j--) (x.push((-j * dz) / mm), y.push(byZ[j] * 1e6));
+        for (let j = 1; j < byZ.length; j++) (x.push((j * dz) / mm), y.push(byZ[j] * 1e6));
+        return { x, y, color: color(k), label: tagOf(k) || '撓み' };
+      });
+      const zS = ((bent[0].st.rollBend!.byZ.length - 1) * bent[0].st.rollBend!.dz) / mm;
+      const barrel = rb.barrel / mm;
+      // each pair of guides labelled once, on the +z side; the supports' label on the second row, clear of the edge's
+      const marks: { x: number; label: string; color?: string; row?: number }[] = [
+        { x: -g.halfWidth0 / mm, label: '', color: STEEL },
+        { x: g.halfWidth0 / mm, label: '板の端', color: STEEL },
+        { x: -zS, label: '', color: STEEL },
+        { x: zS, label: rb.span ? '軸受' : '胴の端', color: STEEL, row: 1 },
+      ];
+      if (rb.span && barrel / 2 < zS) marks.push({ x: -barrel / 2, label: '', color: STEEL }, { x: barrel / 2, label: '胴の端', color: STEEL, row: 1 });
+      const top = Math.max(1e-3, ...series.flatMap((s) => s.y));
+      drawChart(bendCanvas, {
+        xLabel: '板幅方向の位置 z [mm]',
+        yLabel: '撓み δ [µm]',
+        series,
+        marks,
+        xRange: [-zS * 1.2, zS * 1.2],
+        yRange: [Math.min(0, ...series.flatMap((s) => s.y)), top * 1.15],
+      });
+      setLegend(this.legends.bend, stands([legendItem(tandem ? STEEL : INK, `ロールの軸の撓み（板から離れる向き）。中央 ${(bent[bent.length - 1].st.rollBend!.centre * 1e6).toFixed(2)} µm、板の端 ${(bent[bent.length - 1].st.rollBend!.edge * 1e6).toFixed(2)} µm`)]));
+    } else {
+      drawChart(bendCanvas, { xLabel: '板幅方向の位置 z [mm]', yLabel: '撓み δ [µm]', series: [], xRange: [-hwMax * 1.25, hwMax * 1.25], yRange: [0, 1] });
+      if (!this.settings.bend) this.note(bendCanvas, '条件の欄の「ロールの撓み（3 次元）」を選ぶと出る');
+      else this.emptyNote(bendCanvas);
+      setLegend(this.legends.bend, []);
+    }
+    // ── the flattening by column: Hitchcock on each column's steady load; the solver's one R′ and the rigid R as lines
+    const flatCanvas = this.$<HTMLCanvasElement>('solid-chart-flatten');
+    const P = this.params;
+    if (drawn.length && P) {
+      const C = hitchcockC(P.rolling);
+      const R = P.rolling.rollRadius;
+      const adjusted = P.rolling.flattening === 'hitchcock' || P.rolling.gapControl === 'reduction';
+      const shownDiag = this.shownFrame()?.diag;
+      const rollsOf = (k: number): { gap: number; rollRadius: number } | null => {
+        const r = this.standResults[k];
+        if (r && (k !== shownDiag?.stand || !shownDiag)) return { gap: r.gap, rollRadius: r.rollRadius };
+        return shownDiag && shownDiag.stand === k ? { gap: shownDiag.gap, rollRadius: shownDiag.rollRadius } : null;
+      };
+      const series: { x: number[]; y: number[]; color: string; label: string }[] = [];
+      const hmarks: { y: number; label: string }[] = [{ y: R / mm, label: '剛体 R' }];
+      for (const { k, st, g: gk } of drawn) {
+        const rolls = rollsOf(k);
+        const dh = gk.h0 - (rolls?.gap ?? gk.gap);
+        if (!(dh > 0)) continue;
+        const n = st.forceByZ.length;
+        const x: number[] = [];
+        const y: number[] = [];
+        for (let c = n - 1; c >= 0; c--) (x.push((-c * gk.h) / mm), y.push((R * (1 + (C * Math.max(0, st.forceByZ[c])) / dh)) / mm));
+        for (let c = 1; c < n; c++) (x.push((c * gk.h) / mm), y.push((R * (1 + (C * Math.max(0, st.forceByZ[c])) / dh)) / mm));
+        series.push({ x, y, color: color(k), label: tagOf(k) || '列ごとの荷重から' });
+        if (adjusted && rolls) hmarks.push({ y: rolls.rollRadius / mm, label: tagOf(k) ? `計算の R′ ${tagOf(k)}` : '計算の R′（一様）' });
+      }
+      const ys = series.flatMap((s) => s.y);
+      const top = Math.max(R / mm, ...ys, ...hmarks.map((m) => m.y));
+      const pad = Math.max((top - R / mm) * 0.15, R / mm * 0.002);
+      drawChart(flatCanvas, {
+        xLabel: '板幅方向の位置 z [mm]',
+        yLabel: '偏平したロール半径 R′ [mm]',
+        series,
+        hmarks,
+        marks: drawn.length ? [{ x: -drawn[drawn.length - 1].st.halfWidth / mm, label: '端', color: STEEL }, { x: drawn[drawn.length - 1].st.halfWidth / mm, label: '端', color: STEEL }] : [],
+        xRange: [-hwMax * 1.25, hwMax * 1.25],
+        yRange: [R / mm - pad, top + pad],
+      });
+      setLegend(this.legends.flatten, stands([legendItem(tandem ? STEEL : INK, adjusted ? 'R′(z) = R(1 + C q(z)/Δh)。計算のロールは一様な R′（平均の荷重から）で、列ごとの値は荷重の読み' : '剛体ロールの計算。列ごとの荷重を Hitchcock に入れた見積り（計算には使っていない）')]));
+    } else {
+      drawChart(flatCanvas, { xLabel: '板幅方向の位置 z [mm]', yLabel: '偏平したロール半径 R′ [mm]', series: [], xRange: [-hwMax * 1.25, hwMax * 1.25], yRange: [0, 1] });
+      this.emptyNote(flatCanvas);
+      setLegend(this.legends.flatten, []);
+    }
   }
 
   /**
@@ -1539,13 +1636,18 @@ export class SolidMode {
 
   /** a graph of steady means, before there are any: say when it comes (or that it did not) */
   private emptyNote(canvas: HTMLCanvasElement): void {
+    this.note(canvas, this.replay ? '再生中の枚の時点ではまだ定常でない' : this.finished ? '定常の読みが無かった（板の長さを延ばす）' : '定常になると出る');
+  }
+
+  /** a line of words over an empty graph */
+  private note(canvas: HTMLCanvasElement, text: string): void {
     const ctx = canvas.getContext('2d')!;
     const r = canvas.getBoundingClientRect();
     ctx.save();
     ctx.font = uiFont(11);
     ctx.fillStyle = STEEL;
     ctx.textAlign = 'center';
-    ctx.fillText(this.replay ? '再生中の枚の時点ではまだ定常でない' : this.finished ? '定常の読みが無かった（板の長さを延ばす）' : '定常になると出る', r.width / 2 + 20, r.height / 2 + 14);
+    ctx.fillText(text, r.width / 2 + 20, r.height / 2 + 14);
     ctx.restore();
   }
 
