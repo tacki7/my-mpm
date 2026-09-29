@@ -326,6 +326,11 @@ Node の素の rss が約 90 MB なので、この範囲ではソルバーの分
 | 33 | `tools/browser/tandem.mjs`（検査） | 低（検査） | スタンド 1 の終わりを 9,142 ステップと決め打ち（main では 7,618。検査を書いた 2026-09-21 より後のタンデムの変更で動いた）→ `stopafter=9130` が 2 スタンド目に落ちて「切り替え直後のクリック」の節が FAIL。荷重の表の値（`String(F × 1e-6)`）を × 1e6 で結果とビット比較 → 3.688 kN/mm で 1 ulp 違って FAIL。main でも同じ 2 件が FAIL | PR #126（終わりのステップを 1 回走らせて読む、荷重は 1e-9 で比べる） |
 | 34 | `tools/browser/eta.mjs`（検査） | 低（検査） | 平面図の節（W 20・既定の 10 セル）は 1.8 s で終わり、残り時間が出る前に済む → 「0 samples」で FAIL。main でも同じ | PR #126（半幅 20 セルで 46 samples） |
 
+検査の運用で踏んだもの: 10 日前のセッションの `vite --port 5199`（本体の checkout を配信）が残ったままで、worktree の `npm run dev -- --port 5199 --strictPort` は
+"already in use" で落ちたのに検査スクリプトは古いサーバに繋がり、fix 枝の 1 周目のブラウザ検査（約 40 分）が別の枝に対して回っていた。PASS / FAIL が出るので気づきにくい。
+以後は検査の前に `lsof -nP -iTCP:<port> -sTCP:LISTEN` で空きを確かめ、起動後に dev.log に `Local:` が出たことを確かめてから使う。
+`eta.mjs` は Mac に別の計算（`node --expose-gc` の計測など）が重なると crop の節が揺れて FAIL する（中央値 0.353 → 空けて 0.213）。
+
 問題なしと確かめたもの（抜粋）: B スプラインの重みの和・3×3 の範囲、dfg、Jaumann の符号、J2 の Newton、断熱昇温、接触 'surface'、張力のランプと `gripCols`、タンデムの `remap`（全状態）、スラブ法の RK4、
 平面図の質量・接触・切り欠き、3 次元の対称面の畳み込み（APIC の C まで）、GPU の境界・CAS・uniform、チームの関門と部分和、`tandem3.remap3`、`steady.ts`、`flatShape`、
 メッセージ型の一致、転送済み配列の再利用なし、`remoteCodec` の整列、URL の往復、CSV の単位と列順、ETA、DPR、WebCodecs / mux、半厚の鏡像、tracker の `remap`。
