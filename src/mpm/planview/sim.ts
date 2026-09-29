@@ -1457,10 +1457,18 @@ export class PlanSim {
     return x;
   }
 
+  /** whether a point is under the rolls (a contact pressure from the last step) */
+  touching(): boolean {
+    const { n, active, pc } = this;
+    for (let p = 0; p < n; p++) if (active[p] && pc[p] > 0) return true;
+    return false;
+  }
+
+  /** 'done' as soon as the tail is past the exit plane and no point is under the rolls (else 2 h0 past, as before T121) */
   phase(): PlanPhase {
     const head = this.headX();
     const tail = this.tailX();
-    if (tail > 2 * this.params.rolling.h0 || tail === INF) return 'done';
+    if (tail === INF || tail > 2 * this.params.rolling.h0 || (tail > 0 && !this.touching())) return 'done';
     if (head < -this.contactLength) return 'approach';
     if (head < this.xExitProbe) return 'bite';
     if (tail > -this.contactLength) return 'tail-out';

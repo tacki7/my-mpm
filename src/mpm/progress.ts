@@ -5,13 +5,14 @@
 const INF = Number.POSITIVE_INFINITY;
 
 /**
- * Where the tail is when the stand ends [m]. A stand that rolls its strip out ends with the tail 2 h0 past the exit
- * (the models' 'done'). A tandem's stand that hands on as soon as it is steady (`steadyLength`: the strip length
- * that reading needs, null for a stand that rolls out) ends with the tail still that much short of the bite; a
- * strip shorter than the reading needs is rolled out after all.
+ * Where the tail is when the stand ends [m]. A stand that rolls its strip out ends with the tail just past the exit
+ * plane, once no point is against a roll (the models' 'done'; the last contact clears within a fraction of h0 of
+ * springback). A tandem's stand that hands on as soon as it is steady (`steadyLength`: the strip length that
+ * reading needs, null for a stand that rolls out) ends with the tail still that much short of the bite; a strip
+ * shorter than the reading needs is rolled out after all.
  */
 export function standEndTail(h0: number, contactLength: number, length: number, steadyLength: number | null): number {
-  if (steadyLength == null || length < steadyLength - 1e-9) return 2 * h0;
+  if (steadyLength == null || length < steadyLength - 1e-9) return 0;
   return -contactLength - (length - steadyLength);
 }
 
