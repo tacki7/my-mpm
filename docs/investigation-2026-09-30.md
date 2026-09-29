@@ -16,7 +16,7 @@
 | 撓みの梁の荷重の修正 | PR #122 `fix/roll-bend-load` |
 | 2 次元ソルバーの端の修正（非局所損傷 × 張力、GTN の f*、定常の板長） | PR #124 `fix/solver-2d-edges` |
 | 3 次元の修正（スレッドの ready の競合、短い板の分割、`advance()` の誤用） | PR #123 `fix/solid-3d-edges` |
-| ワーカー・URL・画面の修正 | PR `fix/workers-ui` |
+| ワーカー・URL・画面の修正 | PR #126 `fix/workers-ui` |
 
 ## 1. ロールの撓みの計算結果
 
@@ -286,7 +286,7 @@ Node の素の rss が約 90 MB なので、この範囲ではソルバーの分
 | 3 | `solver.ts` 非局所損傷の `fail` | 中 | `inGrip` を見ずに壊す → 張力中に掴みの点が壊れ、張力が偏差 0 の点に載る | #124 |
 | 4 | `solid.worker.ts` + `team.ts` | 中 | 複数スレッドのタンデムでスタンドの継ぎ目（attach 中）に「やり直す」→ 旧 attach の 'ready' が新 attach を解決 → 結果が黙って壊れる | 要着手（attach に世代番号） |
 | 5 | `sim3.ts` `partition` | 低 | 板長がセル 1 列 × スレッド数より短いと区間が 1 列幅になり、質量 23 % 欠け（画面では届かない。`tools/solid.mjs --threads` と短い板） | #123 |
-| 6 | `sim3.ts` `advance()` | 低 | `{shared, size > 1}` や GPU 付きの `Sim3` に `advance()` を呼ぶと rank 0 の区間だけで黙って間違う | `fix/solid-3d-edges`（throw） |
+| 6 | `sim3.ts` `advance()` | 低 | `{shared, size > 1}` や GPU 付きの `Sim3` に `advance()` を呼ぶと rank 0 の区間だけで黙って間違う | #123（throw） |
 | 7 | `material.ts` `gtnFstar` | 低 | 上限なし。`yield=gtn` かつ損傷が GTN でないとき f > fF で降伏面が裏返り弾性扱い（再硬化） | #124 |
 | 8 | `tandem.ts` `steadyLength` | 低 | 質量スケーリングで c ≤ 10 vIn になると板長が負（ms 1e6 で −54 mm。URL は 1e8 まで許す） | #124 |
 | 9 | `gpu/kernels.ts` `penOf` | 低（潜在） | `penKey` の逆関数になっていない（符号しか使わないので今は無害） | 未 |
@@ -298,13 +298,13 @@ Node の素の rss が約 90 MB なので、この範囲ではソルバーの分
 
 | # | 場所 | 重要度 | 症状 | PR |
 |---|---|---|---|---|
-| 13 | `query.ts` `mat=`・`cond` | 中 | `?mat=constructor` で `MATERIALS[mat]` が prototype の関数 → 材料の定数が全部 undefined → NaN。`cond` の最上位キー `toString` も同様 | `fix/workers-ui` |
+| 13 | `query.ts` `mat=`・`cond` | 中 | `?mat=constructor` で `MATERIALS[mat]` が prototype の関数 → 材料の定数が全部 undefined → NaN。`cond` の最上位キー `toString` も同様 | PR #126 |
 | 14 | `tools/remote/server.mjs` | 中 | ws に `on('error')` が無い → 受信側のプロトコルエラーで計算サーバ全体が落ちる | 要着手 |
-| 15 | `sim.worker.ts`・`solid.worker.ts` | 低〜中 | 描画の更新 = 5 秒のとき約 5 秒イベントループに戻らない → 一時停止・色の量・選択・やり直すが最大 5 秒待つ | `fix/workers-ui` |
-| 16 | `solid.worker.ts` CPU の loop | 低 | `advance()` が throw すると running=true のまま → 以後の「続ける」が無視 | `fix/workers-ui` |
-| 17 | `solid.worker.ts` `setCompute` | 低 | void 呼び出しで await 後の throw（広い板・8 セルの確保失敗）が unhandled → 「格子と点を用意している」のまま | `fix/workers-ui` |
-| 18 | `solidMode.ts`・`solid.worker.ts` `run()` | 低 | attach 中の Sim3 を step できる（`__mpm.solid.run()`） | `fix/workers-ui` |
-| 19 | `solid.worker.ts` GPU 中の init | 低 | mapAsync 中に destroy → reject → 「計算が止まった」が一瞬出る | `fix/workers-ui` |
+| 15 | `sim.worker.ts`・`solid.worker.ts` | 低〜中 | 描画の更新 = 5 秒のとき約 5 秒イベントループに戻らない → 一時停止・色の量・選択・やり直すが最大 5 秒待つ | PR #126 |
+| 16 | `solid.worker.ts` CPU の loop | 低 | `advance()` が throw すると running=true のまま → 以後の「続ける」が無視 | PR #126 |
+| 17 | `solid.worker.ts` `setCompute` | 低 | void 呼び出しで await 後の throw（広い板・8 セルの確保失敗）が unhandled → 「格子と点を用意している」のまま | PR #126 |
+| 18 | `solidMode.ts`・`solid.worker.ts` `run()` | 低 | attach 中の Sim3 を step できる（`__mpm.solid.run()`） | PR #126 |
+| 19 | `solid.worker.ts` GPU 中の init | 低 | mapAsync 中に destroy → reject → 「計算が止まった」が一瞬出る | PR #126 |
 | 20 | `sim.worker.ts` | 低 | `handoff=steady` の最初のフレームで `steadyLength()` が `new Sim` を作る（TandemSim と二重確保） | §4 |
 | 21 | `server.mjs` `/quit` | 低 | 認証なし・CORS * → 任意のページが計算サーバを終了できる（Chrome の PNA で大半は止まる） | 未 |
 | 22 | `server.mjs` | 低 | EADDRINUSE で 0.8 秒ごとの listen を無限に繰り返す | 未 |
@@ -314,15 +314,17 @@ Node の素の rss が約 90 MB なので、この範囲ではソルバーの分
 
 | # | 場所 | 重要度 | 症状 | PR |
 |---|---|---|---|---|
-| 24 | `panel.ts` `hasBite` | 中 | 幾何で噛めない編集は h0・r・R を黙って基の値に戻す（欄は編集済みのまま → 反映されたように見える）。摩擦（√(Δh/R) > μ）は見ないので R 5・h0 1・r 70 % は通って 'stalled' | `fix/workers-ui`（表示。摩擦は要判断） |
-| 25 | `tape.ts` | 低 | バイト上限で間引いたとき最後の枚が落ち、動画に終状態が入らない | `fix/workers-ui` |
-| 26 | `view.ts` `stampBorn` | 低 | 鍵を消さない → 同じ条件でやり直すと 2 回目以降の亀裂の印が押されない | `fix/workers-ui` |
-| 27 | `export.ts` | 低 | 圧力分布・亀裂の CSV と名前の step が最後のスタンドで、表示中のスタンドを無視 | `fix/workers-ui` |
-| 28 | `viewControls.ts` | 低 | ダブルクリックで click が 2 回先に届き、選択中の点が変わる | `fix/workers-ui` |
-| 29 | `planMode.ts` | 低 | 点が上限を超えると幅・セルを黙って既定に戻す | `fix/workers-ui`（注を出す） |
-| 30 | `solidMode.ts` | 低 | 動画の書き出し中の「続ける」「やり直す」で abort しない → 絵がずれる。再生の 1 枚の間隔が 80 ms 固定でテープを間引いたあと 2 倍・4 倍速。一時停止直後の「続ける」で飛行中の pause フレームが running を戻す | `fix/workers-ui`（abort）、他は未 |
+| 24 | `panel.ts` `hasBite` | 中 | 幾何で噛めない編集は h0・r・R を黙って基の値に戻す（欄は編集済みのまま → 反映されたように見える）。摩擦（√(Δh/R) > μ）は見ないので R 5・h0 1・r 70 % は通って 'stalled' | PR #126（表示。摩擦は要判断） |
+| 25 | `tape.ts` | 低 | バイト上限で間引いたとき最後の枚が落ち、動画に終状態が入らない | PR #126 |
+| 26 | `view.ts` `stampBorn` | 低 | 鍵を消さない → 同じ条件でやり直すと 2 回目以降の亀裂の印が押されない | PR #126 |
+| 27 | `export.ts` | 低 | 圧力分布・亀裂の CSV と名前の step が最後のスタンドで、表示中のスタンドを無視 | PR #126 |
+| 28 | `viewControls.ts` | 低 | ダブルクリックで click が 2 回先に届き、選択中の点が変わる | PR #126 |
+| 29 | `planMode.ts` | 低 | 点が上限を超えると幅・セルを黙って既定に戻す | PR #126（注を出す） |
+| 30 | `solidMode.ts` | 低 | 動画の書き出し中の「続ける」「やり直す」で abort しない → 絵がずれる。再生の 1 枚の間隔が 80 ms 固定でテープを間引いたあと 2 倍・4 倍速。一時停止直後の「続ける」で飛行中の pause フレームが running を戻す | PR #126（abort）、他は未 |
 | 31 | `splitters.ts`・`styles.css` | 低 | 1,101〜1,250 px で分割線を端まで引くと絵が 0〜数十 px。`.bite` < 650 px で凡例と俯瞰が重なる | 未 |
 | 32 | `solidMode.ts` | 低 | init 直後に旧 run の stand > 0 の 'ready' が届くと geometry を上書き | 未 |
+| 33 | `tools/browser/tandem.mjs`（検査） | 低（検査） | スタンド 1 の終わりを 9,142 ステップと決め打ち（main では 7,618。検査を書いた 2026-09-21 より後のタンデムの変更で動いた）→ `stopafter=9130` が 2 スタンド目に落ちて「切り替え直後のクリック」の節が FAIL。荷重の表の値（`String(F × 1e-6)`）を × 1e6 で結果とビット比較 → 3.688 kN/mm で 1 ulp 違って FAIL。main でも同じ 2 件が FAIL | PR #126（終わりのステップを 1 回走らせて読む、荷重は 1e-9 で比べる） |
+| 34 | `tools/browser/eta.mjs`（検査） | 低（検査） | 平面図の節（W 20・既定の 10 セル）は 1.8 s で終わり、残り時間が出る前に済む → 「0 samples」で FAIL。main でも同じ | PR #126（半幅 20 セルで 46 samples） |
 
 問題なしと確かめたもの（抜粋）: B スプラインの重みの和・3×3 の範囲、dfg、Jaumann の符号、J2 の Newton、断熱昇温、接触 'surface'、張力のランプと `gripCols`、タンデムの `remap`（全状態）、スラブ法の RK4、
 平面図の質量・接触・切り欠き、3 次元の対称面の畳み込み（APIC の C まで）、GPU の境界・CAS・uniform、チームの関門と部分和、`tandem3.remap3`、`steady.ts`、`flatShape`、
@@ -330,7 +332,7 @@ Node の素の rss が約 90 MB なので、この範囲ではソルバーの分
 
 ## 7. 推奨する次の一手
 
-1. 修正 PR（#122、`fix/solver-2d-edges`、`fix/solid-3d-edges`、`fix/workers-ui`）の CI を見てマージ
+1. 修正 PR（#122、#123、#124、#126）の CI を見てマージ
 2. 洗濯板: まず表示の「格子平均」（§2.5 の 1）。次に接触の重みの傾斜（§2.5 の 3）を関門付きで試す。荷重の振動の標準偏差（`docs/validation.md`「荷重の振動」の 3.2 %）が指標
 3. 妥当性: SPCC 用の損傷定数の校正（少なくとも文献値の出典を `docs/model.md` に）、標準条件の残留応力の節を `docs/validation.md` に（格子 6 / 8 / 10 セル）
 4. 撓み: 4 段圧延機を扱うならバックアップロール。扱わないなら画面に「2 段圧延機の撓み」と明記
