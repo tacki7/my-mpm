@@ -31,6 +31,8 @@ import { frameMs, mountFrameRate, onFrameMs, setFrameMs } from './app/frameRate.
 import { density, mountDensity, onDensity, setDensity, trackMasthead, type Density } from './app/density.ts';
 import { Eta, etaText, standGrowth } from './app/eta.ts';
 import { SteadyForce, SteadyProfile, drawForceChart, drawHillChart, slabRatio, type HillStand, type HillChartData, type Profile, slabReference, type ForceChartData, type StandStart } from './app/slabOverlay.ts';
+import { remote, remoteWorker } from './app/remote.ts';
+import { machinesState, mountMachines } from './app/machineStats.ts';
 
 let forceChart: ForceChartData | null = null;
 let hillChart: HillChartData | null = null;
@@ -252,7 +254,7 @@ function send(m: ToWorker) {
 }
 
 function startWorker() {
-  worker = new Worker(new URL('./app/sim.worker.ts', import.meta.url), { type: 'module' });
+  worker = remote.place === 'winpc' ? remoteWorker('sim.worker.ts') : new Worker(new URL('./app/sim.worker.ts', import.meta.url), { type: 'module' });
   send({ type: 'frame-ms', ms: frameMs() });
   worker.onmessage = (e: MessageEvent<FromWorker>) => {
     const m = e.data;
@@ -683,6 +685,10 @@ window.__mpm = {
   set density(d: Density) {
     setDensity(d);
   },
+  /** where the workers compute and the machines' readings (src/app/machineStats.ts: place 'mac' | 'winpc', note, hello, readings, up) */
+  get machines() {
+    return machinesState();
+  },
   /** the time left [s] the section view shows (null before there is a rate to go by) */
   get eta() {
     return eta.seconds;
@@ -829,6 +835,7 @@ startWorker();
 mountFrameRate(document.getElementById('frame-rate') as HTMLSelectElement);
 // the density: the masthead's select; the charts redraw at their new height (the bite and the 3D view watch their own size)
 mountDensity(document.getElementById('density') as HTMLSelectElement);
+mountMachines(document.getElementById('machines') as HTMLElement);
 trackMasthead(document.querySelector('.masthead') as HTMLElement);
 onDensity(() => {
   dirty = true;

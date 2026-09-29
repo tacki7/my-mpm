@@ -1,0 +1,10 @@
+{
+  "name": "mpm-rolling-lab-remote",
+  "private": true,
+  "type": "module",
+  "description": "The page's workers on another machine (server.mjs); installed only where they run, not in the app's own dependencies",
+  "dependencies": {
+    "webgpu": "^0.6.1",
+    "ws": "^8.22.0"
+  }
+}

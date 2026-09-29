@@ -2017,3 +2017,22 @@ CPU（f64）と GPU（f32、`src/mpm/solid/gpu/`）を同じ条件で。「同�
   変種 `full` と定常の節を `gpu.mjs` に足した。1/4 モデルの GPU の値は変更の前後で同じ帯（素 5833.1 N）。`fullThickness` を足したときに `uniformBase` が
   `full`・`gyOff` を渡し忘れて 1/4 モデルでも格子が 1 行ずれ、`gpu.mjs` の全項目が FAIL した（1 ステップで vy 0.85・荷重 0.93）。渡すと全 PASS
 
+## 別の機械で計算する（`src/app/remote.ts`・`tools/remote/`、`tools/checks/remote.mjs`）
+
+画面は Mac の Chrome、計算は winpc（Windows・NVIDIA の単体 GPU、Node 24.15.0、Dawn は npm `webgpu` 0.6.1）。
+SSH のトンネル越しに `?dim=3&W3=4&L3=12&cells3=4&autorun=1&at=winpc`（標準条件）を最後まで。2026-09-29。
+
+| 計算 | 全幅の荷重 [N] | Mac の node（`node tools/solid.mjs --W 4`、Node 24.14.1）との差 | 経過 |
+|---|---|---|---|
+| winpc の CPU（1 スレッド） | 11955.79244324636 | 1 ビット（11955.792443246358） | — |
+| winpc の CPU（`threads3=8`） | 11955.792443246359 | 1 ビット（和の順序） | 12 s |
+| winpc の GPU（`gpu3=1`） | 11954.794675688487 | −0.008 %（単精度） | 9 s |
+
+GPU のアダプタは node の Dawn で高性能を頼むと単体の GPU が取れる（ブラウザの Chrome の既定では同じ機械の内蔵 GPU になる）。
+2 次元・平面図・条件の比較のタブも winpc で最後まで回ることを画面で確かめた。
+
+`tools/checks/remote.mjs`（node だけ、ネットワークも GPU も使わない、約 3 s）: コーデックの往復（型付き配列・部分配列・ArrayBuffer・NaN・±Infinity・日本語）、
+板厚の中央の面（`surface.ts` の `mid`）が 1/4 モデル・板厚の全体の両方で y = 0 にあり上の面の頂点の真下、`tools/remote/host.mjs` で 3 次元のワーカーを 2 スレッドで
+1000 ステップ回した荷重がこの場の `Tandem3` と 1e-9。校正（木の写しで）: コーデックの NaN の語を外す・host.mjs の `crossOriginIsolated` を付けない・
+中央の面を上の行で作る、のそれぞれで FAIL。
+

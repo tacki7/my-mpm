@@ -71,6 +71,8 @@ export class SolidView {
   pivotOff: [number, number, number] = [0, 0, 0];
   /** show the far half only, cut open at the mid-width plane */
   cut = false;
+  /** show the lower half only, cut open at the mid-thickness plane (the mid face, surface.ts; the top roll left out) */
+  cutY = false;
   rolls = true;
   fit: 'bite' | 'strip' = 'bite';
   /** the thickness direction drawn this many times larger */
@@ -106,13 +108,14 @@ export class SolidView {
     this.canvas.height = Math.round(this.h * this.dpr);
   }
 
-  /** the look of another view: its angles, zoom, pivot, cut, rolls, fit, y scale and field, and its pan scaled to this size */
+  /** the look of another view: its angles, zoom, pivot, cuts, rolls, fit, y scale and field, and its pan scaled to this size */
   sameLook(v: SolidView): void {
     this.yaw = v.yaw;
     this.pitch = v.pitch;
     this.zoom = v.zoom;
     this.pivotOff = [...v.pivotOff];
     this.cut = v.cut;
+    this.cutY = v.cutY;
     this.rolls = v.rolls;
     this.fit = v.fit;
     this.yScale = v.yScale;
@@ -238,6 +241,8 @@ export class SolidView {
     let lo = Infinity;
     let hi = -Infinity;
     for (const face of f.faces) {
+      // the mid-thickness plane is inside the strip: its values count only while it is on show
+      if (face.name === 'mid' && !this.cutY) continue;
       const val = faceValues(face, this.field);
       for (let v = 0; v < val.length; v++) {
         if (Number.isNaN(face.pos[3 * v]) || face.failed[v]) continue;
@@ -267,7 +272,8 @@ export class SolidView {
     if (this.frame) this.drawStrip(project, this.frame);
     this.drawMarks(project);
     if (this.frame) this.drawTracks(project, this.frame);
-    if (this.rolls) this.drawRoll(project, 1);
+    // cut open at the mid-thickness: the top roll would hide the plane
+    if (this.rolls && !this.cutY) this.drawRoll(project, 1);
     this.drawTriad();
   }
 
@@ -282,6 +288,8 @@ export class SolidView {
     const colour = (v: number): Rgb => (info.scale === 'diverging' ? split(0.5 + (0.5 * v) / m) : temper((v - lo) / span));
 
     // the faces the viewer sees: the outward normal (in the strip's frame) turned to the view must face the viewer
+    // cut open at the mid-thickness, nothing is drawn above it: the whole model's side faces flattened onto the plane there
+    const clipY = this.clipY();
     const tmp = new Float64Array(3);
     const zero = new Float64Array(3);
     project(0, 0, 0, zero);
@@ -295,9 +303,13 @@ export class SolidView {
     const zSides = this.cut ? [-1] : [1, -1];
     // the whole thickness solved: the bottom face is its own, nothing is mirrored across y
     const full = this.geometry?.fullThickness === true;
-    const ySides = full ? [1] : [1, -1];
+    // cut open at the mid-thickness: the lower half (the quarter's mirror image, or the whole model's below y = 0,
+    // its side faces clipped at the plane), and the plane itself facing up
+    const ySides = full ? [1] : this.cutY ? [-1] : [1, -1];
     for (const sz of zSides) {
-      if (facing(0, 1, 0)) shown.push([byName('top'), 1, sz, 1]);
+      if (this.cutY) {
+        if (facing(0, 1, 0)) shown.push([byName('mid'), 1, sz, 1]);
+      } else if (facing(0, 1, 0)) shown.push([byName('top'), 1, sz, 1]);
       if (facing(0, -1, 0)) shown.push([full ? byName('bottom') : byName('top'), full ? 1 : -1, sz, 0.8]);
       for (const sy of ySides) {
         if (facing(0, 0, sz)) shown.push([byName('edge'), sy, sz, 0.9]);
@@ -326,7 +338,7 @@ export class SolidView {
           sx2[v] = NaN;
           continue;
         }
-        project(pos[3 * v], sy * pos[3 * v + 1], sz * pos[3 * v + 2], pr);
+        project(pos[3 * v], clipY(sy * pos[3 * v + 1]), sz * pos[3 * v + 2], pr);
         sx2[v] = pr[0];
         sy2[v] = pr[1];
         sd[v] = pr[2];
@@ -387,8 +399,14 @@ export class SolidView {
     for (const [face, sy, sz] of shown) this.outline(project, face, sy, sz);
   }
 
+  /** y as drawn: cut open at the mid-thickness, nothing above the plane */
+  private clipY(): (y: number) => number {
+    return this.cutY ? (y) => (y > 0 ? 0 : y) : (y) => y;
+  }
+
   private outline(project: (x: number, y: number, z: number, out: Float64Array) => void, face: Face, sy: number, sz: number): void {
     const ctx = this.ctx;
+    const clipY = this.clipY();
     const { rows, cols, pos } = face;
     const pr = new Float64Array(3);
     const line = (index: (k: number) => number, count: number) => {
@@ -403,7 +421,7 @@ export class SolidView {
         if (Math.abs(pos[3 * v + 2]) > 1e-12) onZ = false;
       }
       // drawn dotted: where the solved quarter meets its mirror image (across y only when the top half is what is solved)
-      const seam = (onY && this.geometry?.fullThickness !== true) || (onZ && !this.cut);
+      const seam = (onY && this.geometry?.fullThickness !== true && !this.cutY) || (onZ && !this.cut);
       ctx.setLineDash(seam ? [2, 3] : []);
       let pen = false;
       ctx.beginPath();
@@ -413,7 +431,7 @@ export class SolidView {
           pen = false;
           continue;
         }
-        project(pos[3 * v], sy * pos[3 * v + 1], sz * pos[3 * v + 2], pr);
+        project(pos[3 * v], clipY(sy * pos[3 * v + 1]), sz * pos[3 * v + 2], pr);
         if (pen) ctx.lineTo(pr[0], pr[1]);
         else ctx.moveTo(pr[0], pr[1]);
         pen = true;

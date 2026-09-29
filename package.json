@@ -10,7 +10,8 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview --port 4173",
     "check": "node tools/check.mjs",
-    "sim": "node tools/run.mjs"
+    "sim": "node tools/run.mjs",
+    "remote": "bash tools/remote/start.sh"
   },
   "devDependencies": {
     "@webgpu/types": "^0.1.74",

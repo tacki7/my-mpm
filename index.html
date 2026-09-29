@@ -16,6 +16,8 @@
   </head>
   <body>
     <header class="masthead">
+      <!-- where the workers compute and how busy each machine is: CPU, GPU, memory (src/app/machineStats.ts, remote.ts) -->
+      <div class="machines" id="machines" aria-label="計算する機械"></div>
       <div class="title">
         <h1>冷間圧延 MPM ラボ</h1>
         <p>薄板がロールを抜けるまでの応力状態と、亀裂が生まれる場所を粒子法で追う</p>
@@ -109,19 +111,19 @@
             <canvas id="solid-chart-force"></canvas>
           </figure>
           <figure>
-            <figcaption>板幅方向の荷重の分布（定常）</figcaption>
+            <figcaption>板幅方向の荷重の分布（定常）<span class="fig-when"></span></figcaption>
             <canvas id="solid-chart-width"></canvas>
           </figure>
           <figure>
-            <figcaption>板クラウン（板厚 − 端の板厚。入側・出側、定常。3 列で均す）</figcaption>
+            <figcaption>板クラウン（板厚 − 端の板厚。入側・出側、定常。3 列で均す）<span class="fig-when"></span></figcaption>
             <canvas id="solid-chart-crown"></canvas>
           </figure>
           <figure>
-            <figcaption>平坦度（出側、定常、3 列で均す。+ は伸び）</figcaption>
+            <figcaption>平坦度（出側、定常、3 列で均す。+ は伸び）<span class="fig-when"></span></figcaption>
             <canvas id="solid-chart-flat"></canvas>
           </figure>
           <figure>
-            <figcaption>接触圧力（上から見たバイト）<span class="fig-range" id="solid-map-range"></span></figcaption>
+            <figcaption>接触圧力（上から見たバイト）<span class="fig-range" id="solid-map-range"></span><span class="fig-when"></span></figcaption>
             <canvas id="solid-chart-map"></canvas>
           </figure>
           <figure class="locus" id="solid-locus">

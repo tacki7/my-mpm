@@ -16,11 +16,12 @@ import { checkRange } from './fieldCheck.ts';
 import { uiFont } from './font.ts';
 import { say } from './liveText.ts';
 import type { FromSweepWorker, ToSweepWorker } from './sweep.worker.ts';
+import { COMPUTE_CORES, remote, remoteWorker } from './remote.ts';
 
 const INK = '#1d2a3a';
 const STEEL = '#8a949c';
 const mm = 1e-3;
-const CORES = Math.max(1, (typeof navigator !== 'undefined' && navigator.hardwareConcurrency) || 4);
+const CORES = COMPUTE_CORES;
 /**
  * The conditions are rolled one after another, each on this many threads by default (the 3D tab's multi-threaded
  * step): four, the most that still pays on a machine of performance and efficiency cores (docs/validation.md「CPU の
@@ -459,7 +460,7 @@ export class SweepMode {
   }
 
   private startWorker(): { w: Worker; index: number | null } {
-    const w = new Worker(new URL('./sweep.worker.ts', import.meta.url), { type: 'module' });
+    const w = remote.place === 'winpc' ? remoteWorker('sweep.worker.ts') : new Worker(new URL('./sweep.worker.ts', import.meta.url), { type: 'module' });
     const slot = { w, index: null as number | null };
     w.onmessage = (e: MessageEvent<FromSweepWorker>) => this.onMessage(slot, e.data);
     w.onerror = (e) => {
