@@ -15,7 +15,7 @@ export type SweepKey = 'h0' | 'width' | 'rollDiameter' | 'mu';
 /** the quantities a sweep can vary: how they are shown (unit, the factor from SI) and the range an input may take */
 export const SWEEP_KEYS: readonly { key: SweepKey; label: string; unit: string; scale: number; min: number; max: number; step: number }[] = [
   { key: 'h0', label: '板厚（母板）', unit: 'mm', scale: 1e3, min: 0.2, max: 5, step: 0.05 },
-  { key: 'width', label: '板幅', unit: 'mm', scale: 1e3, min: 1, max: 200, step: 0.5 },
+  { key: 'width', label: '板幅', unit: 'mm', scale: 1e3, min: 1, max: 2000, step: 0.5 },
   { key: 'rollDiameter', label: 'ロール径', unit: 'mm', scale: 1e3, min: 20, max: 1500, step: 5 },
   { key: 'mu', label: '摩擦係数', unit: '', scale: 1, min: 0, max: 0.5, step: 0.01 },
 ];
