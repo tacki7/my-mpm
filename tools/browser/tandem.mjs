@@ -242,6 +242,8 @@ try {
   ok(['#1', '#2', '#3'].every((s) => legend.includes(s)), 'the loading-path legend names the stands', legend.slice(0, 80));
 
   // ── picking a stand to read: its number is a button (mouse and keyboard), the right column and the hill follow it
+  // the table's data-value is String(force × 1e-6), so × 1e6 gives the stand's result back to an ulp or so, not bit for bit
+  const sameForce = (shown, result) => Math.abs(+shown * 1e6 - result) <= 1e-9 * Math.abs(result);
   const readings = () =>
     c.evaluate(`({ clock: document.getElementById('clock').textContent, force: document.querySelector('#results tr[data-key="force"]')?.dataset.value,
       hillShown: (document.getElementById('legend-hill').textContent.match(/スラブ法 p（#(\\d)）/) ?? [])[1],
@@ -256,7 +258,7 @@ try {
   const first = await readings();
   const standForce = await c.evaluate('__mpm.standResults.map((r) => r.steadyForce)');
   ok(
-    +first.force * 1e6 === standForce[0] && first.hillShown === '1' && first.clock.includes('スタンド 1 / 3') && first.pressed.join() === 'true,false,false' && first.shownCol[0].includes('shown'),
+    sameForce(first.force, standForce[0]) && first.hillShown === '1' && first.clock.includes('スタンド 1 / 3') && first.pressed.join() === 'true,false,false' && first.shownCol[0].includes('shown'),
     "a finished stand's number shows that stand: its steady load, its friction hill, the clock and the table's column",
     `load ${(+first.force).toFixed(3)} kN/mm (result ${(standForce[0] * 1e-6).toFixed(3)}), hill #${first.hillShown}, ${first.clock.slice(-20)}`,
   );
@@ -273,7 +275,7 @@ try {
   await c.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 });
   await painted();
   const second = await readings();
-  ok(+second.force * 1e6 === standForce[1] && second.hillShown === '2' && second.pressed.join() === 'false,true,false', 'Enter on a number picks that stand too', `load ${(+second.force).toFixed(3)} kN/mm (result ${(standForce[1] * 1e-6).toFixed(3)}), hill #${second.hillShown}`);
+  ok(sameForce(second.force, standForce[1]) && second.hillShown === '2' && second.pressed.join() === 'false,true,false', 'Enter on a number picks that stand too', `load ${(+second.force).toFixed(3)} kN/mm (result ${(standForce[1] * 1e-6).toFixed(3)}), hill #${second.hillShown}`);
   // pressing the running (here the last) stand's number goes back to following it
   await click('.stand-slot[data-stand="3"] .stand-label');
   await painted();
@@ -394,10 +396,16 @@ try {
   const sectionField = await c.evaluate(`document.querySelector('input[name="stands"]').closest('.field').getBoundingClientRect().height`);
   ok(planField === 0 && sectionField > 0, 'the stands field shows in the section view only', `plan ${planField} px, section ${sectionField} px`);
 
-  // ── the moment a stand ends (2 stands, 4 cells, a 4 mm strip; stand 1 ends at step 9142): the roll bite does not
-  //    draw the old sheet in the new stand's rolls, and a point clicked on the old stand's picture just as the worker
-  //    moves on is followed to its child, not read as the new stand's point of the same number. "続ける" from step
-  //    9130, then at once a click on a point half-way along the rolled sheet (zoomed out to see it all)
+  // ── the moment a stand ends (2 stands, 4 cells, a 4 mm strip): the roll bite does not draw the old sheet in the new
+  //    stand's rolls, and a point clicked on the old stand's picture just as the worker moves on is followed to its
+  //    child, not read as the new stand's point of the same number. "続ける" from 12 steps before stand 1's end (read
+  //    from a run first: the end moves with the handoff rule), then at once a click on a point half-way along the
+  //    rolled sheet (zoomed out to see it all)
+  await c.navigate(page('?stands=2&cells=4&L=4&autorun=1'));
+  await c.waitFor('__mpm.standResults.length >= 1', 120000);
+  const endOfFirst = await c.evaluate('__mpm.standResults[0].steps');
+  const stopAt = endOfFirst - 12;
+  ok(Number.isInteger(endOfFirst) && endOfFirst > 1000, "stand 1's step count is read from a run", `${endOfFirst} steps`);
   await c.send('Page.addScriptToEvaluateOnNewDocument', { source: `
     window.__switchLog = [];
     const W = window.Worker;
@@ -405,7 +413,7 @@ try {
       set onmessage(fn) { super.onmessage = (e) => { fn(e); const m = e.data; if (m.type === 'stand' && m.next && !m.refresh) window.__switchLog.push(window.__mpm.drawn); }; }
       get onmessage() { return super.onmessage; }
     };` });
-  await c.navigate(page('?stands=2&cells=4&L=4&autorun=1&stopafter=9130'));
+  await c.navigate(page(`?stands=2&cells=4&L=4&autorun=1&stopafter=${stopAt}`));
   await c.waitFor('__mpm.done', 120000);
   await painted();
   const mid = await c.evaluate(`(() => { const b = document.getElementById('bite').getBoundingClientRect(); return { x: b.x + b.width / 2, y: b.y + b.height / 2 }; })()`);
@@ -434,7 +442,7 @@ try {
   ok(switched.log.length === 1 && switched.log[0].frameStand === null && switched.log[0].geometryStand === 1,
     "at the stand's end the roll bite draws no sheet in the new rolls until the new stand's first frame", JSON.stringify(switched.log));
   const relNow = switched.sel ? switched.sel.state.sheetX / switched.L : NaN;
-  ok(!!along && along.stand === 0 && along.step === 9130 && Math.abs(relNow - along.rel) < 0.05,
+  ok(!!along && along.stand === 0 && along.step === stopAt && Math.abs(relNow - along.rel) < 0.05,
     "a point clicked on stand 1's picture as the worker moves on is followed to its child in stand 2",
     along ? `clicked point ${along.id} at ${along.rel.toFixed(3)} of the sheet from the head; selected in stand 2: point ${switched.sel?.id} at ${relNow.toFixed(3)}` : 'no point to click');
 
