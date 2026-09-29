@@ -153,4 +153,18 @@ ok(fine.numerics.cellsThrough === 80, 'the largest the URL keys allow at the def
 }
 const noBite = applyQuery(base, new URLSearchParams({ cond: enc({ rolling: { h0: 0.05, reduction: 0.7, rollRadius: 0.005 } }) }));
 ok(same(noBite.rolling, cloneParams(base).rolling), 'h0, r and R that cannot bite are ignored together, as with the readable keys');
+// keys of Object.prototype: MATERIALS.constructor is a function, not a material (it made the material {}: every
+// constant undefined); a cond whose top-level key is toString or valueOf is no rule (RULES.toString is a function:
+// allowed() threw on it, and whether the leaves after it got in depended on the key order)
+for (const mat of ['constructor', 'toString', 'valueOf', '__proto__']) {
+  const m = applyQuery(base, new URLSearchParams({ mat }));
+  ok(same(m, base), `?mat=${mat} leaves the preset's material`, same(m, base) ? '' : JSON.stringify(m.material));
+}
+{
+  const proto = applyQuery(base, new URLSearchParams({ cond: enc({ toString: 1, valueOf: { rolling: { mu: 0.5 } }, rolling: { mu: 0.2 } }) }));
+  const want = cloneParams(base);
+  want.rolling.mu = 0.2;
+  ok(same(proto, want), 'a cond with the keys toString and valueOf: they are ignored, the leaves after them are taken', same(proto, want) ? '' : JSON.stringify(proto.rolling));
+  ok(typeof {}.toString === 'function' && typeof {}.valueOf === 'function', 'and Object.prototype is as it was');
+}
 done();

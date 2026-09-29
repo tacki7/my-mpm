@@ -33,6 +33,8 @@ let threads = 1;
 let threadsNote: string | null = null;
 /** an init that came while the GPU was being asked for is the one to keep */
 let initSeq = 0;
+/** the init whose ready went out: a 'run' before it (the Sim3 still attaching to its team or device) is not taken */
+let readySeq = -1;
 
 // a frame of the faces is light, but a step is heavy (tens of ms on a fine grid): a frame at least every FRAME_MS
 const FRAME_MS = 80;
@@ -161,6 +163,44 @@ function chunkOf(T: Tandem3, most: number): number {
   return chunk;
 }
 
+/**
+ * The longest the CPU's loops compute before coming back to their messages: a pause or an init waits no longer
+ * than this however long the interval between frames (5 s at the slowest setting). A frame is still everything
+ * computed since the one before: the slices of a frame add up to the interval.
+ */
+const SLICE_MS = 100;
+/** when the last frame went out, and the computing time and steps since (the frame's ms per step) */
+let frameAt = 0;
+let sliceMs = 0;
+let sliceSteps = 0;
+function startFrame(): void {
+  frameAt = performance.now();
+  sliceMs = 0;
+  sliceSteps = 0;
+}
+/** the end of a slice of computing that began at t0: the frame at its moment (frameMs after the last) or when the run stops, then the next slice */
+function afterSlice(t0: number, steps: number, reached: boolean): void {
+  const now = performance.now();
+  sliceMs += now - t0;
+  sliceSteps += steps;
+  if (reached) stopAfter = null;
+  if (finished || reached) running = false;
+  if (!running || now >= frameAt + frameMs) {
+    if (sliceSteps) msPerStep = sliceMs / sliceSteps;
+    frame();
+    startFrame();
+  }
+  if (running) timer = setTimeout(loop, 0);
+}
+/** the moment this slice ends: SLICE_MS on, or the frame's moment if that is sooner */
+const sliceEnd = (t0: number) => Math.min(t0 + SLICE_MS, frameAt + frameMs);
+
+/** a step that threw ends the pass: the run stops (a later 'run' would step a broken Sim3), the page is told */
+function failed(err: unknown): void {
+  running = false;
+  post({ type: 'error', message: String((err as Error)?.message ?? err) });
+}
+
 function loop(): void {
   timer = null;
   if (!tandem || !running) return;
@@ -174,30 +214,32 @@ function loop(): void {
   }
   const T = tandem;
   const t0 = performance.now();
+  const until = sliceEnd(t0);
   let steps = 0;
   let reached = false;
-  while (performance.now() - t0 < frameMs && !finished) {
-    const chunk = chunkOf(T, 5);
-    for (let k = 0; k < chunk; k++) {
-      const stand = T.stand;
-      const t = T.tOffset + T.sim.t + T.sim.dt;
-      const l = T.advance();
-      // a look ends the chunk (chunks stop at the looks), and it may have ended the stand
-      if (l) afterLook(T, stand, t, l);
-    }
-    // the paths, every chunk (at most 5 steps: the section model's tracker reads every 20)
-    tracker?.record();
-    steps += Math.max(0, chunk);
-    if (stopAfter !== null && T.stepOffset + T.sim.step >= stopAfter) {
-      reached = true;
-      break;
-    }
+  try {
+    do {
+      const chunk = chunkOf(T, 5);
+      for (let k = 0; k < chunk; k++) {
+        const stand = T.stand;
+        const t = T.tOffset + T.sim.t + T.sim.dt;
+        const l = T.advance();
+        // a look ends the chunk (chunks stop at the looks), and it may have ended the stand
+        if (l) afterLook(T, stand, t, l);
+      }
+      // the paths, every chunk (at most 5 steps: the section model's tracker reads every 20)
+      tracker?.record();
+      steps += Math.max(0, chunk);
+      if (stopAfter !== null && T.stepOffset + T.sim.step >= stopAfter) {
+        reached = true;
+        break;
+      }
+    } while (performance.now() < until && !finished);
+  } catch (err) {
+    failed(err);
+    return;
   }
-  if (steps) msPerStep = (performance.now() - t0) / steps;
-  if (reached) stopAfter = null;
-  if (finished || reached) running = false;
-  frame();
-  if (running) timer = setTimeout(loop, 0);
+  afterSlice(t0, steps, reached);
 }
 
 /**
@@ -231,15 +273,13 @@ async function loopGpu(): Promise<void> {
       if (chunk <= 0) break;
     }
   } catch (err) {
-    running = false;
-    post({ type: 'error', message: String((err as Error)?.message ?? err) });
+    // an init in the middle of a batch destroys its buffers: that is not an error of the run it started
+    if (seq !== initSeq) return;
+    failed(err);
     return;
   }
-  if (steps) msPerStep = (performance.now() - t0) / steps;
-  if (reached) stopAfter = null;
-  if (finished || reached) running = false;
-  frame();
-  if (running) timer = setTimeout(loop, 0);
+  if (seq !== initSeq) return;
+  afterSlice(t0, steps, reached);
 }
 
 /**
@@ -250,10 +290,13 @@ async function loopTeam(): Promise<void> {
   const T = tandem!;
   const seq = initSeq;
   const t0 = performance.now();
+  // a step of the team is a promise settled at once (its wait is Atomics.wait): the loop yields to its messages
+  // only between slices, as the CPU's loop does
+  const until = sliceEnd(t0);
   let steps = 0;
   let reached = false;
   try {
-    while (performance.now() - t0 < frameMs && !finished && running && seq === initSeq) {
+    while (performance.now() < until && !finished && running && seq === initSeq) {
       const chunk = chunkOf(T, 5);
       for (let k = 0; k < chunk; k++) {
         const stand = T.stand;
@@ -270,17 +313,14 @@ async function loopTeam(): Promise<void> {
       }
     }
   } catch (err) {
-    running = false;
+    if (seq !== initSeq) return;
     team?.close();
     team = null;
-    post({ type: 'error', message: String((err as Error)?.message ?? err) });
+    failed(err);
     return;
   }
-  if (steps) msPerStep = (performance.now() - t0) / steps;
-  if (reached) stopAfter = null;
-  if (finished || reached) running = false;
-  frame();
-  if (running) timer = setTimeout(loop, 0);
+  if (seq !== initSeq) return;
+  afterSlice(t0, steps, reached);
 }
 
 /** a helper worker of the team behind the port Team wants */
@@ -327,8 +367,24 @@ function makeTandem(m: ToSolidWorker & { type: 'init' }): Tandem3 {
   return T;
 }
 
-/** the device for the step where it is asked for and there (once per worker; kept across inits), then the ready */
+/**
+ * The device for the step where it is asked for and there (once per worker; kept across inits), then the ready.
+ * Whatever throws on the way (the grid and points too big to allocate, the slab method on the conditions, the
+ * team or the device) is the init's error: the page is told, and there is no run to start until the next init.
+ */
 async function setCompute(m: ToSolidWorker & { type: 'init' }, seq: number): Promise<void> {
+  try {
+    await attachCompute(m, seq);
+  } catch (err) {
+    if (seq !== initSeq) return;
+    tandem = null;
+    tracker = null;
+    running = false;
+    post({ type: 'error', message: String((err as Error)?.message ?? err) });
+  }
+}
+
+async function attachCompute(m: ToSolidWorker & { type: 'init' }, seq: number): Promise<void> {
   const want = m.compute;
   let T = makeTandem(m);
   compute = 'cpu';
@@ -377,6 +433,7 @@ async function setCompute(m: ToSolidWorker & { type: 'init' }, seq: number): Pro
       gpuNote = `GPU が使えないので CPU で計算する（${String((err as Error)?.message ?? err)}）`;
     }
   }
+  readySeq = seq;
   ready(T);
   frame();
 }
@@ -404,8 +461,9 @@ self.onmessage = (e: MessageEvent<ToSolidWorker>) => {
         break;
       }
       case 'run':
-        if (tandem && !running && !finished) {
+        if (tandem && !running && !finished && readySeq === initSeq) {
           running = true;
+          startFrame();
           loop();
         }
         break;

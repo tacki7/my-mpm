@@ -46,6 +46,9 @@ export class Tape<T> {
     this.kept.push(f);
     this.bytes += this.size(f);
     while (this.kept.length > 1 && (this.kept.length > this.maxFrames || this.bytes > this.maxBytes)) this.thin();
+    // thinned at an even count (the bytes limit, or an odd maxFrames): the frame just pushed went with the odd ones,
+    // but it is still the end of the tape (shown, as any frame not kept, until the next kept one)
+    if (this.kept[this.kept.length - 1] !== f) this.latest = f;
   }
 
   /** A newer version of the last frame (the same step, sent again on a pause or at the end) takes its place. */

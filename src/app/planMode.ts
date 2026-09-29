@@ -3,16 +3,16 @@
 // plan keys. The section model's page is left as it is; main.ts only routes the shared buttons here
 // while the plan view is shown.
 import { cloneParams, type SimParams } from '../mpm/params.ts';
-import type { PlanSettings } from '../mpm/planview/condition.ts';
+import { PLAN_DEFAULTS, type PlanSettings } from '../mpm/planview/condition.ts';
 import type { PlanPhase } from '../mpm/planview/sim.ts';
 import { steadyGap, steadyLength } from '../mpm/planview/steady.ts';
 import { css, split, temper } from './colormap.ts';
 import { checkRange } from './fieldCheck.ts';
 import { edited, showNumber } from './numberInput.ts';
 import type { FromPlanWorker, PlanFieldName, PlanFrame, PlanGeometry, ToPlanWorker } from './planProtocol.ts';
-import { PLAN_SETTINGS, checkedSettings, maxEdgeWidth, maxNotch, planSettingsOf, planSettingsQuery } from './planQuery.ts';
+import { PLAN_SETTINGS, checkedSettings, maxEdgeWidth, maxNotch, planPoints, planSettingsAsked, planSettingsQuery, tooManyPoints } from './planQuery.ts';
 import { PLAN_FIELDS, PlanView, planFieldInfo } from './planView.ts';
-import { conditionsQuery } from './query.ts';
+import { MAX_POINTS, conditionsQuery } from './query.ts';
 import { radioGroup } from './radioGroup.ts';
 import { say } from './liveText.ts';
 import { frameMs } from './frameRate.ts';
@@ -73,12 +73,14 @@ export class PlanMode {
   private readonly checks: (() => void)[] = [];
   private readonly switchButtons: HTMLButtonElement[] = [];
   private shownSettings: PlanSettings | null = null;
+  /** under the cells: why the width and cells asked for (the URL's or the panel's) are not the ones that run */
+  private readonly settingsWhy = el('span', 'why');
 
   constructor(o: PlanModeOptions, stopAfter: number | null) {
     this.o = o;
     this.stopAfter = stopAfter;
     const p0 = o.conditions();
-    this.settings = planSettingsOf(o.query, p0.rolling.sheetLength, p0.numerics.ppc);
+    this.settings = this.takeSettings(planSettingsAsked(o.query), p0);
     this.field = (PLAN_FIELDS.find((f) => f.id === o.query.get('pfield'))?.id ?? 'sxx') as PlanFieldName;
     this.view = new PlanView(this.$<HTMLCanvasElement>('plan-canvas'));
     this.buildSwitch();
@@ -158,6 +160,7 @@ export class PlanMode {
         return [f.min, Math.min(f.max, f.key === 'notch' ? maxNotch(width) : maxEdgeWidth(width))];
       };
       this.checks.push(checkRange(inp, row, range, f.unit));
+      if (f.key === 'cells') row.append(this.settingsWhy);
       (f.group === 'edge' ? edge : fs).append(row);
       this.inputs.set(f.key, inp);
     }
@@ -177,8 +180,8 @@ export class PlanMode {
     for (const c of this.checks) c();
   }
 
-  /** the panel's width settings (clamped, then checked together for this condition); an input not edited keeps the value it showed */
-  private readSettings(params: SimParams): PlanSettings {
+  /** the panel's width settings (clamped, not yet checked together); an input not edited keeps the value it showed */
+  private askedSettings(): PlanSettings {
     const s = { ...(this.shownSettings ?? this.settings) };
     for (const f of PLAN_SETTINGS) {
       const inp = this.inputs.get(f.key)!;
@@ -188,7 +191,22 @@ export class PlanMode {
       const c = Math.min(f.max, Math.max(f.min, v));
       s[f.key] = f.int ? Math.round(c) : c * f.scale;
     }
-    return checkedSettings(s, params.rolling.sheetLength, params.numerics.ppc);
+    return s;
+  }
+
+  /**
+   * The settings that run, from the ones asked for: checked together for this condition (planQuery.ts), and when
+   * that put the width and cells back to the defaults, the reason under the cells (otherwise the fields would just
+   * show the defaults, as if that had been asked for).
+   */
+  private takeSettings(asked: PlanSettings, params: SimParams): PlanSettings {
+    const L = params.rolling.sheetLength;
+    const ppc = params.numerics.ppc;
+    const fmt = (v: number) => String(+v.toPrecision(4));
+    this.settingsWhy.textContent = tooManyPoints(asked, L, ppc)
+      ? `板幅 ${fmt(asked.width / mm)} mm・${asked.cells} セル・板の長さ ${fmt(L / mm)} mm では点が ${fmt(MAX_POINTS / 1e4)} 万を超える（約 ${fmt(planPoints(asked, L, ppc) / 1e4)} 万点）ので、板幅とセル数は既定の ${fmt(PLAN_DEFAULTS.width / mm)} mm・${PLAN_DEFAULTS.cells} セルに戻した`
+      : '';
+    return checkedSettings(asked, L, ppc);
   }
 
   /** the one view control the plan picture has: frame the bite (the default) or the whole strip */
@@ -312,7 +330,7 @@ export class PlanMode {
    */
   restart(params: SimParams, readPanel = true): void {
     if (!this.worker) this.startWorker();
-    this.settings = checkedSettings(readPanel ? this.readSettings(params) : this.settings, params.rolling.sheetLength, params.numerics.ppc);
+    this.settings = this.takeSettings(readPanel ? this.askedSettings() : this.settings, params);
     this.showSettings(this.settings);
     this.params = cloneParams(params);
     this.eta.reset();
@@ -333,7 +351,7 @@ export class PlanMode {
    */
   applyConditions(params: SimParams): void {
     if (this.started) return this.restart(params);
-    this.settings = this.readSettings(params);
+    this.settings = this.takeSettings(this.askedSettings(), params);
     this.showSettings(this.settings);
   }
 

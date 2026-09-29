@@ -60,8 +60,13 @@ export function checkedSettings(s: PlanSettings, sheetLength: number, ppc: numbe
   return out;
 }
 
-/** The width settings a URL asks for (out-of-range or malformed values are ignored), checked together. */
-export function planSettingsOf(q: URLSearchParams, sheetLength: number, ppc: number): PlanSettings {
+/** Whether these settings make too many points together (checkedSettings then puts the width and cells back). */
+export function tooManyPoints(s: PlanSettings, sheetLength: number, ppc: number): boolean {
+  return planPoints(s, sheetLength, ppc) > MAX_POINTS;
+}
+
+/** The width settings a URL asks for (out-of-range or malformed values are ignored), not yet checked together. */
+export function planSettingsAsked(q: URLSearchParams): PlanSettings {
   const s: PlanSettings = { ...PLAN_DEFAULTS };
   for (const f of PLAN_SETTINGS) {
     const raw = q.get(f.query);
@@ -70,7 +75,12 @@ export function planSettingsOf(q: URLSearchParams, sheetLength: number, ppc: num
     if (!Number.isFinite(v) || v < f.min || v > f.max) continue;
     s[f.key] = f.int ? Math.round(v) : v * f.scale;
   }
-  return checkedSettings(s, sheetLength, ppc);
+  return s;
+}
+
+/** The width settings a URL asks for (out-of-range or malformed values are ignored), checked together. */
+export function planSettingsOf(q: URLSearchParams, sheetLength: number, ppc: number): PlanSettings {
+  return checkedSettings(planSettingsAsked(q), sheetLength, ppc);
 }
 
 /**

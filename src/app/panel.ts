@@ -1,6 +1,6 @@
 // The conditions panel: numeric inputs bound to SimParams (shown in mm / MPa).
 // The fields the URL can also set take their ranges from it (query.ts LIMITS).
-import { MATERIALS, ROLL_E, hasBite, type SimParams } from '../mpm/params.ts';
+import { MATERIALS, ROLL_E, hasBite, type RollingParams, type SimParams } from '../mpm/params.ts';
 import { buildDefectEditor } from './defectEditor.ts';
 import { checkRange } from './fieldCheck.ts';
 import { buildMaterialEditor } from './materialEditor.ts';
@@ -301,6 +301,26 @@ export function buildPanel(root: HTMLElement, onEdit: () => void): Panel {
 
   let shownFrom: SimParams | null = null;
 
+  // The rolls must be able to bite: h0 × r < 2R (params.ts hasBite). Said under the roll radius as the ranges are
+  // said, while the three are typed; an apply then keeps the h0, r and R that ran (read()), as it clamps a value
+  // out of range, and the message says so beforehand.
+  const biteWhy = el('span', 'why');
+  biteWhy.setAttribute('aria-live', 'polite');
+  inputs.get('R')!.closest('.field')!.append(biteWhy);
+  const fmt = (v: number) => String(+v.toPrecision(4));
+  const checkBite = () => {
+    const v = (k: string) => parseFloat(inputs.get(k)!.value);
+    const h0 = v('h0');
+    const r = v('r');
+    const R = v('R');
+    const bad = [h0, r, R].every(Number.isFinite) && !hasBite({ h0: h0 * mm, reduction: r / 100, rollRadius: R * mm } as RollingParams);
+    const b = shownFrom?.rolling;
+    const was = b ? `（${fmt(b.h0 / mm)} mm・${fmt(b.reduction * 100)} %・${fmt(b.rollRadius / mm)} mm）` : '';
+    biteWhy.textContent = bad ? `この入側板厚・圧下率・ロール半径ではロールが噛めない（板厚 × 圧下率をロール径 2R より小さく）。このままだと前の値${was}で計算する` : '';
+  };
+  for (const k of ['h0', 'r', 'R']) inputs.get(k)!.addEventListener('input', checkBite);
+  checks.push(checkBite);
+
   return {
     show(p) {
       shownFrom = p;
@@ -356,7 +376,8 @@ export function buildPanel(root: HTMLElement, onEdit: () => void): Panel {
         }
       }
       if (!hasBite(p.rolling)) {
-        // the rolls could not bite with this h0, r and R: keep the ones that ran
+        // the rolls could not bite with this h0, r and R: keep the ones that ran (the panel said so as they were typed,
+        // checkBite; the solver takes any geometry, so one that cannot bite must not reach it)
         p.rolling.h0 = base.rolling.h0;
         p.rolling.reduction = base.rolling.reduction;
         p.rolling.rollRadius = base.rolling.rollRadius;

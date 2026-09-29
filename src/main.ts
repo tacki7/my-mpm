@@ -87,7 +87,11 @@ const explorer = new Explorer(
   (id) => send({ type: 'select', particle: id, stand: view.frame?.stand ?? 0 }),
   () => (dirty = true),
 );
-$('bite').addEventListener('click', (e) => explorer.select(view.pick(e.clientX, e.clientY)));
+// a double click (back to the default window: viewControls.ts) comes as two clicks first: they pick nothing
+$('bite').addEventListener('click', (e) => {
+  if (e.detail > 1) return;
+  explorer.select(view.pick(e.clientX, e.clientY));
+});
 attachKeyPick($<HTMLCanvasElement>('bite'), view, (id) => explorer.select(id));
 const chartSummary = new ChartSummary($('chart-force').parentElement!, $('chart-hill').parentElement!, $('locus'));
 // t is the whole pass's time (the stands one after the other), stand the stand of each point (0 first)
@@ -105,7 +109,8 @@ let awaitingReady = false; // frames of the run a restart replaced may still be 
 buildExport($('export'), {
   history,
   stands: () => runStands,
-  frame: () => last,
+  // the frame on show (a picked stand's, else the newest): its pressure profile and cracks, and the step in the names
+  frame: () => shownFrame(),
   params: () => params,
   presetId: () => presetId,
   preset: () => presetById(presetId)!.build(),
@@ -354,6 +359,7 @@ function restart() {
   $('crack-log').replaceChildren();
   explorer.reset();
   view.marks = [];
+  view.clearStamps(); // the same conditions give the same cracks (the same keys): their stamps are pressed again
   awaitingReady = true;
   send({ type: 'init', params: cloneParams(params), stands: runStands, field, stopAfter });
   updateButtons();

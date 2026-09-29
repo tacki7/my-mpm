@@ -839,6 +839,7 @@ export class SolidMode {
     this.frames = 0;
     this.awaitingReady = true;
     this.history = { t: [], force: [], stand: [] };
+    this.video?.abort(); // a video being written from the tape: the tape goes
     this.tape.clear();
     this.stopReplay();
     const crown = Math.max(-0.5 * P.rolling.h0, Math.min(0.5 * P.rolling.h0, this.settings.crown));
@@ -860,7 +861,10 @@ export class SolidMode {
   }
 
   run(): void {
-    if (!this.worker) return;
+    // no run while the worker is still setting the Sim3 up (the button is off then; __mpm.solid.run() is not)
+    if (!this.worker || this.awaitingReady) return;
+    // a video being written from the tape would go on from frames the run now replaces
+    this.video?.abort();
     this.stopReplay();
     this.running = true;
     this.send({ type: 'run' });
