@@ -164,6 +164,150 @@ button.pending {
   font-variant-numeric: tabular-nums;
 }
 
+/* the instrument line over the title (src/app/machineStats.ts): where the workers compute, and each machine's
+   CPU, GPU and memory as thin gauges. The masthead's padding is bled off so the line runs edge to edge on the sheet;
+   the machine that computes is in ink, the other in steel */
+.machines {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 26px;
+  margin: -18px -24px 0;
+  padding: 5px 24px;
+  background: var(--sheet);
+  border-bottom: 1px solid var(--rule);
+  font-size: var(--fs-xs);
+  line-height: 1.4;
+  color: var(--steel-ink);
+}
+
+.place {
+  display: flex;
+  align-items: center;
+  gap: 0;
+}
+
+.place-label {
+  margin-right: 8px;
+  color: var(--ink-soft);
+}
+
+.place button {
+  padding: 2px 11px;
+  font-size: var(--fs-xs);
+  border-radius: 0;
+  background: transparent;
+  color: var(--ink-soft);
+}
+
+.place button + button {
+  border-left: 0;
+}
+
+.place button:first-of-type {
+  border-radius: 3px 0 0 3px;
+}
+
+.place button:last-of-type {
+  border-radius: 0 3px 3px 0;
+}
+
+.place button[aria-checked='true'] {
+  background: var(--ink);
+  color: var(--sheet);
+  font-weight: 700;
+}
+
+.machine {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 14px;
+}
+
+.machine-name {
+  font-weight: 700;
+}
+
+/* the machine that computes: its name in ink with a filled mark before it, its gauges in ink */
+.machine.computing {
+  color: var(--ink);
+}
+
+.machine.computing .machine-name::before {
+  content: '';
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-right: 6px;
+  border-radius: 50%;
+  background: var(--ink);
+  vertical-align: 0.05em;
+}
+
+.machine.down .machine-name {
+  font-weight: 400;
+}
+
+.gauge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+}
+
+.gauge[hidden] {
+  display: none;
+}
+
+.gauge-bar {
+  position: relative;
+  width: 38px;
+  height: 4px;
+  background: var(--rule);
+  overflow: hidden;
+}
+
+.gauge-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 0;
+  background: var(--steel);
+  transition: width 0.4s ease-out;
+}
+
+.machine.computing .gauge-fill {
+  background: var(--ink);
+}
+
+/* nearly full: the straw of the temper colours under the bar, so a machine at its limit shows */
+.gauge.high .gauge-bar {
+  box-shadow: 0 2px 0 var(--temper-straw);
+}
+
+.gauge-value {
+  min-width: 3.2em;
+  font-variant-numeric: tabular-nums;
+}
+
+.place-note {
+  margin-left: auto;
+  color: var(--ink-soft);
+}
+
+.place-note.warn {
+  color: var(--ink);
+  padding-left: 8px;
+  border-left: 3px solid var(--temper-straw);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .gauge-fill {
+    transition: none;
+  }
+}
+
 /* ── layout ───────────────────────────────────────────────────────────── */
 .layout {
   display: grid;
@@ -1615,6 +1759,17 @@ body:not([data-dim='c']) .sweep-only {
   font-size: var(--fs-xs);
 }
 
+/* playing back (src/app/solidMode.ts drawWidthCharts): the graphs across the width show the steady means at the frame on show */
+.fig-when:not(:empty) {
+  margin-left: 8px;
+  padding: 0 6px;
+  border-radius: 2px;
+  background: var(--ink);
+  color: var(--sheet);
+  font-size: var(--fs-xs);
+  display: inline-block;
+}
+
 .conditions .field.check input {
   flex: none;
   width: auto;
@@ -1664,6 +1819,13 @@ body:not([data-dim='c']) .sweep-only {
   .masthead {
     grid-template-columns: 1fr;
     padding: 14px 16px;
+  }
+  .machines {
+    margin: -14px -16px 0;
+    padding: 5px 16px;
+  }
+  .place-note {
+    margin-left: 0;
   }
   .clock {
     text-align: left;
@@ -1782,6 +1944,11 @@ body:not([data-dim='c']) .sweep-only {
 [data-density='compact'] .masthead {
   padding: 8px 16px 6px;
   gap: 8px 16px;
+}
+
+[data-density='compact'] .machines {
+  margin: -8px -16px 0;
+  padding: 3px 16px;
 }
 
 [data-density='compact'] .title p {

@@ -73,12 +73,13 @@ try {
   await drag('.split-right', -60, 0);
   near((await box('.record')).w, r0 + 60, 0.02, 'dragging the right handle 60 px left widens the record by 60 px');
 
-  // the charts: drag the handle up 80 px, the charts grow and the bite shrinks
+  // the charts: drag the handle up 40 px, the charts grow and the bite shrinks (at 1600 × 1000 the bite is about
+// 415 px under the machines' line, and stops at 360: 80 px would run into that)
   const ch0 = (await box('#chart-force')).h;
   const bh0 = (await box('#bite')).h;
-  await drag('.split-charts', 0, -80);
-  near((await box('#chart-force')).h, ch0 + 80, 0.02, 'dragging the charts handle 80 px up makes the charts 80 px taller');
-  between((await box('#bite')).h, bh0 - 81, bh0 - 79, '... and the roll bite 80 px shorter');
+  await drag('.split-charts', 0, -40);
+  near((await box('#chart-force')).h, ch0 + 40, 0.02, 'dragging the charts handle 40 px up makes the charts 40 px taller');
+  between((await box('#bite')).h, bh0 - 41, bh0 - 39, '... and the roll bite 40 px shorter');
 
   // two charts trade width
   const f0 = await c.evaluate("Array.from(document.querySelectorAll('.charts > figure')).map((f) => f.getBoundingClientRect().width)");

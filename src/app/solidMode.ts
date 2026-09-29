@@ -23,6 +23,7 @@ import { stopPhrase } from './standTable.ts';
 import { Explorer, standColor } from './explorer.ts';
 import { SOLID_FIELDS, SolidView, solidFieldInfo, type ViewPreset } from './solidView.ts';
 import { Tape } from './tape.ts';
+import { COMPUTE_CORES, COMPUTE_GPU, COMPUTE_THREADS, REMOTE_NAME, gpuName, placeLabel, remote, remoteGpu, remoteWorker } from './remote.ts';
 import { recordVideo, videoSupported, type VideoResult } from './solidVideo.ts';
 import { download } from './export.ts';
 import { frameMs } from './frameRate.ts';
@@ -116,12 +117,12 @@ const FIELD = Object.fromEntries(NUMBERS.map((f) => [f.key, f])) as Record<Numbe
 
 const DEFAULTS: SolidPageSettings = { width: 8 * mm, length: 12 * mm, cells: 4, planeStrain: false, full: false, crown: 0, bend: false, barrel: 300 * mm, support: 'barrel', span: 400 * mm, compute: 'cpu', threads: 1 };
 
-/** the browser has WebGPU (the worker asks for the device; here only for the select) */
-export const HAS_WEBGPU = typeof navigator !== 'undefined' && !!(navigator as Navigator & { gpu?: unknown }).gpu;
-/** the most threads the CPU's step can use: the machine's logical cores (8 where the browser does not say) */
-export const MAX_THREADS = Math.max(1, (typeof navigator !== 'undefined' && navigator.hardwareConcurrency) || 8);
-/** the page can share memory between workers (SharedArrayBuffer needs the COOP / COEP headers vite.config.ts sets) */
-export const HAS_THREADS = typeof crossOriginIsolated !== 'undefined' && crossOriginIsolated === true && typeof SharedArrayBuffer !== 'undefined';
+/** the machine that computes has WebGPU (remote.ts; the worker asks for the device, here only for the select) */
+export const HAS_WEBGPU = COMPUTE_GPU;
+/** the most threads the CPU's step can use: the computing machine's logical cores (8 where the browser does not say) */
+export const MAX_THREADS = COMPUTE_CORES;
+/** the workers can share memory (in a page, SharedArrayBuffer needs the COOP / COEP headers vite.config.ts sets; a remote node always can) */
+export const HAS_THREADS = COMPUTE_THREADS;
 
 function checked(s: SolidPageSettings): SolidPageSettings {
   const clamp = (v: number, f: NumberField, lo = f.min * f.scale) => Math.min(f.max * f.scale, Math.max(lo, v));
@@ -413,7 +414,7 @@ export class SolidMode {
     this.computeSelect.disabled = !HAS_WEBGPU;
     this.computeSelect.addEventListener('change', () => this.o.onEdit());
     computeBox.append(this.computeSelect);
-    computeRow.append(computeBox, el('span', 'hint', HAS_WEBGPU ? 'GPU は 1 ステップを WebGPU で解く（単精度）。板幅 8 mm・4 セルで CPU の約 8 倍、狭い板では 3 倍ほど。結果は CPU と荷重で 0.1 % ほど違い、同じ条件でもビット一致はしない' : 'このブラウザには WebGPU が無いので CPU だけ'));
+    computeRow.append(computeBox, el('span', 'hint', HAS_WEBGPU ? `${remote.place === 'winpc' ? `GPU は ${REMOTE_NAME} の ${gpuName(remoteGpu()?.device ?? '')} で解く。` : ''}GPU は 1 ステップを WebGPU で解く（単精度）。板幅 8 mm・4 セルで CPU の約 8 倍、狭い板では 3 倍ほど。結果は CPU と荷重で 0.1 % ほど違い、同じ条件でもビット一致はしない` : 'このブラウザには WebGPU が無いので CPU だけ'));
     this.computeNote = el('p', 'hint compute-note');
     this.computeNote.hidden = true;
     const threadsRow = el('label', 'field');
@@ -427,7 +428,7 @@ export class SolidMode {
     this.threadsInput.step = '1';
     this.threadsInput.addEventListener('input', () => this.o.onEdit());
     threadsBox.append(this.threadsInput, el('span', 'unit', `/ ${MAX_THREADS}`));
-    threadsRow.append(threadsBox, el('span', 'hint', HAS_THREADS ? `1 ステップを何本のスレッドで解くか（この機械は ${MAX_THREADS}）。板を圧延方向に分けて並列に解き、結果は 1 本のときと同じ（和の順序の丸めだけ違う）。板幅 8 mm・4 セルで 4 本にすると 2〜2.5 倍速い。GPU のときは使わない` : 'このページは SharedArrayBuffer が使えない（cross-origin isolated でない）ので 1 本だけ'));
+    threadsRow.append(threadsBox, el('span', 'hint', HAS_THREADS ? `1 ステップを何本のスレッドで解くか（${placeLabel()}は ${MAX_THREADS}）。板を圧延方向に分けて並列に解き、結果は 1 本のときと同じ（和の順序の丸めだけ違う）。板幅 8 mm・4 セルで 4 本にすると 2〜2.5 倍速い。GPU のときは使わない` : 'このページは SharedArrayBuffer が使えない（cross-origin isolated でない）ので 1 本だけ'));
     this.threadsInput.disabled = !HAS_THREADS;
     this.computeSelect.addEventListener('change', () => this.lockThreads());
     fs.append(computeRow, this.computeNote, threadsRow);
@@ -480,7 +481,18 @@ export class SolidMode {
 
   /** what the worker got: the GPU's kind, or the reason it is on the CPU (nothing for a plain CPU run) */
   private showCompute(g: SolidGeometry): void {
-    const text = g.gpuNote ?? g.threadsNote ?? (g.compute === 'gpu' ? `GPU で計算する（${[g.gpu?.vendor, g.gpu?.architecture, g.gpu?.backend].filter(Boolean).join(' ') || 'WebGPU'}）` : g.threads > 1 ? `CPU の ${g.threads} スレッドで計算する` : '');
+    // on another machine (remote.ts), its name first
+    const at = remote.place === 'winpc' ? `${REMOTE_NAME} の` : '';
+    const text =
+      g.gpuNote ??
+      g.threadsNote ??
+      (g.compute === 'gpu'
+        ? `${at}GPU で計算する（${g.gpu?.device ? gpuName(g.gpu.device) : [g.gpu?.vendor, g.gpu?.architecture, g.gpu?.backend].filter(Boolean).join(' ') || 'WebGPU'}）`
+        : g.threads > 1
+          ? `${at}CPU の ${g.threads} スレッドで計算する`
+          : at
+            ? `${at}CPU の 1 スレッドで計算する`
+            : '');
     this.computeNote.textContent = text;
     this.computeNote.hidden = !text;
     this.computeNote.classList.toggle('warn', !!(g.gpuNote ?? g.threadsNote));
@@ -578,6 +590,8 @@ export class SolidMode {
     };
     const cut = toggle('板幅の中央で切る', '手前の半分を外して、板幅の中央の断面の色を見る', false, (v) => (this.view.cut = v));
     cut.id = 'solid-cut';
+    const cutY = toggle('板厚の中央で切る', '上の半分（と上のロール）を外して、板厚の中央の断面の色を見る', false, (v) => (this.view.cutY = v));
+    cutY.id = 'solid-cut-y';
     const rolls = toggle('ロール', 'ロールを描く・描かない', true, (v) => (this.view.rolls = v));
     rolls.id = 'solid-rolls';
     const whole = toggle('全体を見る', '板の全長を入れて見る（もう一度押すとロールバイトに戻る）', false, (v) => (this.view.fit = v ? 'strip' : 'bite'));
@@ -596,7 +610,7 @@ export class SolidMode {
       this.dirty = true;
     });
     thick.append(sel);
-    tools.prepend(looks, cut, rolls, whole, thick);
+    tools.prepend(looks, cut, cutY, rolls, whole, thick);
   }
 
   private markLook(id: ViewPreset | null): void {
@@ -773,7 +787,7 @@ export class SolidMode {
   }
 
   private startWorker(): void {
-    this.worker = new Worker(new URL('./solid.worker.ts', import.meta.url), { type: 'module' });
+    this.worker = remote.place === 'winpc' ? remoteWorker('solid.worker.ts') : new Worker(new URL('./solid.worker.ts', import.meta.url), { type: 'module' });
     this.send({ type: 'frame-ms', ms: frameMs() });
     this.worker.onmessage = (e: MessageEvent<FromSolidWorker>) => {
       const m = e.data;
@@ -1253,7 +1267,7 @@ export class SolidMode {
     const html = `
       <div class="bar" style="background:linear-gradient(90deg,${stops.join(',')})"></div>
       <div class="ends"><span>${fmt(lo)}${unit}</span><span>${info.label}</span><span>${fmt(hi)}${unit}</span></div>
-      <div class="exag">板の表面の色。${this.settings.full ? '解くのは板厚の全体と板幅の半分で、板幅の中央（点線）で鏡映して表示' : '解くのは 1/4 で、板厚と板幅の中央（点線）で鏡映して表示'}${ys !== 1 ? `。板厚方向を ${ys} 倍に拡大（ロールの円弧も）` : ''}${this.settings.planeStrain ? '。板幅方向を止めた計算（平面ひずみ）' : ''}</div>
+      <div class="exag">板の表面の色。${this.settings.full ? '解くのは板厚の全体と板幅の半分で、板幅の中央（点線）で鏡映して表示' : '解くのは 1/4 で、板厚と板幅の中央（点線）で鏡映して表示'}${ys !== 1 ? `。板厚方向を ${ys} 倍に拡大（ロールの円弧も）` : ''}${this.view.cut || this.view.cutY ? `。${[this.view.cut ? '板幅の中央' : '', this.view.cutY ? '板厚の中央' : ''].filter(Boolean).join('と')}で切った断面を見せる（${this.view.cutY ? '上の面が板厚の中央' : '手前の面が板幅の中央'}）` : ''}${this.settings.planeStrain ? '。板幅方向を止めた計算（平面ひずみ）' : ''}</div>
       ${failed ? '<div class="failed-key"><span class="swatch"></span>藍墨の面は亀裂になった点</div>' : ''}
       ${roles.has('first-crack') ? '<div class="failed-key"><span class="ring crack"></span>赤の点線の丸は最初の亀裂</div>' : ''}
       ${roles.has('max-damage') ? '<div class="failed-key"><span class="ring worst"></span>茶の点線の丸は損傷がいちばん大きい点</div>' : ''}`;
@@ -1293,11 +1307,23 @@ export class SolidMode {
     this.view.resize();
   }
 
-  /** the steady means the width graphs show: the running stand's, or until it has any the last stand's that had */
+  /**
+   * The stands the width graphs may draw: all that have ended, or while a frame of the tape is on show (playback)
+   * only those that had ended by then — the graphs show the steady means as they stood at the frame on show
+   */
+  private endedStands(): number {
+    const f = this.shownFrame();
+    return this.replay && f ? Math.min(this.standResults.length, f.diag.stand) : this.standResults.length;
+  }
+
+  /** the steady means the width graphs show: the shown frame's stand's (the running one, or the one of the frame
+   *  played back), or until it has any the last stand's before it that had */
   private shownSteady(): { st: SolidSteady; g: SolidGeometry } | null {
-    const now = this.last?.diag.steady;
-    if (now && now.looks > 0 && this.geometry) return { st: now, g: this.geometry };
-    for (let k = this.standResults.length - 1; k >= 0; k--) {
+    const f = this.shownFrame();
+    const now = f?.diag.steady;
+    const gNow = f ? (this.geometries[f.diag.stand] ?? this.geometry) : this.geometry;
+    if (now && now.looks > 0 && gNow) return { st: now, g: gNow };
+    for (let k = this.endedStands() - 1; k >= 0; k--) {
       const st = this.standResults[k]?.steady;
       if (st && this.geometries[k]) return { st, g: this.geometries[k] };
     }
@@ -1310,17 +1336,23 @@ export class SolidMode {
    */
   private standSteadies(): { k: number; st: SolidSteady; g: SolidGeometry }[] {
     const out: { k: number; st: SolidSteady; g: SolidGeometry }[] = [];
-    for (let k = 0; k < this.standResults.length; k++) {
+    const ended = this.endedStands();
+    for (let k = 0; k < ended; k++) {
       const st = this.standResults[k]?.steady;
       const g = this.geometries[k];
       if (st && g) out.push({ k, st, g });
     }
-    const d = this.last?.diag;
-    if (d?.steady && d.steady.looks > 0 && this.geometry && !this.standResults[d.stand]) out.push({ k: d.stand, st: d.steady, g: this.geometry });
+    const d = this.shownFrame()?.diag;
+    const g = d ? (this.geometries[d.stand] ?? this.geometry) : null;
+    if (d?.steady && d.steady.looks > 0 && g && d.stand >= ended) out.push({ k: d.stand, st: d.steady, g });
     return out;
   }
 
   private drawWidthCharts(): void {
+    // playing back: the graphs across the width are the steady means as they stood at the frame on show, and say so
+    const f = this.shownFrame();
+    const when = this.replay && f ? `再生 ${(this.replay.at + 1).toLocaleString()} 枚目（${(this.geometry?.stands ?? 1) > 1 ? `#${f.diag.stand + 1}、` : ''}${(f.diag.t * 1e3).toFixed(2)} ms）の時点` : '';
+    for (const e of this.$('solid-stage').querySelectorAll<HTMLElement>('.fig-when')) if (e.textContent !== when) e.textContent = when;
     const shown = this.shownSteady();
     const st = shown?.st ?? null;
     const g = shown?.g ?? this.geometry!;
@@ -1450,7 +1482,7 @@ export class SolidMode {
     ctx.font = uiFont(11);
     ctx.fillStyle = STEEL;
     ctx.textAlign = 'center';
-    ctx.fillText(this.finished ? '定常の読みが無かった（板の長さを延ばす）' : '定常になると出る', r.width / 2 + 20, r.height / 2 + 14);
+    ctx.fillText(this.replay ? '再生中の枚の時点ではまだ定常でない' : this.finished ? '定常の読みが無かった（板の長さを延ばす）' : '定常になると出る', r.width / 2 + 20, r.height / 2 + 14);
     ctx.restore();
   }
 
@@ -1473,7 +1505,7 @@ export class SolidMode {
     const cap = this.$('solid-map-range');
     if (!st) {
       ctx.textAlign = 'center';
-      ctx.fillText(this.finished ? '定常の読みが無かった' : '定常になると出る', W / 2, H / 2);
+      ctx.fillText(this.replay ? '再生中の枚の時点ではまだ定常でない' : this.finished ? '定常の読みが無かった' : '定常になると出る', W / 2, H / 2);
       cap.textContent = '';
       return;
     }
@@ -1636,7 +1668,7 @@ export class SolidMode {
       },
       get view() {
         const v = self.view;
-        return { yaw: v.yaw, pitch: v.pitch, zoom: v.zoom, cut: v.cut, rolls: v.rolls, fit: v.fit, yScale: v.yScale, pan: [v.panX, v.panY], pivot: v.pivot };
+        return { yaw: v.yaw, pitch: v.pitch, zoom: v.zoom, cut: v.cut, cutY: v.cutY, rolls: v.rolls, fit: v.fit, yScale: v.yScale, pan: [v.panX, v.panY], pivot: v.pivot };
       },
       screenOfPoint: (x: number, y: number, z: number) => self.view.screenOfPoint(x, y, z),
       /** the playback of the recorded frames: how many, which is on show (null: the live frame), and the controls */

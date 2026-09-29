@@ -17,6 +17,7 @@ import { radioGroup } from './radioGroup.ts';
 import { say } from './liveText.ts';
 import { frameMs } from './frameRate.ts';
 import { Eta, etaText } from './eta.ts';
+import { remote, remoteWorker } from './remote.ts';
 
 export type ViewMode = 'section' | 'plan';
 
@@ -288,7 +289,7 @@ export class PlanMode {
   }
 
   private startWorker(): void {
-    this.worker = new Worker(new URL('./plan.worker.ts', import.meta.url), { type: 'module' });
+    this.worker = remote.place === 'winpc' ? remoteWorker('plan.worker.ts') : new Worker(new URL('./plan.worker.ts', import.meta.url), { type: 'module' });
     this.send({ type: 'frame-ms', ms: frameMs() });
     this.worker.onmessage = (e: MessageEvent<FromPlanWorker>) => {
       const m = e.data;
