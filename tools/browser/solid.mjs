@@ -3,7 +3,7 @@
 // has the 3D strip's settings and not the conditions the 3D model lacks); a 4 mm strip is rolled to the end and
 // its steady values compared with `node tools/solid.mjs` (relative 1e-5: Chrome's and Node's V8 differ in the
 // last bit of a few Math functions); the playback bar (巻き戻す, 再生, the slider, a field tab while paused); every field tab redraws; a real drag turns the drawing, the wheel zooms, a
-// double click puts it back; the view buttons; the conditions URL opens the same 3D condition; back on 2 次元 the
+// double click puts it back; the view buttons; 平坦度の形 (the flat 4 mm strip, synthetic profiles through flatTry, the controls, a drag); the conditions URL opens the same 3D condition; back on 2 次元 the
 // section still runs, and showing 3 次元 pauses it; a tandem of two stands (against the tool; the width, crown and
 // flatness graphs draw both stands in their colours with legends; the handoff 'crop' from the panel); the stress state and the fracture locus (a standard strip: the
 // most damaged point; a strip that cracks: the first crack's point, the role buttons by real clicks); a narrow
@@ -11,7 +11,7 @@
 //
 //   CDP_PORT=<cdp> node tools/browser/solid.mjs <url> [out-prefix]
 //
-// Writes <out-prefix>-solid.png, -locus.png, -top.png, -cut.png, -narrow.png when a prefix is given; look at them.
+// Writes <out-prefix>-solid.png, -flat.png, -locus.png, -top.png, -cut.png, -narrow.png when a prefix is given; look at them.
 import { execFileSync, spawnSync } from 'node:child_process';
 import { existsSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -83,6 +83,55 @@ try {
   ok(row.includes((s.force * 1e-3).toFixed(2)), 'the results table shows the steady roll force', row);
   ok((table.find((t) => t.startsWith('幅広がり W1/W0')) ?? '').includes((s.spread * 100).toFixed(2)), 'and the spread');
   await shot('solid');
+
+  // ── 平坦度の形: the 4 mm strip's steady flatness as a strip on a table; the judgement follows the reference
+  // (B/h = 6 < 50: flat however large the difference), synthetic profiles through flatTry, the controls, a real drag
+  const flat0 = await c.evaluate('JSON.parse(JSON.stringify({ shape: __mpm.solid.flat.shape, look: __mpm.solid.flat.look, summary: __mpm.solid.flat.summary }))');
+  ok(flat0.shape && flat0.shape.kind === 'flat' && flat0.shape.pattern === 'edge' && flat0.shape.a === 0 && flat0.shape.bh < 50, 'the 4 mm strip lies flat: B/h < 50 gives no waves though its profile is a wavy edge', `${flat0.shape?.kind} ${flat0.shape?.pattern} B/h ${flat0.shape?.bh.toFixed(1)}`);
+  ok(flat0.summary.startsWith('平坦度の形: 平坦（座屈しない）。伸び差 ') && flat0.summary.includes('< 50 では波にならない'), 'the words say so', flat0.summary);
+  ok(await c.evaluate(`document.getElementById('solid-chart-flat3d').getAttribute('aria-label') === __mpm.solid.flat.summary`), 'the canvas carries the words as its label');
+  const pixels = () => c.evaluate(`(() => { const cv = document.getElementById('solid-chart-flat3d'); const d = cv.getContext('2d').getImageData(0, 0, cv.width, cv.height).data; let h = 0; for (let i = 0; i < d.length; i += 4) h = (h * 31 + d[i] + d[i + 1] * 3 + d[i + 2] * 7) | 0; return h; })()`);
+  const pxFlat = await pixels();
+  const synth = (f) => `(() => { const n = 40, hw = 0.1; const ez = [], fl = []; for (let i = 0; i < n; i++) { const z = (i + 0.5) / n; ez.push(z * hw); fl.push(${f}); } return JSON.parse(JSON.stringify(__mpm.solid.flatTry(ez, fl, hw, 0.75e-3))); })()`;
+  const edge = await c.evaluate(synth('400 * z ** 4'));
+  const midLam = (sh) => sh.lambda[(sh.lambda.length - 1) / 2];
+  ok(edge.kind === 'edge' && edge.steepness > 0.03 && edge.at === 1 && midLam(edge) === 0 && edge.lambda[0] > 0, 'flatTry: 400 ζ⁴ at B/h = 267 is a wavy edge, waves at the edges and none in the middle', `λ ${(edge.steepness * 100).toFixed(2)} %`);
+  ok((await c.evaluate('__mpm.solid.flat.summary')).startsWith('平坦度の形: 耳波（端伸び）　急峻度 λ = '), 'the head line names it with its steepness');
+  ok((await pixels()) !== pxFlat, 'the strip is drawn again');
+  const centreB = await c.evaluate(synth('-300 * z ** 2'));
+  ok(centreB.kind === 'centre' && centreB.at === 0 && midLam(centreB) > 0 && centreB.lambda[0] === 0, 'flatTry: −300 ζ² is a centre buckle, waves in the middle and none at the edges');
+  const quarter = await c.evaluate(synth('800 * z ** 2 - 1000 * z ** 4'));
+  ok(quarter.kind === 'quarter' && quarter.at > 0.5 && quarter.at < 0.75 && midLam(quarter) < quarter.steepness && quarter.lambda[0] === 0, 'flatTry: 800 ζ² − 1000 ζ⁴ is a quarter buckle, the steepest waves between the middle and the edge, the edges flat', `at ${quarter.at}, middle λ ${(midLam(quarter) * 100).toFixed(2)} % (it is 200 I over the edges, above the band)`);
+  await c.evaluate(`document.getElementById('solid-flat3d').scrollIntoView({ block: 'center' })`);
+  await shot('flat');
+  // the controls
+  const setSelect = (id, v) => c.evaluate(`(() => { const s = document.getElementById(${JSON.stringify(id)}); s.value = ${JSON.stringify(String(v))}; s.dispatchEvent(new Event('change')); return s.value; })()`);
+  await setSelect('solid-flat-scale', 10);
+  await setSelect('solid-flat-pitch', 2);
+  const look1 = await c.evaluate('__mpm.solid.flat.look');
+  ok(look1.scale === 10 && look1.pitch === 2 && (await c.evaluate('__mpm.solid.flat.summary')).includes('高さを 10 倍に拡大。波のピッチは板幅の 2 倍'), 'the height and pitch selects reach the look and the words');
+  await c.evaluate(`__mpm.solid.flatTry()`);
+  ok((await c.evaluate('__mpm.solid.flat.shape.kind')) === 'flat', 'flatTry with nothing draws the steady reading again');
+  await click('#solid-flat-latent');
+  const latent = await c.evaluate('JSON.parse(JSON.stringify({ shape: __mpm.solid.flat.shape, look: __mpm.solid.flat.look, summary: __mpm.solid.flat.summary }))');
+  ok(latent.look.latent && latent.shape.kind === 'edge' && latent.summary.startsWith('平坦度の形: 参考: 伸び差をそのまま波に（耳波の形'), 'the reference view ignores the band: the flat strip shows its wavy-edge form', latent.summary);
+  near(latent.shape.steepness, (2 / Math.PI) * Math.sqrt(latent.shape.drive), 1e-9, 'and its steepness is the theory λ = (2/π)√Δε');
+  await click('#solid-flat-latent');
+  ok(await c.evaluate(`!__mpm.solid.flat.look.latent && __mpm.solid.flat.shape.kind === 'flat'`), 'unchecked: the judgement again');
+  // a real drag turns the strip, a double click puts it back
+  const fc = await centre('#solid-chart-flat3d');
+  await mouse('mousePressed', fc.x, fc.y);
+  for (let k = 1; k <= 4; k++) await mouse('mouseMoved', fc.x + 15 * k, fc.y + 5 * k, { buttons: 1 });
+  await mouse('mouseReleased', fc.x + 60, fc.y + 20);
+  await painted();
+  const lookD = await c.evaluate('__mpm.solid.flat.look');
+  ok(Math.abs(lookD.yaw - (flat0.look.yaw + 0.6)) < 1e-9 && Math.abs(lookD.tilt - (flat0.look.tilt + 0.2)) < 1e-9, 'a drag turns the strip (0.01 rad per px)', `yaw ${flat0.look.yaw} → ${lookD.yaw.toFixed(2)}, tilt ${flat0.look.tilt} → ${lookD.tilt.toFixed(2)}`);
+  await mouse('mousePressed', fc.x, fc.y, { clickCount: 2 });
+  await mouse('mouseReleased', fc.x, fc.y, { clickCount: 2 });
+  const lookB = await c.evaluate('__mpm.solid.flat.look');
+  ok(lookB.yaw === flat0.look.yaw && lookB.tilt === flat0.look.tilt, 'a double click puts it back');
+  await setSelect('solid-flat-scale', 5);
+  await setSelect('solid-flat-pitch', 1);
 
   // ── playback of the recorded frames (tape.ts): the bar appears once the run has stopped; 巻き戻す, 再生, 一時停止,
   // the slider, and a field tab while playing back; the end of the tape is the live frame

@@ -23,6 +23,7 @@ import { stopPhrase } from './standTable.ts';
 import { Explorer, standColor } from './explorer.ts';
 import { SOLID_FIELDS, SolidView, solidFieldInfo, type ViewPreset } from './solidView.ts';
 import { Tape } from './tape.ts';
+import { FLAT_LOOK, FLAT_PITCHES, FLAT_SCALES, FlatView } from './flatView.ts';
 import { COMPUTE_CORES, COMPUTE_GPU, COMPUTE_THREADS, REMOTE_NAME, gpuName, placeLabel, remote, remoteGpu, remoteWorker } from './remote.ts';
 import { recordVideo, videoSupported, type VideoResult } from './solidVideo.ts';
 import { download } from './export.ts';
@@ -228,6 +229,10 @@ export class SolidMode {
   private readonly summaries: HTMLElement[] = [];
   /** the legends under the width, crown and flatness graphs (a tandem's stands, by colour) */
   private readonly legends: Record<'width' | 'crown' | 'flat', HTMLElement>;
+  /** 平坦度の形: the shown steady flatness as the strip's waves (flatView.ts) */
+  private readonly flat3d: FlatView;
+  /** for checks: a flatness drawn in 平坦度の形 in place of the steady reading's (`__mpm.solid.flatTry`) */
+  private flatPinned: { exitZ: number[]; flatness: number[]; halfWidth: number; thickness: number } | null = null;
   /** the stands the width, crown and flatness graphs last drew (0-based) */
   private overlaid: number[] = [];
   private summaryMoment = '';
@@ -263,6 +268,8 @@ export class SolidMode {
       return d;
     };
     this.legends = { width: legend('solid-chart-width'), crown: legend('solid-chart-crown'), flat: legend('solid-chart-flat') };
+    this.flat3d = new FlatView(this.$<HTMLCanvasElement>('solid-chart-flat3d'));
+    this.flatTools();
     for (const id of ['solid-chart-force', 'solid-chart-width', 'solid-chart-map']) {
       const p = el('p', 'sr-only solid-chart-summary');
       this.$(id).parentElement!.append(p);
@@ -1301,6 +1308,61 @@ export class SolidMode {
     this.drawWidthCharts();
   }
 
+  /** the controls under 平坦度の形: the heights' exaggeration, the waves' pitch, the reference view, the view back */
+  private flatTools(): void {
+    const box = this.$('solid-flat3d-tools');
+    const select = (label: string, id: string, values: number[], now: number, text: (v: number) => string, set: (v: number) => void) => {
+      const l = el('label');
+      l.append(el('span', undefined, label));
+      const s = el('select');
+      s.id = id;
+      for (const v of values) {
+        const o = el('option', undefined, text(v));
+        o.value = String(v);
+        o.selected = v === now;
+        s.append(o);
+      }
+      s.addEventListener('change', () => set(Number(s.value)));
+      l.append(s);
+      return l;
+    };
+    const f = this.flat3d;
+    const scale = select('高さの倍率', 'solid-flat-scale', FLAT_SCALES, FLAT_LOOK.scale, (v) => `×${v}`, (v) => ((f.look.scale = v), f.draw()));
+    const pitch = select('波のピッチ', 'solid-flat-pitch', FLAT_PITCHES, FLAT_LOOK.pitch, (v) => `板幅の ${v} 倍`, (v) => ((f.look.pitch = v), f.draw()));
+    const latent = el('label', 'flat3d-latent');
+    const box2 = el('input');
+    box2.type = 'checkbox';
+    box2.id = 'solid-flat-latent';
+    box2.addEventListener('change', () => ((f.look.latent = box2.checked), f.reshape()));
+    latent.append(box2, el('span', undefined, '参考: 不感帯を無視して伸び差を波に'));
+    latent.title = '座屈の判定（形状不感帯 −40(h/B)² 〜 80(h/B)²）を外し、伸び差の全部が λ = (2/π)√Δε の波になったとして描く。狭い板や平坦な板が持っている伸び差の形を見る用';
+    const back = el('button', undefined, '元の向き');
+    back.type = 'button';
+    back.title = 'ドラッグで回した向きを戻す（絵をダブルクリックでも）';
+    back.addEventListener('click', () => {
+      f.look.yaw = FLAT_LOOK.yaw;
+      f.look.tilt = FLAT_LOOK.tilt;
+      f.draw();
+    });
+    box.append(scale, pitch, latent, back);
+  }
+
+  /** 平坦度の形 from the steady means on show (the stand on show, as the width graphs) */
+  private drawFlat3d(shown: { st: SolidSteady } | null): void {
+    const pin = this.flatPinned;
+    if (pin) {
+      this.flat3d.set(pin, pin.halfWidth, pin.thickness);
+      return;
+    }
+    const st = shown?.st;
+    if (!st || !st.looks) {
+      this.flat3d.set(null, 0, 0, this.replay ? '再生中の枚の時点ではまだ定常でない' : '');
+      return;
+    }
+    const hc = 2 * st.halfThickness.find(Number.isFinite)!;
+    this.flat3d.set({ exitZ: st.exitZ, flatness: st.flatness }, st.halfWidth, hc);
+  }
+
   /** the charts' canvases changed size (the splitter under the drawing): redraw them */
   chartsResized(): void {
     this.dirty = this.chartsDirty = true;
@@ -1399,6 +1461,7 @@ export class SolidMode {
     setLegend(this.legends.width, drawn.length ? stands() : []);
     this.drawProfileCharts(drawn, g, hwMax, tandem, stands);
     this.drawPressureMap(st, g, tag);
+    this.drawFlat3d(shown);
   }
 
   /**
@@ -1671,6 +1734,18 @@ export class SolidMode {
         return { yaw: v.yaw, pitch: v.pitch, zoom: v.zoom, cut: v.cut, cutY: v.cutY, rolls: v.rolls, fit: v.fit, yScale: v.yScale, pan: [v.panX, v.panY], pivot: v.pivot };
       },
       screenOfPoint: (x: number, y: number, z: number) => self.view.screenOfPoint(x, y, z),
+      /** 平坦度の形: the shape drawn (flatShape.ts, SI and fractions; null before a steady reading), the look, the words */
+      get flat() {
+        const f = self.flat3d;
+        return { shape: f.shape, look: { ...f.look }, summary: f.summary };
+      },
+      /** for checks: draw 平坦度の形 from a flatness given here (steady.ts's exitZ [m] and flatness [I] by column) in
+       *  place of the steady reading's, until called with no flatness; the shape drawn */
+      flatTry: (exitZ?: number[], flatness?: number[], halfWidth = 0, thickness = 0) => {
+        self.flatPinned = exitZ && flatness ? { exitZ, flatness, halfWidth, thickness } : null;
+        self.drawWidthCharts();
+        return self.flat3d.shape;
+      },
       /** the playback of the recorded frames: how many, which is on show (null: the live frame), and the controls */
       get replay() {
         return {
