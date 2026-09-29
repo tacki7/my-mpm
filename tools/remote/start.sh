@@ -24,8 +24,11 @@ pids=()
 
 cleanup() {
   trap - INT TERM EXIT
-  for p in "${pids[@]}"; do kill "$p" 2>/dev/null || true; done
-  rm -f "$LOG"
+  for p in "${pids[@]}"; do
+    pkill -P "$p" 2>/dev/null || true
+    kill "$p" 2>/dev/null || true
+  done
+  rm -f "$LOG" "${FIFO:-}"
 }
 trap cleanup INT TERM EXIT
 
@@ -48,9 +51,22 @@ old=$(lsof -ti "tcp:${RPORT}" -sTCP:LISTEN 2>/dev/null || true)
 for p in $old; do
   if [ "$(ps -o comm= -p "$p" 2>/dev/null)" = "ssh" ]; then kill "$p" 2>/dev/null || true; fi
 done
-# stdin held open by a sleeper: the server ends when it closes (--exit-with-stdin), i.e. when this script ends
-(while :; do sleep 3600; done) | "${SSH[@]}" -o ExitOnForwardFailure=yes -L "${RPORT}:127.0.0.1:${RPORT}" -R "${DEV}:localhost:${DEV}" "$HOST" \
-  "cd /d %USERPROFILE%\\${DIR} && node tools/remote/server.mjs --port ${RPORT} --exit-with-stdin" >"$LOG" 2>&1 &
+# the server's stdin is a FIFO this script holds open (fd 3): it ends when the script does (--exit-with-stdin)
+FIFO=$(mktemp -u -t mpm-remote-fifo)
+mkfifo "$FIFO"
+exec 3<>"$FIFO"
+tunnel() {
+  "${SSH[@]}" -o ExitOnForwardFailure=yes -o ServerAliveCountMax=4 -L "${RPORT}:127.0.0.1:${RPORT}" -R "${DEV}:localhost:${DEV}" "$HOST" \
+    "cd /d %USERPROFILE%\\${DIR} && node tools/remote/server.mjs --port ${RPORT} --exit-with-stdin" <"$FIFO"
+}
+# the session can drop (the network, winpc asleep): then it is opened again, with the server restarted there
+(
+  while :; do
+    tunnel || true
+    echo "$(date +%T) ${HOST} との接続が切れた。5 秒後に繋ぎ直す"
+    sleep 5
+  done
+) >>"$LOG" 2>&1 &
 pids+=($!)
 for _ in $(seq 1 90); do
   grep -q READY "$LOG" 2>/dev/null && break
@@ -76,7 +92,7 @@ URL="http://localhost:${DEV}/?at=winpc"
 echo "この Mac:  $URL"
 echo "${HOST} のブラウザ:  http://localhost:${DEV}/"
 [ -z "${NO_OPEN:-}" ] && open "$URL"
-say "起動中。Ctrl+C で止める（計算サーバ・トンネル・開発サーバ）"
+say "起動中。Ctrl+C で止める（計算サーバ・トンネル・開発サーバ）。接続が切れたら自動で繋ぎ直す"
 # the server's log (a worker opened and closed per line)
 tail -n +1 -f "$LOG" &
 pids+=($!)
