@@ -590,8 +590,14 @@ export class Sim3 {
     return (i * this.NJ + j) * this.NK + k;
   }
 
-  /** one step alone: the stages in order (a team runs the same stages on every worker, team.ts) */
+  /**
+   * One step alone: the stages in order (a team runs the same stages on every worker, team.ts). A Sim3 made for a
+   * team steps by Team.step (Tandem3.advanceTeam), and one with a GPU attached by advanceBatch: here rank 0's
+   * share alone would be stepped, or the CPU's copy of a state that lives on the device — silently wrong either way.
+   */
   advance(): void {
+    if (this.size > 1) throw new Error(`this Sim3 was made for a team of ${this.size}: step it with Team.step (Tandem3.advanceTeam), not advance()`);
+    if (this.gpu) throw new Error('a GPU is attached to this Sim3: step it with advanceBatch (Tandem3.advanceBatch), not advance()');
     this.beginStep();
     for (let ph = 0; ph < PHASES; ph++) {
       this.runPhase(ph);
@@ -613,6 +619,13 @@ export class Sim3 {
    * The team's columns: [ixPrevLo, ixPrevHi) cut into `size` runs of columns holding about the same number of points
    * (their base cell columns; the first and last runs open at the ends, so that a point just outside is still
    * somebody's). Every 20 steps: the points move a small part of a cell in that time.
+   *
+   * Every run but the first is at least two columns wide: the points of the run below reach the two columns past
+   * its start, and only the owner of those columns adds the copy of the run below (reduce). Were a run one column
+   * wide, the second of those columns would belong to the run above, which adds this run's copy, not the one
+   * below's, and that scatter would be added by nobody. When the columns run out (a strip shorter than two columns
+   * a worker), the runs not placed are empty and past everything, and the last one placed is open at its end: an
+   * empty run between two others would break the chain of copies the same way.
    */
   private partition(): void {
     const { n, active, px, ox, h, size } = this;
@@ -635,9 +648,11 @@ export class Sim3 {
     let sum = 0;
     for (let c = 0; c < hi - lo && w < size; c++) {
       sum += hist[c];
-      if (sum >= (w * total) / size) b[SY_BOUNDS + w++] = lo + c + 1;
+      if (sum < (w * total) / size) continue;
+      if (w > 1 && lo + c + 1 < b[SY_BOUNDS + w - 1] + 2) continue;
+      b[SY_BOUNDS + w++] = lo + c + 1;
     }
-    for (; w < size; w++) b[SY_BOUNDS + w] = hi;
+    for (; w < size; w++) b[SY_BOUNDS + w] = 1e9;
     b[SY_BOUNDS + size] = 1e9;
   }
 

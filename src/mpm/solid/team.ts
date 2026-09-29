@@ -184,8 +184,12 @@ export function runWorker(port: TeamPort): void {
     try {
       const sim = new Sim3(msg.params, { attach: msg.buffers, rank: msg.rank, size: msg.size });
       const b = new Int32Array(msg.barrier);
-      port.postMessage({ type: 'ready' } satisfies TeamMessage);
+      // the generation to wait on is taken before 'ready' goes out: the coordinator may launch the first stage as
+      // soon as it hears 'ready' (attach resolves, step follows), and a generation read after that would be the
+      // launched stage's, waited on for the next one while the coordinator waits for this worker (a deadlock, seen
+      // at a stand switch). Taken before, the wait below returns at once when the launch came first
       let seen = Atomics.load(b, B_GEN);
+      port.postMessage({ type: 'ready' } satisfies TeamMessage);
       for (;;) {
         Atomics.wait(b, B_GEN, seen);
         seen = Atomics.load(b, B_GEN);
