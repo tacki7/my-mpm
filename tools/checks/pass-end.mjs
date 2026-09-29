@@ -4,15 +4,17 @@
 // and no point is against a roll any more — before the tail is 2 h0 past, where it ended before. Each model's `touching`
 // reads the contact flags of the last step (the section's touch bits, the 3D model's touch, the plan view's contact
 // pressure). The steps saved are the tail's way from that point to 2 h0. Section 6 cells L 8 mm (~6 s), 3D W 2 mm
-// R 10 mm 4 cells (~20 s), plan view W 10 mm L 8 mm (~10 s).
+// R 10 mm 4 cells (~20 s), plan view W 10 mm L 8 mm (~10 s). A tandem's stand that hands its whole strip on lets it
+// settle first (the tail 2 h0 out, `out`, as before: the carried stresses stay put); the last stand ends at once (~20 s).
 // Calibrated on a copy (2026-09-30): with each model's `touching` forced true (the end at 2 h0 as before) the
-// "before 2 h0", "no point against a roll" and "steps saved" items fail (3 per model).
+// "before 2 h0", "no point against a roll" and "steps saved" items fail (3 per model) and the tandem's two.
 // @check
 import { ok, between, done } from './lib.mjs';
 import { defaultParams, START_STEPS } from '../../src/mpm/params.ts';
 import { Sim } from '../../src/mpm/solver.ts';
 import { Sim3, solidParams } from '../../src/mpm/solid/sim3.ts';
 import { PlanSim, planParams } from '../../src/mpm/planview/sim.ts';
+import { TandemSim } from '../../src/mpm/tandem.ts';
 
 const LOOK = 50;
 
@@ -47,11 +49,22 @@ function judge(name, r) {
 }
 
 // ── the section model: the standard preset on 6 cells, an 8 mm strip
+const P2 = defaultParams();
+P2.numerics.cellsThrough = 6;
+P2.rolling.sheetLength = 8e-3;
+const section = run(new Sim(P2), 60000);
+judge('section', section);
+
+// ── a tandem of two: the first stand hands its strip on once the tail is 2 h0 out, the last ends the moment its tail is out
 {
-  const P = defaultParams();
-  P.numerics.cellsThrough = 6;
-  P.rolling.sheetLength = 8e-3;
-  judge('section', run(new Sim(P), 60000));
+  const every = 500;
+  const t = new TandemSim(P2, 2, every, 'done');
+  while (!t.done) t.advance();
+  const first = t.results[0];
+  const settled = section.doneStep + section.saved; // the step the tail is 2 h0 out in the same pass
+  ok(first.phase === 'done' && first.steps >= settled && first.steps < settled + every, "tandem: the first stand hands its strip on once the tail is 2 h0 out (its own 'done' came earlier)", `${first.steps} steps, the tail 2 h0 out at ${settled}, 'done' at ${section.doneStep}`);
+  const last = t.results[1];
+  ok(last.phase === 'done' && t.sim.tailX() > 0 && t.sim.tailX() < last.h0 && !t.sim.touching(), 'tandem: the last stand ends the moment its tail is out (before h0 past the exit, no point against a roll)', `tail ${(t.sim.tailX() * 1e3).toFixed(3)} mm of h0 ${(last.h0 * 1e3).toFixed(3)}`);
 }
 
 // ── the 3D model: W 2 mm on a 10 mm roll, 4 cells (the roll-bend check's pass)

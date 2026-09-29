@@ -130,7 +130,7 @@ function progressOf(s: Sim, t: TandemSim): number {
     const need = !handsOn ? null : t.stand === 0 ? steadyLength(s.params, EVERY) : length;
     // a stand that hands on its middle stretch (handoff 'crop') ends when the stretch's tail end is out
     const r = s.params.rolling;
-    span = [tail0, t.crop ? cropEndTail(s.contactLength, s.xExitProbe, r.reduction, t.crop[0] * s.dp) : standEndTail(r.h0, s.contactLength, length, need)];
+    span = [tail0, t.crop ? cropEndTail(s.contactLength, s.xExitProbe, r.reduction, t.crop[0] * s.dp) : standEndTail(r.h0, s.contactLength, length, need, t.stand + 1 < t.stands)];
     tailSpan.set(s, span);
   }
   return standProgress(s.tailX(), span[0], span[1], s.contactLength, s.params.rolling.reduction);

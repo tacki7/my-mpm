@@ -100,7 +100,8 @@ function pass(half) {
     P.rolling.halfThickness = true;
     const s = new Sim(P);
     let contacts = 0;
-    while (s.phase() !== 'done' && s.step < 100000) {
+    // on until the strip is out and settled (2 h0 past the exit), the faces' transient died down — as crack-fields.mjs
+    while (!s.out() && s.step < 100000) {
       s.advance();
       contacts += s.fieldContacts;
     }

@@ -8,7 +8,8 @@
 //   √J I would drop the pressure at the first step)
 // - the same with the rows sheared by high friction
 // - damage adds up over the stands
-// - a stand ends at the first step it is done, with the whole sheet on the grid
+// - a stand that hands its sheet on ends at the first step the sheet is out and settled (the tail 2 h0 past the exit,
+//   `Sim.out`; the pass's own 'done' comes earlier, T121), with the whole sheet on the grid
 // The cracks across the stands are in tools/checks/tandem-cracks.mjs.
 // @check
 import { ok, between, near, done } from './lib.mjs';
@@ -190,7 +191,7 @@ for (const [name, mod] of [
   const P = short(defaultParams());
   mod(P);
   const plain = new Sim(P);
-  while (plain.phase() !== 'done' && plain.step < 100000) plain.advance();
+  while (!plain.out() && plain.step < 100000) plain.advance();
   const t = new TandemSim(P, 2);
   let old = null;
   t.onStandDone = (e) => (old = e.sim);
@@ -200,7 +201,7 @@ for (const [name, mod] of [
   for (let p = 0; p < old.n; p++) m0 += old.mass[p];
   let m1 = 0;
   for (let q = 0; q < t.sim.n; q++) m1 += t.sim.mass[q];
-  ok(r.steps === plain.step && r.massLost === 0 && t.stopped === null, `${name}: stand 1 ends at the first step it is done (${plain.step}), no point lost`, `${r.steps} steps, lost ${r.massLost}`);
+  ok(r.steps === plain.step && r.massLost === 0 && t.stopped === null, `${name}: stand 1 ends at the first step its sheet is out and settled (${plain.step}), no point lost`, `${r.steps} steps, lost ${r.massLost}`);
   ok(t.stand === 1 && Number.isFinite(t.sim.params.rolling.h0) && t.sim.n > 0 && Math.abs(m1 / m0 - 1) < 1e-12, `${name}: stand 2 has the whole sheet`, `h0 ${t.sim.params.rolling.h0}, ${t.sim.n} points, mass ${m1 / m0}`);
 }
 
