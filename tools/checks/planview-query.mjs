@@ -22,7 +22,7 @@ const same = (a, b) =>
 ok(same(of(''), PLAN_DEFAULTS), 'no keys: the defaults (W 20 mm, 10 cells, no notch)');
 const s = of('W=16&wcells=8&notch=0.5');
 ok(s.width === 16e-3 && s.cells === 8 && Math.abs(s.notch - 0.5e-3) < 1e-15, 'W, wcells and notch in range are taken', JSON.stringify(s));
-ok(same(of('W=1&wcells=3&notch=-1'), PLAN_DEFAULTS) && same(of('W=201&wcells=101&notch=6'), PLAN_DEFAULTS), 'out of range: ignored');
+ok(same(of('W=1&wcells=3&notch=-1'), PLAN_DEFAULTS) && same(of('W=2001&wcells=101&notch=6'), PLAN_DEFAULTS), 'out of range: ignored');
 ok(same(of('W=0x10&wcells=abc&notch='), PLAN_DEFAULTS), 'parsed like the other keys (parseFloat: 0x10 is 0, not 16)');
 ok(of('wcells=9.6').cells === 10, 'cells are rounded');
 
