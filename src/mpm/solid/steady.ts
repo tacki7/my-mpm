@@ -31,8 +31,9 @@ export interface SolidSteady {
   spread: number;
   halfThickness: number[];
   forwardSlip: number;
-  /** the roll's deflection away from the strip at the mid-width and at the strip's edge (its entry half width) [m]; null with rigid rolls */
-  rollBend: { centre: number; edge: number } | null;
+  /** the roll's deflection away from the strip at the mid-width and at the strip's edge (its entry half width) [m], and
+   *  along the barrel from the mid-width to the support (`byZ`, `dz` apart, the last at the support; Sim3.bendProfile); null with rigid rolls */
+  rollBend: { centre: number; edge: number; byZ: number[]; dz: number } | null;
   /** at the exit probe, by lattice column from the mid-width out: where the column is [m], its speed [m/s], its longitudinal stress [Pa] */
   exitZ: number[];
   exitSpeedByZ: number[];
@@ -72,6 +73,7 @@ export class SolidSampler {
   private gauges = 0;
   private bendCentre = 0;
   private bendEdge = 0;
+  private bendByZ: Float64Array | null = null;
   last: SolidLook | null = null;
 
   /** steady looks so far */
@@ -104,6 +106,8 @@ export class SolidSampler {
     if (sim.beam) {
       this.bendCentre += sim.bend[1] * c.steps;
       this.bendEdge += sim.bendAt(sim.halfWidth0) * c.steps;
+      this.bendByZ ??= new Float64Array(sim.bendProfile.length);
+      for (let i = 0; i < sim.bendProfile.length; i++) this.bendByZ[i] += sim.bendProfile[i] * c.steps;
     }
     if (ex) {
       this.gauges++;
@@ -184,7 +188,7 @@ export class SolidSampler {
       spread: hw / sim.halfWidth0 - 1,
       halfThickness,
       forwardSlip: this.slip / this.gauges,
-      rollBend: sim.beam ? { centre: this.bendCentre / s, edge: this.bendEdge / s } : null,
+      rollBend: sim.beam ? { centre: this.bendCentre / s, edge: this.bendEdge / s, byZ: Array.from(this.bendByZ!, (v) => v / s), dz: sim.bendProfileDz } : null,
       exitZ,
       exitSpeedByZ,
       exitStressByZ,

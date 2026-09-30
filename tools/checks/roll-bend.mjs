@@ -4,11 +4,14 @@
 // - in a pass (W 2 mm, R 10 mm, barrel 60 mm, 4 cells, about 20 s each way): the pass reaches 'steady', the roll
 //   bends away from the strip, more at the mid-width than at the strip's edge, and the strip comes out thicker
 //   than with a rigid roll by about twice the deflection (both rolls bend); a barrel shorter than the strip is refused
+// - the deflection along the barrel that the page draws (Sim3.bendProfile, 121 points from the mid-width to the
+//   support; the steady mean in SolidSteady.rollBend.byZ): its first point is the mid-width's deflection, it falls
+//   to 0 at the support without rising anywhere, and the strip's edge reads off it as the results' edge
 // @check
 import { ok, near, between, done } from './lib.mjs';
 import { defaultParams } from '../../src/mpm/params.ts';
 import { ROLL_E, ROLL_NU } from '../../src/mpm/params.ts';
-import { Sim3, solidParams } from '../../src/mpm/solid/sim3.ts';
+import { BEND_SAMPLES, Sim3, solidParams } from '../../src/mpm/solid/sim3.ts';
 import { READ_STEPS, SolidSampler } from '../../src/mpm/solid/steady.ts';
 import { beamDeflection, shearCoefficient } from '../../src/mpm/solid/rollBend.ts';
 
@@ -81,6 +84,17 @@ if (bent.st && rigid.st) {
   const dh = 2 * (bent.st.halfThickness[0] - rigid.st.halfThickness[0]);
   near(dh, 2 * centre, 0.35, 'the strip comes out thicker by about twice the deflection (both rolls bend)');
   ok(bent.st.force < rigid.st.force, 'the force is lower with the smaller reduction', `${(bent.st.force * 1e-3).toFixed(3)} vs ${(rigid.st.force * 1e-3).toFixed(3)} kN`);
+  // the profile along the barrel
+  const prof = bent.sim.bendProfile;
+  const dz = bent.sim.bendProfileDz;
+  ok(prof.length === BEND_SAMPLES && Math.abs(dz * (BEND_SAMPLES - 1) - 30e-3) < 1e-12, 'the profile has 121 points from the mid-width to the support (30 mm)', `${prof.length} × ${(dz * 1e3).toFixed(3)} mm`);
+  ok(prof[0] === bent.sim.bend[1], "the profile's first point is the mid-width's deflection (the second cell row of the model, as the results' centre)", `${prof[0]} vs ${bent.sim.bend[1]}`);
+  ok(Math.abs(prof[BEND_SAMPLES - 1]) < 1e-12 && prof.every((v, i) => i === 0 || v <= prof[i - 1] + 1e-15), 'it falls to 0 at the support without rising anywhere', `end ${prof[BEND_SAMPLES - 1]}`);
+  const jEdge = 1e-3 / dz; // the strip's edge, 1 mm out: between two samples
+  const atEdge = prof[Math.floor(jEdge)] * (1 - (jEdge % 1)) + prof[Math.ceil(jEdge)] * (jEdge % 1);
+  near(atEdge, bent.sim.bendAt(1e-3), 1e-9, "the profile at 1 mm is the model's deflection at the strip's edge (both linear between the same columns)");
+  const { byZ, dz: sdz } = bent.st.rollBend;
+  ok(byZ.length === BEND_SAMPLES && sdz === dz && byZ[0] === centre && Math.abs(byZ[BEND_SAMPLES - 1]) < 1e-12, 'the steady mean carries the profile: 121 points, its first the centre, 0 at the support', `${byZ.length}, ${byZ[0]} vs ${centre}`);
 }
 
 done();
