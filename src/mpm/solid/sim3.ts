@@ -2255,11 +2255,25 @@ export class Sim3 {
     return x;
   }
 
+  /** whether a point is against the roll (the contact flags of the last step; shared with the team's helpers, pulled back from the GPU) */
+  touching(): boolean {
+    const { n, active, touch } = this;
+    for (let p = 0; p < n; p++) if (active[p] && touch[p]) return true;
+    return false;
+  }
+
+  /** whether the strip is out and settled: the tail 2 h0 past the exit plane (the end before T121; a tandem hands a whole strip on from here) */
+  out(): boolean {
+    const tail = this.tailX();
+    return tail === INF || tail > 2 * this.params.rolling.h0;
+  }
+
+  /** 'done' as soon as the tail is past the exit plane and no point is against the roll (else 2 h0 past, `out`) */
   phase(): SolidPhase {
     if (this.stalled) return 'stalled';
     const head = this.headX();
     const tail = this.tailX();
-    if (tail > 2 * this.params.rolling.h0 || tail === INF) return 'done';
+    if (this.out() || (tail > 0 && !this.touching())) return 'done';
     if (head < -this.contactLength) return 'approach';
     if (head < this.xExitProbe) return 'bite';
     if (tail > -this.contactLength) return 'tail-out';

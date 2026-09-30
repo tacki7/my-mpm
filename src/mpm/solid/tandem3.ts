@@ -196,7 +196,9 @@ export class Tandem3 {
     const sim = this.sim;
     if (sim.step % READ_STEPS !== 0) return null;
     const look = this.sampler.look(sim);
-    if (look.phase === 'done' || look.phase === 'stalled') this.endStand(look.phase);
+    // a stand that hands its whole strip on lets it settle first (the tail 2 h0 out, `Sim3.out`); the last stand
+    // ends the moment the tail is out
+    if (look.phase === 'stalled' || (look.phase === 'done' && (this.stand + 1 >= this.stands || sim.out()))) this.endStand(look.phase);
     else if (this.handoff === 'steady' && look.phase === 'steady' && this.stand + 1 < this.stands && this.sampler.count >= STEADY_LOOKS) {
       const sample = steadySample3(sim);
       if (sample) this.endStand('steady', sample);

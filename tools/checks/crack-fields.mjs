@@ -87,7 +87,9 @@ function faceSyy(sim) {
       }
     };
     let contacts = 0;
-    while (s.phase() !== 'done' && s.step < 100000) {
+    // on until the strip is out and settled (the tail 2 h0 past the exit; the pass itself is 'done' as soon as the
+    // tail is out): a crack's face carries a transient for about 1000 steps, so the faces are read once it has died down
+    while (!s.out() && s.step < 100000) {
       s.advance();
       contacts += s.fieldContacts;
     }

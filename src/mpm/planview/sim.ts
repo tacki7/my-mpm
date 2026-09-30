@@ -1457,10 +1457,24 @@ export class PlanSim {
     return x;
   }
 
+  /** whether a point is under the rolls (a contact pressure from the last step) */
+  touching(): boolean {
+    const { n, active, pc } = this;
+    for (let p = 0; p < n; p++) if (active[p] && pc[p] > 0) return true;
+    return false;
+  }
+
+  /** whether the strip is out and settled: the tail 2 h0 past the exit plane (the end before T121; a tandem hands a whole strip on from here) */
+  out(): boolean {
+    const tail = this.tailX();
+    return tail === INF || tail > 2 * this.params.rolling.h0;
+  }
+
+  /** 'done' as soon as the tail is past the exit plane and no point is under the rolls (else 2 h0 past, `out`) */
   phase(): PlanPhase {
     const head = this.headX();
     const tail = this.tailX();
-    if (tail > 2 * this.params.rolling.h0 || tail === INF) return 'done';
+    if (this.out() || (tail > 0 && !this.touching())) return 'done';
     if (head < -this.contactLength) return 'approach';
     if (head < this.xExitProbe) return 'bite';
     if (tail > -this.contactLength) return 'tail-out';

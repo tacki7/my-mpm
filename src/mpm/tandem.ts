@@ -184,7 +184,9 @@ export class TandemSim {
         meanFlowStress: sim.biteFlowStress(),
       });
     }
-    if (phase === 'done' || phase === 'stalled') this.endStand(phase);
+    // a stand that hands its whole strip on lets it settle first (the tail 2 h0 out, `out`: the springback of the last
+    // columns has died down, so the carried stresses stay put); the last stand ends the moment the tail is out
+    if (phase === 'stalled' || (phase === 'done' && (this.stand + 1 >= this.stands || sim.out()))) this.endStand(phase);
     else if (this.handoff === 'steady' && phase === 'steady' && read && this.stand + 1 < this.stands && this.steady.length >= STEADY_READS) {
       const sample = steadySample(sim);
       if (sample) this.endStand('steady', sample);

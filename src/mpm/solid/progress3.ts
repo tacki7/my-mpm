@@ -20,7 +20,7 @@ export function standProgress3(T: Tandem3): number {
     const need = !handsOn ? null : T.stand === 0 ? steadyLength3(s.params) : length;
     // a stand that hands on its middle stretch (handoff 'crop') ends when the stretch's tail end is out
     const r = s.params.rolling;
-    span = [tail0, T.crop ? cropEndTail(s.contactLength, s.xExitProbe, r.reduction, T.crop[0] * s.dp) : standEndTail(r.h0, s.contactLength, length, need)];
+    span = [tail0, T.crop ? cropEndTail(s.contactLength, s.xExitProbe, r.reduction, T.crop[0] * s.dp) : standEndTail(r.h0, s.contactLength, length, need, T.stand + 1 < T.stands)];
     tailSpan.set(s, span);
   }
   return standProgress(s.tailX(), span[0], span[1], s.contactLength, s.params.rolling.reduction);
