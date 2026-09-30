@@ -96,6 +96,7 @@ function ready(T: Tandem3): void {
       halfWidth0: sim.halfWidth0,
       crownIn: sim.params.solid.crownIn ?? 0,
       fullThickness: sim.fullThickness,
+      entryWave: sim.params.solid.entryWave ?? null,
       mapX0: sim.ox + sim.binCol0 * sim.h,
       // a later stand's strip comes in hardened
       slabForce: karman(sim.params.rolling, sim.params.material, 2000, sim.params.rolling.entryStrain ?? 0).force,

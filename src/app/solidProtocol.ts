@@ -1,6 +1,6 @@
 // Messages between the page and the three-dimensional model's worker (src/app/solid.worker.ts).
 import type { SimParams } from '../mpm/params.ts';
-import type { SolidCrack, SolidPhase, SolidSettings } from '../mpm/solid/sim3.ts';
+import type { EntryWave, SolidCrack, SolidPhase, SolidSettings } from '../mpm/solid/sim3.ts';
 import type { SolidLook, SolidSteady } from '../mpm/solid/steady.ts';
 import type { Stand3Result } from '../mpm/solid/tandem3.ts';
 import type { Handoff, TandemStop } from '../mpm/tandem.ts';
@@ -52,6 +52,8 @@ export interface SolidGeometry {
   crownIn: number;
   /** the whole thickness solved with both rolls (Sim3 fullThickness); else the top quarter, mirrored in the picture */
   fullThickness: boolean;
+  /** the waves the stand's strip comes in with (solid.flatIn: the stand before's flatness, tandem3.ts entryWaveOf); null: a flat entry */
+  entryWave: EntryWave | null;
   /** the contact pressure map's first x column [m] */
   mapX0: number;
   /** the plane-strain slab method's roll force per unit width for these conditions [N/m] */

@@ -29,6 +29,7 @@
 //   deflection to settle as it does for the rolls' radius.
 import { startOffset, tailMargin, biteGeometry, cloneParams, hitchcockRadius, ROLL_E, ROLL_NU, type DamageModel, type SimParams } from '../params.ts';
 import { beamDeflection, type Beam } from './rollBend.ts';
+import type { FlatShape } from './flatShape.ts';
 
 /** points of the roll's deflection along the barrel that a look and the page carry (`Sim3.bendProfile`) */
 export const BEND_SAMPLES = 121;
@@ -58,6 +59,31 @@ export interface SolidSettings {
    * y runs from −h/2 to h/2 and the lattice has 2 NJ rows. Absent: the quarter model (the top half, y ≥ 0)
    */
   fullThickness?: boolean;
+  /**
+   * A tandem's later stands (tandem3.ts): the strip comes in with the shape the stand before left it — the waves
+   * its steady flatness makes (flatShape.ts: wavy edges, a centre buckle, quarter buckles, once past Shohet's
+   * limits) — and the residual stress they released. `pitch`: the waves' pitch over the strip's width (the
+   * flatness has none: a viewer's and a modeller's choice); `ignoreBand`: the waves the whole difference of
+   * elongation would make (flatShape's, no insensitive band: a narrow strip's for a look). The stands after the
+   * first are solved through the whole thickness (a wave bends the strip out of its mid-thickness plane)
+   */
+  flatIn?: { pitch: number; ignoreBand?: boolean };
+  /**
+   * The waves this stand's strip comes in with, set by Tandem3 from the stand before (not an input; remap3 puts
+   * them on the strip): the lattice is made tall enough for them, and the head starts far enough from the rolls
+   * for a crest to clear them
+   */
+  entryWave?: EntryWave;
+}
+
+/** the waves a stand's entry strip has (Tandem3 from the stand before's steady flatness; flatShape.ts) */
+export interface EntryWave {
+  shape: FlatShape;
+  /** the waves' pitch [m], and the strip's half width the shape's ζ is over [m] */
+  pitch: number;
+  halfWidth: number;
+  /** the tallest crest over the flat strip [m]: λ p / 2 of the steepest fibre */
+  amplitude: number;
 }
 
 export interface Solid3Params extends SimParams {
@@ -409,7 +435,12 @@ export class Sim3 {
     const Lc = this.contactLength;
     // just short of the rolls (params.ts startOffset)
     const offset = startOffset(P, h, this.el.K, this.el.G);
-    this.xHead0 = -Lc - offset;
+    // a strip that comes in wavy (entryWave, remap3): a crest at the head must clear the roll, whose surface climbs
+    // away from the bite at about Lc / R, so the head starts further back by the crest's height over that slope
+    const wave = P.solid.entryWave ?? null;
+    if (wave && !(P.solid.fullThickness === true)) throw new Error('a strip that comes in wavy is solved through the whole thickness');
+    const crest = wave ? wave.amplitude : 0;
+    this.xHead0 = -Lc - offset - (crest > 0 ? (crest * start.R) / Lc : 0);
     const xTail0 = this.xHead0 - r.sheetLength;
     const elongated = r.sheetLength / (1 - r.reduction);
     const xEnd = 2 * r.h0 + 2 * h + elongated * 1.1 + 8 * h;
@@ -418,7 +449,8 @@ export class Sim3 {
     const full = P.solid.fullThickness === true;
     this.fullThickness = full;
     // the quarter: the ghost row, the plane's row, and rows up past the surface; the full strip: the same both ways
-    const rowsUp = Math.ceil((r.h0 / 2 + 4 * h) / h);
+    // (and the waves' crests, with a strip that comes in wavy)
+    const rowsUp = Math.ceil((r.h0 / 2 + 4 * h + crest) / h);
     this.nyN = full ? 2 * rowsUp + 1 : rowsUp + 2;
     this.gyOff = full ? rowsUp : 1;
     this.iyLo = full ? 0 : 1;

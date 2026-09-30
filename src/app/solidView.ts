@@ -7,6 +7,7 @@ import { css, split, temper, type Rgb } from './colormap.ts';
 import { uiFont } from './font.ts';
 import { SOLID_FIELD_IDS, type SolidFieldName, type SolidFrame, type SolidGeometry } from './solidProtocol.ts';
 import type { Face } from '../mpm/solid/surface.ts';
+import { waveHeight, type FlatShape } from '../mpm/solid/flatShape.ts';
 
 export interface SolidFieldInfo {
   id: SolidFieldName;
@@ -77,6 +78,13 @@ export class SolidView {
   fit: 'bite' | 'strip' = 'bite';
   /** the thickness direction drawn this many times larger */
   yScale = 1;
+  /**
+   * 平坦度の形 on the strip out of the rolls: the waves its steady flatness makes (flatShape.ts, as 平坦度の形 draws them,
+   * with its pitch [m] and its exaggeration of the heights), lifting the strip's faces past the exit — the strip is
+   * held flat in the bite, so the waves grow over the first pitch. Null: the strip as solved (it never buckles: a
+   * short strip on a mid-thickness plane of symmetry keeps the difference of elongation as residual stress)
+   */
+  wave: { shape: FlatShape; pitch: number; scale: number; halfWidth: number } | null = null;
   range: [number, number] = [0, 1];
   private readonly canvas: HTMLCanvasElement;
   private readonly ctx: CanvasRenderingContext2D;
@@ -338,7 +346,7 @@ export class SolidView {
           sx2[v] = NaN;
           continue;
         }
-        project(pos[3 * v], clipY(sy * pos[3 * v + 1]), sz * pos[3 * v + 2], pr);
+        project(pos[3 * v], clipY(sy * pos[3 * v + 1]) + this.lift(pos[3 * v], pos[3 * v + 2]), sz * pos[3 * v + 2], pr);
         sx2[v] = pr[0];
         sy2[v] = pr[1];
         sd[v] = pr[2];
@@ -404,6 +412,17 @@ export class SolidView {
     return this.cutY ? (y) => (y > 0 ? 0 : y) : (y) => y;
   }
 
+  /**
+   * How far the drawn wave lifts the strip at (x, z) [m]: 0 up to the exit (x = 0) and inside the bite, the wave's
+   * height (both edges up together: |z|) times the exaggeration past it, faded in over the first pitch
+   */
+  lift(x: number, z: number): number {
+    const w = this.wave;
+    if (!w || x <= 0) return 0;
+    const t = Math.min(1, x / w.pitch);
+    return w.scale * waveHeight(w.shape, x, Math.abs(z) / w.halfWidth, w.pitch) * t * t * (3 - 2 * t);
+  }
+
   private outline(project: (x: number, y: number, z: number, out: Float64Array) => void, face: Face, sy: number, sz: number): void {
     const ctx = this.ctx;
     const clipY = this.clipY();
@@ -431,7 +450,7 @@ export class SolidView {
           pen = false;
           continue;
         }
-        project(pos[3 * v], clipY(sy * pos[3 * v + 1]), sz * pos[3 * v + 2], pr);
+        project(pos[3 * v], clipY(sy * pos[3 * v + 1]) + this.lift(pos[3 * v], pos[3 * v + 2]), sz * pos[3 * v + 2], pr);
         if (pen) ctx.lineTo(pr[0], pr[1]);
         else ctx.moveTo(pr[0], pr[1]);
         pen = true;
@@ -576,7 +595,7 @@ export class SolidView {
       ctx.strokeStyle = crack ? '#c23b22' : '#8d5a33';
       ctx.setLineDash(crack ? [4, 3] : [2, 2]);
       for (const sz of this.mirrors()) {
-        project(t.state.x, t.state.y, sz * (t.state.z ?? 0), pr);
+        project(t.state.x, t.state.y + this.lift(t.state.x, t.state.z ?? 0), sz * (t.state.z ?? 0), pr);
         ctx.beginPath();
         ctx.arc(pr[0], pr[1], crack ? 9 : 7, 0, Math.PI * 2);
         ctx.stroke();
@@ -591,16 +610,16 @@ export class SolidView {
     if (!t || !this.geometry) return null;
     const r = this.canvas.getBoundingClientRect();
     const pr = new Float64Array(3);
-    this.projector()(t.state.x, t.state.y, this.mirrors()[0] * (t.state.z ?? 0), pr);
+    this.projector()(t.state.x, t.state.y + this.lift(t.state.x, t.state.z ?? 0), this.mirrors()[0] * (t.state.z ?? 0), pr);
     return { x: r.left + pr[0], y: r.top + pr[1] };
   }
 
-  /** Client coordinates of a point of the strip's frame [m] (headless checks read it), or null when nothing is drawn. */
+  /** Client coordinates of a point of the strip's frame [m] (headless checks read it; lifted by the drawn wave as the strip is), or null when nothing is drawn. */
   screenOfPoint(x: number, y: number, z: number): { x: number; y: number } | null {
     if (!this.geometry) return null;
     const r = this.canvas.getBoundingClientRect();
     const pr = new Float64Array(3);
-    this.projector()(x, y, z, pr);
+    this.projector()(x, y + this.lift(x, z), z, pr);
     return { x: r.left + pr[0], y: r.top + pr[1] };
   }
 

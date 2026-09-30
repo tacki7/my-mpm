@@ -3,8 +3,11 @@
 //                        [--tb 0] [--tf 0] [--plane-strain] [--full] [--max 200000] [--json]
 //                        [--length steady] [--stands 3] [--handoff done|steady|crop]
 //                        [--flatten hitchcock] [--rollE 206] [--control reduction] [--bend <barrel mm> [--span <mm>]] [--crown <µm>]
-//                        [--threads N]
+//                        [--threads N] [--flat-in [--flat-pitch 1] [--flat-latent]]
 // --full: the whole thickness with both rolls (the quarter model, y ≥ 0 with the top roll, without).
+// --flat-in: a tandem's later stands take the strip wavy as the stand before's flatness leaves it (SolidSettings.flatIn;
+// they are solved through the whole thickness), the waves' pitch --flat-pitch times the width, --flat-latent ignoring
+// the insensitive band (every difference of elongation a wave).
 // --threads N: the step by a team of N threads (src/mpm/solid/team.ts on worker_threads; this thread is one of them).
 // --length steady: the strip as long as the steady looks need (--L is not used). --stands: a tandem, every stand
 // the same condition, the strip carried from stand to stand (src/mpm/solid/tandem3.ts).
@@ -35,7 +38,7 @@ if (has('mat')) base.material = { ...MATERIALS[opt('mat')] };
 if (has('damage')) base.damage.model = opt('damage');
 base.numerics.cellsThrough = +opt('cells', 4);
 if (has('ms')) base.numerics.massScale = +opt('ms');
-const P = solidParams(base, { width: +opt('W', 8) * 1e-3, planeStrain: has('plane-strain'), ...(has('full') ? { fullThickness: true } : {}), ...(has('bend') ? { rollBend: { barrel: +opt('bend') * 1e-3, span: +opt('span', 0) * 1e-3 } } : {}), ...(has('crown') ? { crownIn: +opt('crown') * 1e-6 } : {}) });
+const P = solidParams(base, { width: +opt('W', 8) * 1e-3, planeStrain: has('plane-strain'), ...(has('full') ? { fullThickness: true } : {}), ...(has('bend') ? { rollBend: { barrel: +opt('bend') * 1e-3, span: +opt('span', 0) * 1e-3 } } : {}), ...(has('crown') ? { crownIn: +opt('crown') * 1e-6 } : {}), ...(has('flat-in') ? { flatIn: { pitch: +opt('flat-pitch', 1), ...(has('flat-latent') ? { ignoreBand: true } : {}) } } : {}) });
 const json = has('json');
 const maxSteps = +opt('max', 400000);
 
@@ -112,6 +115,8 @@ if (tandem.stands > 1) {
     rollRadius_mm: s.rollRadius * 1e3,
     gap_mm: s.gap * 1e3,
     rollsSettled: s.rollsSettled,
+    fullThickness: s.fullThickness,
+    entryWave: s.entryWave && { kind: s.entryWave.shape.kind, height_um: 2 * s.entryWave.amplitude * 1e6, pitch_mm: s.entryWave.pitch * 1e3, steepness: s.entryWave.shape.steepness },
     thicknessOut_mm: s.thicknessOut * 1e3,
     widthOut_mm: s.widthOut * 1e3,
     massLost: s.massLost,
