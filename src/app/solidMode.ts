@@ -105,7 +105,7 @@ interface NumberField {
 }
 
 const NUMBERS: NumberField[] = [
-  { key: 'width', group: 'strip', query: 'W3', label: '板幅', unit: 'mm', step: 1, min: 2, max: 200, scale: mm, hint: '解くのは 1/4（板幅と板厚の中央で鏡映。「板厚の全体を解く」で上下の両方）。時間は板幅に比例: 8 mm で約 2.5 分、40 mm で約 14 分、200 mm は 1 時間以上' },
+  { key: 'width', group: 'strip', query: 'W3', label: '板幅', unit: 'mm', step: 1, min: 2, max: 2000, scale: mm, hint: '解くのは 1/4（板幅と板厚の中央で鏡映。「板厚の全体を解く」で上下の両方）。時間とメモリは板幅に比例: 8 mm で約 2.5 分、40 mm で約 14 分、200 mm は 1 時間以上（M2・1 スレッド）。2000 mm は 1 スレッドで 10 時間以上・約 2 GB（スレッドごとに格子の写し約 1 GB が加わる）なので、別の機械の GPU か多いコアで' },
   { key: 'length', group: 'strip', query: 'L3', label: '板の長さ', unit: 'mm', step: 1, min: 6, max: 40, scale: mm, hint: '定常の読みには 12 mm ほど要る。「板の長さの取り方」が「定常状態になるまで」なら自動' },
   { key: 'cells', group: 'strip', query: 'cells3', label: '板厚方向のセル数', unit: '', step: 2, min: 4, max: 8, scale: 1, hint: '偶数。4 で約 2〜3 分、6 で約 14 分' },
   { key: 'crown', group: 'strip', query: 'crown3', label: '入側の板クラウン', unit: 'µm', step: 5, min: -500, max: 500, scale: 1e-6, hint: '板幅の中央の板厚（h0）から端の板厚を引いた差。幅方向に 2 次曲線。負なら中央が薄い。板厚の半分まで' },

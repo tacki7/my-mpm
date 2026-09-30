@@ -23,7 +23,7 @@ export const PLAN_SETTINGS: {
   int?: true;
   hint?: string;
 }[] = [
-  { key: 'width', query: 'W', label: '板幅', unit: 'mm', step: 1, min: 2, max: 200, scale: mm, group: 'width' },
+  { key: 'width', query: 'W', label: '板幅', unit: 'mm', step: 1, min: 2, max: 2000, scale: mm, group: 'width' },
   { key: 'cells', query: 'wcells', label: '板幅方向のセル数（半幅）', unit: '', step: 1, min: 4, max: 100, scale: 1, group: 'width', int: true, hint: '多いほど細かいが遅い（10 セル・板長 28 mm で 1 回 5 秒ほど）' },
   { key: 'notch', query: 'notch', label: '端の切り欠き（半径）', unit: 'mm', step: 0.1, min: 0, max: 5, scale: mm, group: 'width', hint: '板の長さの中ほどの端に半円の切り欠き。0 で無し。板幅の 1/4 まで' },
   { key: 'edgeAmount', query: 'escatter', label: 'ばらつきの大きさ', unit: '%', step: 1, min: 0, max: 50, scale: 0.01, group: 'edge', hint: '端の帯の延性を 1 −（この割合まで）倍する。0 で無し（既定）' },
