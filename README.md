@@ -239,6 +239,7 @@ npm run preview  # ビルドしたものを COOP / COEP 付きで配る（3 次�
 - [docs/validation.md](docs/validation.md) — 検証値と測定条件
 - [docs/presets.md](docs/presets.md) — 名前付きの条件と調整の状態
 - [docs/design.md](docs/design.md) — 画面のデザイン（ミルシートを下敷きにした配色と文字）
+- [docs/investigation-2026-09-30.md](docs/investigation-2026-09-30.md) — 調査報告（ロールの撓み・長手方向の洗濯板の原因・速度とメモリ・物理の妥当性・不具合の一覧）
 
 ## 参考文献
 
