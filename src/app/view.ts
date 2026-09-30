@@ -498,6 +498,14 @@ export class BiteView {
     ctx.restore();
   }
 
+  /**
+   * Forget the stamps pressed so far: a new run (やり直す) presses its own again. The keys are a crack's id and time,
+   * which the same conditions give again (the ids start at 0 in every Sim and the run is deterministic).
+   */
+  clearStamps(): void {
+    this.stampBorn.clear();
+  }
+
   /** Press every stamp again (headless checks capture the moment). */
   pressAgain(): void {
     const now = reducedMotion() ? performance.now() - PRESS_MS : performance.now();

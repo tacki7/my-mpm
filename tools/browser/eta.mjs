@@ -112,8 +112,8 @@ try {
     between(Math.max(...e.late), 0, 1.0, `tandem, handoff ${handoff}: the worst of them`);
   }
 
-  // ── the plan view
-  await c.navigate(page('?view=plan&W=20'));
+  // ── the plan view (20 cells across the half width: the default 10 is over in under 2 s, before any estimate is shown)
+  await c.navigate(page('?view=plan&W=20&wcells=20'));
   await c.waitFor('window.__mpm?.plan?.ready', 30000);
   await c.evaluate(sampler('__mpm.plan', '__mpm.plan.done'));
   await click('run');

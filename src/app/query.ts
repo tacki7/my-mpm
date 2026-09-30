@@ -72,8 +72,9 @@ export function applyQuery(base: SimParams, q: URLSearchParams): SimParams {
   num('ms', (v) => (p.numerics.massScale = v));
   num('f0', (v) => (p.damage.gtn.f0 = v));
   num('fc', (v) => (p.damage.gtn.fc = v));
+  // a key of Object.prototype (mat=constructor) is a function, not a material
   const mat = q.get('mat');
-  if (mat && MATERIALS[mat]) p.material = { ...MATERIALS[mat] };
+  if (mat && Object.hasOwn(MATERIALS, mat)) p.material = { ...MATERIALS[mat] };
   const dm = q.get('damage') as DamageModel | null;
   if (dm && DAMAGE.includes(dm)) p.damage.model = dm;
   const y = q.get('yield') as YieldModel | null;
@@ -252,7 +253,9 @@ function merge(dst: Obj, src: unknown, path: string): void {
     const full = path ? `${path}.${k}` : k;
     const t = Object.prototype.hasOwnProperty.call(dst, k) ? dst[k] : undefined;
     if (isObj(t)) merge(t, v, full);
-    else if (RULES[full] && allowed(RULES[full], v)) dst[k] = v;
+    // a top-level key of Object.prototype (toString, valueOf) is not a rule (it would throw in allowed, and
+    // the leaves merged before it would stay)
+    else if (Object.hasOwn(RULES, full) && allowed(RULES[full], v)) dst[k] = v;
   }
 }
 

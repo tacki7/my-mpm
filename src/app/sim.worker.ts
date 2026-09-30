@@ -287,12 +287,31 @@ function finished(): boolean {
   return t.done;
 }
 
+/**
+ * The longest the loop computes before coming back to its messages: a pause, a field, a pick or an init waits
+ * no longer than this however long the interval between frames (5 s at the slowest setting). A frame is still
+ * everything computed since the one before: the slices of a frame add up to the interval.
+ */
+const SLICE_MS = 100;
+/** when the last frame went out, and the computing time and steps since (the frame's ms per step) */
+let frameAt = 0;
+let sliceMs = 0;
+let sliceSteps = 0;
+function startFrame(): void {
+  frameAt = performance.now();
+  sliceMs = 0;
+  sliceSteps = 0;
+}
+
 function loop(): void {
   timer = null;
   if (!sim || !running) return;
   const t0 = performance.now();
+  // the frame's moment: the interval after the last one, less the frame's own cost (as it was)
+  const due = frameAt + Math.max(10, frameMs - 6);
+  const until = Math.min(t0 + SLICE_MS, due);
   let steps = 0;
-  while (performance.now() - t0 < Math.max(10, frameMs - 6)) {
+  do {
     const chunk = stopAfter === null ? 20 : Math.min(20, stopAfter - passStep());
     const t = tandem!;
     for (let k = 0; k < chunk; k++) {
@@ -307,13 +326,20 @@ function loop(): void {
     steps += Math.max(0, chunk);
     if (stopAfter !== null && passStep() >= stopAfter) break;
     if (tandem!.stands > 1 && tandem!.done) break;
-  }
-  if (steps) msPerStep = (performance.now() - t0) / steps;
+  } while (performance.now() < until);
+  const now = performance.now();
+  sliceMs += now - t0;
+  sliceSteps += steps;
   // stop there once; "続ける" runs on from it
   const reached = stopAfter !== null && passStep() >= stopAfter;
   if (reached) stopAfter = null;
   if (finished() || reached) running = false;
-  frame();
+  // the frame at its moment, or at once when the run stops
+  if (!running || now >= due) {
+    if (sliceSteps) msPerStep = sliceMs / sliceSteps;
+    frame();
+    startFrame();
+  }
   if (running) timer = setTimeout(loop, 0);
 }
 
@@ -343,11 +369,13 @@ self.onmessage = (e: MessageEvent<ToWorker>) => {
         (self as unknown as { __sim: Sim }).__sim = sim;
         post({ type: 'ready', geometry: geometryOf(sim), sheetLength: sim.params.rolling.sheetLength });
         frame();
+        startFrame();
         break;
       }
       case 'run':
         if (sim && !running) {
           running = true;
+          startFrame();
           loop();
         }
         break;

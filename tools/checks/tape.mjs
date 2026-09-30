@@ -39,4 +39,21 @@ const frame = (i, bytes = 1000) => ({ i, bytes });
   t.push(frame(1));
   ok(t.frames.map((f) => f.i).join(',') === '0,1', 'and it takes every frame again', t.frames.map((f) => f.i).join(','));
 }
+{
+  // the bytes limit thins at any count, even ones too: the frame just pushed then goes with the odd ones, but it is
+  // still the end of the tape (the video and the playback end at the run's last state, not the frame before)
+  const t = new Tape((f) => f.bytes, 1000, 3500);
+  for (let i = 0; i < 4; i++) t.push(frame(i, 1000));
+  ok(t.frames.map((f) => f.i).join(',') === '0,2,3', 'thinned at 4 frames (even): 0 and 2 kept, the 4th still the end', t.frames.map((f) => f.i).join(','));
+  for (let i = 4; i < 7; i++) t.push(frame(i, 1000));
+  ok(t.frames[t.length - 1].i === 6, 'thinned again at 6 (0, 2, 4, 6 → 0, 4): the 7th is still the end', t.frames.map((f) => f.i).join(','));
+  // every push, whether it thins or not, leaves the pushed frame at the end
+  const u = new Tape((f) => f.bytes, 7, 1e9); // an odd maxFrames thins at 8: even
+  let ends = true;
+  for (let i = 0; i < 200; i++) {
+    u.push(frame(i));
+    if (u.frames[u.length - 1].i !== i) ends = false;
+  }
+  ok(ends && u.length <= 8, 'with an odd maxFrames (7) the pushed frame is the end after every push', `${u.length} frames, ${u.frames.map((f) => f.i).join(',')}`);
+}
 done();
