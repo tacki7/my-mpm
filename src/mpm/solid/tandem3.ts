@@ -16,7 +16,7 @@
 // One stand is a plain pass: the same steps and looks as Sim3 with a SolidSampler.
 import { elasticConstants } from '../material.ts';
 import { cloneParams } from '../params.ts';
-import { MAX_STANDS, type Handoff, type TandemStop } from '../tandem.ts';
+import { MAX_STANDS, RAMP_SHARE_MAX, type Handoff, type TandemStop } from '../tandem.ts';
 import { Sim3, solidScales, type Sim3Options, type Solid3Params } from './sim3.ts';
 import type { Team } from './team.ts';
 import { READ_STEPS, SolidSampler, type SolidLook, type SolidSteady } from './steady.ts';
@@ -80,12 +80,13 @@ export function steadyLength3(P: Solid3Params): number {
   // (Sim3.gaugeWait)
   const settle = s.rollsAdjusted ? (r.gapControl === 'reduction' ? 2 : 1) * s.contactLength : 0;
   const base = s.contactLength + out + settle + look + r.h0;
-  // a front tension ramps up after the head is out, and 'steady' waits for it (tandem.ts steadyLength)
+  // a front tension ramps up after the head is out, and 'steady' waits for it (tandem.ts steadyLength: the ramp's
+  // stretch at most RAMP_SHARE_MAX of the strip, or the length ran away and went negative with a large mass scaling)
   if (r.frontTension === 0) return base;
   if (r.tensionRamp && r.tensionRamp > 0) return base + r.tensionRamp * s.vIn;
   const el = elasticConstants(P.material);
   const c = Math.sqrt((el.K + (4 / 3) * el.G) / (P.material.rho * P.numerics.massScale));
-  return base / (1 - (10 / c) * s.vIn);
+  return base / (1 - Math.min((10 / c) * s.vIn, RAMP_SHARE_MAX));
 }
 
 /** The params with lengthMode 'steady' carried out (a copy; sheetLength = steadyLength3 up to a whole 0.1 mm). */
