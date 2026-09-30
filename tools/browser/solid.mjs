@@ -142,6 +142,20 @@ try {
   await painted();
   const rp1 = await c.evaluate('JSON.parse(JSON.stringify({ at: __mpm.solid.replay.at, step: __mpm.solid.frameShown.diag.step, phase: document.getElementById("solid-phase").textContent, clock: document.getElementById("clock").textContent, head: Math.max(...__mpm.solid.frameShown.faces[0].pos.filter((v, i) => i % 3 === 0 && !Number.isNaN(v))) }))');
   ok(rp1.at === 0 && rp1.step === 0 && rp1.phase.startsWith('再生 1 /') && rp1.clock.startsWith('t = 0.00 ms') && rp1.head < 0, '巻き戻す shows the first frame: step 0, the strip before the rolls, the clock and the status say so', `${rp1.phase}; ${rp1.clock}; head at ${(rp1.head * 1e3).toFixed(1)} mm`);
+  // the first frame is from before the pass was steady: the width graphs still draw (the pass's reading at its end)
+  // and their tag says so; a frame from the steady part draws that frame's means and the tag says only when
+  const inkOn = (id) => c.evaluate(`(() => { const cv = document.getElementById('${id}'); const d = cv.getContext('2d').getImageData(0, 0, cv.width, cv.height).data; let n = 0; for (let i = 0; i < d.length; i += 4) if (d[i + 3] > 0 && d[i] + d[i + 1] + d[i + 2] < 300) n++; return n; })()`);
+  const tagOf = () => c.evaluate(`document.querySelector('#solid-stage .fig-when').textContent`);
+  // an empty width graph still has its axes and a note: the legend (the series' names) tells a drawn one apart
+  const legendOf = () => c.evaluate(`[...document.getElementById('solid-chart-width').parentElement.querySelectorAll('.chart-legend .item')].map((e) => e.textContent)`);
+  const early = { ink: await inkOn('solid-chart-width'), legend: await legendOf(), tag: await tagOf(), steady: await c.evaluate('__mpm.solid.frameShown.diag.steady?.looks ?? null') };
+  ok(early.steady === null && early.legend.length > 0 && early.ink > 100 && /^再生 1 枚目（0\.00 ms）の時点。この枚ではまだ定常でない: 圧延の終わりの読み$/.test(early.tag), "before the pass was steady the width graph draws the pass's reading at its end (a legend, ink), and the tag says so", `legend ${JSON.stringify(early.legend)}, ${early.ink} px, "${early.tag}"`);
+  const iSteady = await c.evaluate('(() => { const r = __mpm.solid.replay; for (let i = 0; i < r.length - 1; i++) { r.seek(i); if (__mpm.solid.frameShown.diag.steady?.looks > 0) return i; } return -1; })()');
+  await painted();
+  const onSteady = { ink: await inkOn('solid-chart-width'), legend: await legendOf(), tag: await tagOf(), at: await c.evaluate('__mpm.solid.replay.at') };
+  ok(iSteady > 0 && onSteady.at === iSteady && onSteady.legend.length > 0 && onSteady.ink > 100 && /^再生 \d+ 枚目（[\d.]+ ms）の時点$/.test(onSteady.tag), "a frame from the steady part draws that frame's means; the tag says only the frame", `frame ${iSteady}, legend ${JSON.stringify(onSteady.legend)}, ${onSteady.ink} px, "${onSteady.tag}"`);
+  await c.evaluate('__mpm.solid.replay.seek(0)');
+  await painted();
   await click('#solid-play');
   await c.waitFor('__mpm.solid.replay.playing && __mpm.solid.replay.at >= 12', 10000);
   await click('#solid-play');
