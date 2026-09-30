@@ -950,7 +950,7 @@ export class Sim3 {
       const ix = Math.floor(idx / (nyN * nzN));
       const iz = idx % nzN;
       accFz[iz] += fc + ff;
-      if (this.beam) stepFz[iz] += fc;
+      if (this.beam) stepFz[iz] += fc + ff; // the beam carries both stages' force, as the reported load does
       const b = ix - binCol0;
       if (b >= 0 && b < nBinsX) accMap[b * nzN + iz] += fc + ff;
     }
@@ -1704,10 +1704,11 @@ export class Sim3 {
   }
 
   private followNodes(): void {
-    const { h, ox, nyN, nzN, dt, accFz, accMap, binCol0, nBinsX, gyOff, fullThickness: full } = this;
+    const { h, ox, nyN, nzN, dt, accFz, accMap, stepFz, binCol0, nBinsX, gyOff, fullThickness: full } = this;
     const { vx: gvx, vy: gvy, vz: gvz, m: gm, folN: gfolN, folD: gfolD, slipX: gslipX, slipY: gslipY, slipZ: gslipZ } = this.G;
     const mu = this.params.rolling.mu;
     const { cy } = this.roll;
+    const bending = this.beam !== null;
     const invDt = 1 / dt;
     const slab = nyN * nzN;
     let fyAdd = 0;
@@ -1752,6 +1753,7 @@ export class Sim3 {
       fyAdd += fy;
       tqAdd += -(rx * fy - ry * fx);
       accFz[iz] += f;
+      if (bending) stepFz[iz] += f; // the beam's load: this stage's share too (as the reported load and byZ)
       const b = ix - binCol0;
       if (b >= 0 && b < nBinsX) accMap[b * nzN + iz] += f;
     }

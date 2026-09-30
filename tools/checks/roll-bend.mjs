@@ -56,13 +56,22 @@ function pass(rollBend) {
   const sim = new Sim3(solidParams(P0, { width: 2e-3, planeStrain: false, ...(rollBend ? { rollBend } : {}) }));
   const sampler = new SolidSampler();
   let looks = 0;
+  let beamForce = 0; // the beam's load over the steady looks (the low-passed q(z) integrated over the width)
   while (sim.step < 40000) {
     for (let k = 0; k < READ_STEPS; k++) sim.advance();
     const look = sampler.look(sim);
-    if (look.phase === 'steady') looks++;
+    if (look.phase === 'steady') {
+      looks++;
+      if (rollBend) {
+        // bendQ[0] is the whole mid-node force / h (both halves of the width); the trapezoid counts half of it
+        let half = 0.5 * sim.bendQ[0] * sim.h;
+        for (let k = 1; k < sim.bendQ.length; k++) half += sim.bendQ[k] * sim.h;
+        beamForce += 2 * half;
+      }
+    }
     if (looks >= 4 || look.phase === 'done' || look.phase === 'stalled') break;
   }
-  return { sim, st: sampler.means(sim), phase: sim.phase() };
+  return { sim, st: sampler.means(sim), phase: sim.phase(), beamForce: looks ? beamForce / looks : null };
 }
 
 let refused = false;
@@ -95,6 +104,9 @@ if (bent.st && rigid.st) {
   near(atEdge, bent.sim.bendAt(1e-3), 1e-9, "the profile at 1 mm is the model's deflection at the strip's edge (both linear between the same columns)");
   const { byZ, dz: sdz } = bent.st.rollBend;
   ok(byZ.length === BEND_SAMPLES && sdz === dz && byZ[0] === centre && Math.abs(byZ[BEND_SAMPLES - 1]) < 1e-12, 'the steady mean carries the profile: 121 points, its first the centre, 0 at the support', `${byZ.length}, ${byZ[0]} vs ${centre}`);
+  // the beam sees the whole roll force: the grid contact's and the follow stage's (until 2026-09-30 the follow
+  // stage's 7.5 % was missing here), the low pass lagging the grid's ripple by a percent or two
+  near(bent.beamForce, bent.st.force, 0.03, "the beam's load is the roll force (both contact stages), within the low pass's lag");
 }
 
 done();
