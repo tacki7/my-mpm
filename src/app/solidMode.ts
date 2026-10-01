@@ -24,6 +24,7 @@ import { Explorer, standColor } from './explorer.ts';
 import { SOLID_FIELDS, SolidView, solidFieldInfo, type ViewPreset } from './solidView.ts';
 import { Tape } from './tape.ts';
 import { FLAT_LOOK, FLAT_PITCHES, FLAT_SCALES, FlatView } from './flatView.ts';
+import { FLAT_NAMES } from '../mpm/solid/flatShape.ts';
 import { COMPUTE_CORES, COMPUTE_GPU, COMPUTE_THREADS, REMOTE_NAME, gpuName, placeLabel, remote, remoteGpu, remoteWorker } from './remote.ts';
 import { recordVideo, videoSupported, type VideoResult } from './solidVideo.ts';
 import { download } from './export.ts';
@@ -86,14 +87,19 @@ export interface SolidPageSettings {
   compute: Compute;
   /** the threads the CPU's step runs on (1 .. the machine's cores; a team of workers on SharedArrayBuffers, 1 where the page is not cross-origin isolated) */
   threads: number;
+  /** a tandem's later stands take the strip wavy, as the stand before's flatness leaves it (SolidSettings.flatIn): the
+   *  waves' pitch over the strip's width, and whether the insensitive band is ignored (every difference of elongation a wave) */
+  flatIn: boolean;
+  flatPitch: number;
+  flatLatent: boolean;
 }
 
 export type BendSupport = 'barrel' | 'bearing';
 
 interface NumberField {
-  key: 'width' | 'length' | 'cells' | 'crown' | 'barrel' | 'span';
+  key: 'width' | 'length' | 'cells' | 'crown' | 'barrel' | 'span' | 'flatPitch';
   /** which fieldset the row is in */
-  group: 'strip' | 'bend';
+  group: 'strip' | 'bend' | 'flat';
   query: string;
   label: string;
   unit: string;
@@ -111,12 +117,13 @@ const NUMBERS: NumberField[] = [
   { key: 'crown', group: 'strip', query: 'crown3', label: '入側の板クラウン', unit: 'µm', step: 5, min: -500, max: 500, scale: 1e-6, hint: '板幅の中央の板厚（h0）から端の板厚を引いた差。幅方向に 2 次曲線。負なら中央が薄い。板厚の半分まで' },
   { key: 'barrel', group: 'bend', query: 'barrel3', label: 'バレル長', unit: 'mm', step: 10, min: 2, max: 5000, scale: mm, hint: 'ロールの胴の長さ。板幅の 1.5 倍以上（幅広がりの余裕）。板は胴の中央' },
   { key: 'span', group: 'bend', query: 'span3', label: '支点間距離', unit: 'mm', step: 10, min: 2, max: 6000, scale: mm, hint: '軸受の中心の間。バレル長より長く、胴の外に張り出した分だけ撓みが増える' },
+  { key: 'flatPitch', group: 'flat', query: 'flatpitch3', label: '波のピッチ', unit: '× 板幅', step: 0.1, min: 0.1, max: 4, scale: 1, hint: '平坦度にはピッチが無い（座屈解析で決まる量）ので与える。「平坦度の形」の絵のピッチと同じ意味。板の長さ（定常の長さは十数 mm）に波が収まるよう、広い板では 0.1〜0.2' },
 ];
 /** the barrel is at least this many times the strip's width */
 const BARREL_OVER = 1.5;
 const FIELD = Object.fromEntries(NUMBERS.map((f) => [f.key, f])) as Record<NumberField['key'], NumberField>;
 
-const DEFAULTS: SolidPageSettings = { width: 8 * mm, length: 12 * mm, cells: 4, planeStrain: false, full: false, crown: 0, bend: false, barrel: 300 * mm, support: 'barrel', span: 400 * mm, compute: 'cpu', threads: 1 };
+const DEFAULTS: SolidPageSettings = { width: 8 * mm, length: 12 * mm, cells: 4, planeStrain: false, full: false, crown: 0, bend: false, barrel: 300 * mm, support: 'barrel', span: 400 * mm, compute: 'cpu', threads: 1, flatIn: false, flatPitch: 1, flatLatent: false };
 
 /** the machine that computes has WebGPU (remote.ts; the worker asks for the device, here only for the select) */
 export const HAS_WEBGPU = COMPUTE_GPU;
@@ -132,12 +139,29 @@ function checked(s: SolidPageSettings): SolidPageSettings {
   // the strip fits on the barrel with room for its spread (a tandem's later stands are wider), and the bearings are beyond the barrel's ends
   const barrel = clamp(s.barrel, FIELD.barrel, BARREL_OVER * width);
   const span = clamp(s.span, FIELD.span, barrel);
-  return { width, length: clamp(s.length, FIELD.length), cells, planeStrain: s.planeStrain, full: s.full === true, crown: clamp(s.crown, FIELD.crown), bend: s.bend, barrel, support: s.support === 'bearing' ? 'bearing' : 'barrel', span, compute: s.compute === 'gpu' ? 'gpu' : 'cpu', threads: Math.min(MAX_THREADS, Math.max(1, Math.round(s.threads) || 1)) };
+  return {
+    width, length: clamp(s.length, FIELD.length), cells, planeStrain: s.planeStrain, full: s.full === true, crown: clamp(s.crown, FIELD.crown), bend: s.bend, barrel, support: s.support === 'bearing' ? 'bearing' : 'barrel', span,
+    compute: s.compute === 'gpu' ? 'gpu' : 'cpu', threads: Math.min(MAX_THREADS, Math.max(1, Math.round(s.threads) || 1)),
+    flatIn: s.flatIn === true, flatPitch: clamp(Number.isFinite(s.flatPitch) ? s.flatPitch : DEFAULTS.flatPitch, FIELD.flatPitch), flatLatent: s.flatLatent === true,
+  };
 }
 
 /** what the solver is told about the roll's bending: nothing with a rigid roll */
 export function rollBendOf(s: SolidPageSettings): SolidSettings['rollBend'] {
   return s.bend ? { barrel: s.barrel, ...(s.support === 'bearing' ? { span: s.span } : {}) } : undefined;
+}
+
+/** the 3D model's settings from the page's, for these shared conditions (the crown within half the thickness) */
+export function solidSettingsOf(s: SolidPageSettings, P: SimParams): SolidSettings {
+  const crown = Math.max(-0.5 * P.rolling.h0, Math.min(0.5 * P.rolling.h0, s.crown));
+  return {
+    width: s.width,
+    planeStrain: s.planeStrain,
+    ...(s.full ? { fullThickness: true } : {}),
+    rollBend: rollBendOf(s),
+    ...(crown !== 0 ? { crownIn: crown } : {}),
+    ...(s.flatIn ? { flatIn: { pitch: s.flatPitch, ...(s.flatLatent ? { ignoreBand: true } : {}) } } : {}),
+  };
 }
 
 function settingsOf(q: URLSearchParams): SolidPageSettings {
@@ -150,6 +174,8 @@ function settingsOf(q: URLSearchParams): SolidPageSettings {
   s.full = q.get('full3') === '1';
   s.bend = q.get('bend3') === '1';
   s.support = q.get('support3') === 'bearing' ? 'bearing' : 'barrel';
+  s.flatIn = q.get('flatin3') === '1';
+  s.flatLatent = q.get('flatlatent3') === '1';
   s.compute = q.get('gpu3') === '1' ? 'gpu' : 'cpu';
   const th = parseInt(q.get('threads3') ?? '', 10);
   if (Number.isInteger(th) && th >= 1) s.threads = th;
@@ -222,6 +248,10 @@ export class SolidMode {
   private computeNote!: HTMLElement;
   private bendBox!: HTMLInputElement;
   private supportSelect!: HTMLSelectElement;
+  private flatInBox!: HTMLInputElement;
+  private flatLatentBox!: HTMLInputElement;
+  /** 平坦度の波 drawn on the strip out of the rolls in the picture (SolidView.wave), as 平坦度の形 draws them */
+  private waveOn = true;
   private readonly checks: (() => void)[] = [];
   private readonly tabButtons: HTMLButtonElement[] = [];
   private shown: SolidPageSettings | null = null;
@@ -367,6 +397,28 @@ export class SolidMode {
     supportBox.append(this.supportSelect);
     supportRow.append(supportBox, el('span', 'hint', '単純支持。バレルの端なら撓みは最も小さく見積もる側。実機は軸受で支えるので、その距離が分かればこちら'));
     bendFs.append(supportRow);
+    // a tandem's later stands take the strip as the stand before's flatness leaves it
+    const flatFs = el('fieldset', 'group dim3-only');
+    flatFs.append(el('legend', undefined, 'タンデムの入側の平坦度（3 次元）'));
+    const flatRow = el('label', 'field check');
+    this.flatInBox = el('input');
+    this.flatInBox.type = 'checkbox';
+    this.flatInBox.name = 'solid-flat-in';
+    this.flatInBox.addEventListener('change', () => {
+      this.lockFlat();
+      this.o.onEdit();
+    });
+    flatRow.append(this.flatInBox, el('span', undefined, '前のスタンドの平坦度不良を次のスタンドの板の形にする'));
+    flatRow.title = '前のスタンドの定常の平坦度が形状不感帯を超えていれば（「平坦度の形」の判定）、次のスタンドの板を耳波・腹伸びの波の形で作り、波になった伸びのぶん残留応力を解く。波は板厚の中央の面から外れるので、2 スタンド目からは板厚の全体（ロール 2 本）を解く（点が 2 倍で時間も 2 倍）';
+    flatFs.append(flatRow);
+    const latentRow = el('label', 'field check');
+    this.flatLatentBox = el('input');
+    this.flatLatentBox.type = 'checkbox';
+    this.flatLatentBox.name = 'solid-flat-latent';
+    this.flatLatentBox.addEventListener('change', () => this.o.onEdit());
+    latentRow.append(this.flatLatentBox, el('span', undefined, '不感帯を無視して伸び差の全部を波に'));
+    latentRow.title = '座屈の判定（形状不感帯 −40(h/B)² 〜 80(h/B)²、B/h ≤ 50 では波にならない）を外し、伸び差の全部が λ = (2/π)√Δε の波になったとして板を作る。狭い板（標準条件）で波の持ち込みを見る用';
+    flatFs.append(latentRow);
     for (const f of NUMBERS) {
       const row = el('label', 'field');
       row.append(el('span', 'field-label', f.label));
@@ -385,7 +437,7 @@ export class SolidMode {
       // the barrel takes the strip, and the bearings are beyond the barrel: the lower ends follow the other inputs
       const lo = () => (f.key === 'barrel' ? Math.max(f.min, BARREL_OVER * (parseFloat(this.inputs.get('width')!.value) || 0)) : f.key === 'span' ? Math.max(f.min, parseFloat(this.inputs.get('barrel')!.value) || f.min) : f.min);
       this.checks.push(checkRange(inp, row, () => [lo(), f.max], f.unit));
-      (f.group === 'bend' ? bendFs : fs).append(row);
+      (f.group === 'bend' ? bendFs : f.group === 'flat' ? flatFs : fs).append(row);
       this.inputs.set(f.key, inp);
     }
     for (const k of ['width', 'barrel'] as const) this.inputs.get(k)!.addEventListener('input', () => this.checks.forEach((c) => c()));
@@ -441,9 +493,10 @@ export class SolidMode {
     fs.append(computeRow, this.computeNote, threadsRow);
     fs.append(el('p', 'hint', 'スタンド数（タンデム）・ロール偏平・圧下率一定・板の長さの取り方は「板とロール」の欄で、2 次元と共通。張力（「潤滑と張力」の欄）も効く: 後方張力は最初から、前方張力は頭端が出てから立ち上げ、定常はそれを待つ。GTN・亀裂の面は 3 次元には無い（亀裂になった点は応力を失うだけで、面は開かない）'));
     bendFs.append(el('p', 'hint', 'ロールの径はロール半径、ヤング率は「ロール偏平」のロールのヤング率。片側だけの撓み（曲げ + せん断）を板の中央と端で結果に出す。R 100 mm・板幅 8 mm ではおよそ 1 µm で、細いロールや広い板で効く'));
+    flatFs.append(el('p', 'hint', 'スタンド数が 2 以上のときに効く。前のスタンドの板が平坦（伸び差が不感帯の中）なら形はそのままで、残留応力だけを引き継ぐ（これは前から）。波の高さと持ち込んだ形は「スタンドごとの結果」の「入側の波」に出て、絵の入側の板がその形になる'));
     const note = this.o.panelRoot.querySelector('.note-more') ?? this.o.panelRoot.querySelector('.preset-note');
-    if (note) note.after(fs, bendFs);
-    else this.o.panelRoot.prepend(fs, bendFs);
+    if (note) note.after(fs, bendFs, flatFs);
+    else this.o.panelRoot.prepend(fs, bendFs, flatFs);
     // the rows of the shared panel the 3D model has no use for
     for (const name of NOT_IN_3D) {
       const c = this.o.panelRoot.querySelector(`[name="${name}"]`);
@@ -486,6 +539,15 @@ export class SolidMode {
     this.inputs.get('span')!.closest('label')?.classList.toggle('off', !on || !bearing);
   }
 
+  /** the entry flatness's inputs are off unless the strip is carried wavy */
+  private lockFlat(): void {
+    const on = this.flatInBox.checked;
+    this.flatLatentBox.disabled = !on;
+    this.flatLatentBox.closest('label')?.classList.toggle('off', !on);
+    this.inputs.get('flatPitch')!.disabled = !on;
+    this.inputs.get('flatPitch')!.closest('label')?.classList.toggle('off', !on);
+  }
+
   /** what the worker got: the GPU's kind, or the reason it is on the CPU (nothing for a plain CPU run) */
   private showCompute(g: SolidGeometry): void {
     // on another machine (remote.ts), its name first
@@ -514,8 +576,11 @@ export class SolidMode {
     this.supportSelect.value = s.support;
     this.computeSelect.value = s.compute;
     showNumber(this.threadsInput, s.threads);
+    this.flatInBox.checked = s.flatIn;
+    this.flatLatentBox.checked = s.flatLatent;
     this.lockLength();
     this.lockBend();
+    this.lockFlat();
     this.lockThreads();
     for (const c of this.checks) c();
   }
@@ -532,6 +597,8 @@ export class SolidMode {
     s.full = this.fullBox.checked;
     s.bend = this.bendBox.checked;
     s.support = this.supportSelect.value === 'bearing' ? 'bearing' : 'barrel';
+    s.flatIn = this.flatInBox.checked;
+    s.flatLatent = this.flatLatentBox.checked;
     s.compute = this.computeSelect.value === 'gpu' ? 'gpu' : 'cpu';
     if (edited(this.threadsInput)) {
       const th = parseInt(this.threadsInput.value, 10);
@@ -603,6 +670,11 @@ export class SolidMode {
     rolls.id = 'solid-rolls';
     const whole = toggle('全体を見る', '板の全長を入れて見る（もう一度押すとロールバイトに戻る）', false, (v) => (this.view.fit = v ? 'strip' : 'bite'));
     whole.id = 'solid-whole';
+    const wave = toggle('平坦度の波', '出側の板に、定常の平坦度から読んだ波（「平坦度の形」と同じ形・高さの倍率・ピッチ。模式）を重ねて描く。板が平坦（不感帯の中）なら何も変わらない', true, (v) => {
+      this.waveOn = v;
+      this.syncWave();
+    });
+    wave.id = 'solid-wave';
     const thick = el('label', 'thick-scale');
     thick.append(el('span', undefined, '板厚の倍率'));
     const sel = el('select');
@@ -617,7 +689,7 @@ export class SolidMode {
       this.dirty = true;
     });
     thick.append(sel);
-    tools.prepend(looks, cut, cutY, rolls, whole, thick);
+    tools.prepend(looks, cut, cutY, rolls, whole, wave, thick);
   }
 
   private markLook(id: ViewPreset | null): void {
@@ -724,8 +796,7 @@ export class SolidMode {
     P.rolling.sheetLength = s.length;
     delete P.rolling.stands;
     delete P.rolling.handoff;
-    const crown = Math.max(-0.5 * P.rolling.h0, Math.min(0.5 * P.rolling.h0, s.crown));
-    return { ...P, solid: { width: s.width, planeStrain: s.planeStrain, ...(s.full ? { fullThickness: true } : {}), rollBend: rollBendOf(s), ...(crown !== 0 ? { crownIn: crown } : {}) } };
+    return { ...P, solid: solidSettingsOf(s, P) };
   }
 
   /** the conditions URL of these shared conditions and the panel's 3D settings (the 条件の比較 tab's) */
@@ -746,11 +817,13 @@ export class SolidMode {
     for (const k of ['L', 'cells']) q.delete(k);
     q.set('dim', '3');
     const s = this.settings;
-    for (const f of NUMBERS) if ((f.group === 'strip' && (f.key !== 'crown' || s.crown !== 0)) || (s.bend && (f.key === 'barrel' || s.support === 'bearing'))) q.set(f.query, String(+(s[f.key] / f.scale).toFixed(3)));
+    for (const f of NUMBERS) if ((f.group === 'strip' && (f.key !== 'crown' || s.crown !== 0)) || (s.bend && (f.key === 'barrel' || s.support === 'bearing')) || (s.flatIn && f.group === 'flat')) q.set(f.query, String(+(s[f.key] / f.scale).toFixed(3)));
     if (s.planeStrain) q.set('ps3', '1');
     if (s.full) q.set('full3', '1');
     if (s.bend) q.set('bend3', '1');
     if (s.bend && s.support === 'bearing') q.set('support3', 'bearing');
+    if (s.flatIn) q.set('flatin3', '1');
+    if (s.flatIn && s.flatLatent) q.set('flatlatent3', '1');
     if (s.compute === 'gpu') q.set('gpu3', '1');
     if (s.compute === 'cpu' && s.threads > 1) q.set('threads3', String(s.threads));
     if (this.field !== 'seq') q.set('f3', this.field);
@@ -842,8 +915,7 @@ export class SolidMode {
     this.video?.abort(); // a video being written from the tape: the tape goes
     this.tape.clear();
     this.stopReplay();
-    const crown = Math.max(-0.5 * P.rolling.h0, Math.min(0.5 * P.rolling.h0, this.settings.crown));
-    const solid: SolidSettings = { width: this.settings.width, planeStrain: this.settings.planeStrain, ...(this.settings.full ? { fullThickness: true } : {}), rollBend: rollBendOf(this.settings), ...(crown !== 0 ? { crownIn: crown } : {}) };
+    const solid = solidSettingsOf(this.settings, P);
     this.send({ type: 'init', params: P, solid, stands: P.rolling.stands ?? 1, handoff: P.rolling.handoff ?? 'done', stopAfter: this.stopAfter, compute: this.settings.compute, threads: this.settings.threads });
     this.standTable.update(1, [], 0, false, null, null);
     this.explorer.reset();
@@ -1219,6 +1291,9 @@ export class SolidMode {
       ['最大損傷', d.maxDamage.toFixed(3), '', false],
       ['亀裂になった点', String(d.nFailed), '個', false],
       ['最初の亀裂', c0 ? (c0.t * 1e3).toFixed(2) : '—', 'ms', false],
+      ...(g.entryWave
+        ? ([['入側の波（前のスタンドの平坦度から）', `${FLAT_NAMES[g.entryWave.shape.kind]} 高さ ${num(2 * g.entryWave.amplitude, 1e6, 1)} µm・ピッチ ${num(g.entryWave.pitch, 1e3, 1)} mm`, '', false]] as [string, string, string, boolean][])
+        : []),
       [g.fullThickness ? '粒子数（1/2 モデル: 板厚の全体）' : '粒子数（1/4 モデル）', g.n.toLocaleString(), '個', false],
       ['時間刻み', (g.dt * 1e9).toFixed(1), 'ns', false],
       ['1 ステップの計算時間', f.msPerStep ? f.msPerStep.toFixed(2) : '—', 'ms', false],
@@ -1275,10 +1350,13 @@ export class SolidMode {
     const failed = (this.last?.diag.nFailed ?? 0) > 0;
     const roles = new Set((this.last?.tracks ?? []).map((t) => t.role));
     const ys = this.view.yScale;
+    const g = this.geometry;
+    const full = g ? g.fullThickness : this.settings.full;
+    const wave = this.view.wave;
     const html = `
       <div class="bar" style="background:linear-gradient(90deg,${stops.join(',')})"></div>
       <div class="ends"><span>${fmt(lo)}${unit}</span><span>${info.label}</span><span>${fmt(hi)}${unit}</span></div>
-      <div class="exag">板の表面の色。${this.settings.full ? '解くのは板厚の全体と板幅の半分で、板幅の中央（点線）で鏡映して表示' : '解くのは 1/4 で、板厚と板幅の中央（点線）で鏡映して表示'}${ys !== 1 ? `。板厚方向を ${ys} 倍に拡大（ロールの円弧も）` : ''}${this.view.cut || this.view.cutY ? `。${[this.view.cut ? '板幅の中央' : '', this.view.cutY ? '板厚の中央' : ''].filter(Boolean).join('と')}で切った断面を見せる（${this.view.cutY ? '上の面が板厚の中央' : '手前の面が板幅の中央'}）` : ''}${this.settings.planeStrain ? '。板幅方向を止めた計算（平面ひずみ）' : ''}</div>
+      <div class="exag">板の表面の色。${full ? '解くのは板厚の全体と板幅の半分で、板幅の中央（点線）で鏡映して表示' : '解くのは 1/4 で、板厚と板幅の中央（点線）で鏡映して表示'}${ys !== 1 ? `。板厚方向を ${ys} 倍に拡大（ロールの円弧も）` : ''}${this.view.cut || this.view.cutY ? `。${[this.view.cut ? '板幅の中央' : '', this.view.cutY ? '板厚の中央' : ''].filter(Boolean).join('と')}で切った断面を見せる（${this.view.cutY ? '上の面が板厚の中央' : '手前の面が板幅の中央'}）` : ''}${this.settings.planeStrain ? '。板幅方向を止めた計算（平面ひずみ）' : ''}${wave ? `。出側の板に平坦度の波（${FLAT_NAMES[wave.shape.kind]}、高さ ×${wave.scale}・ピッチ 板幅の ${+(wave.pitch / (2 * wave.halfWidth)).toFixed(2)} 倍、模式）を重ねて描く` : ''}${g?.entryWave ? `。入側の板は前のスタンドの平坦度の波（${FLAT_NAMES[g.entryWave.shape.kind]}）の形で来る` : ''}</div>
       ${failed ? '<div class="failed-key"><span class="swatch"></span>藍墨の面は亀裂になった点</div>' : ''}
       ${roles.has('first-crack') ? '<div class="failed-key"><span class="ring crack"></span>赤の点線の丸は最初の亀裂</div>' : ''}
       ${roles.has('max-damage') ? '<div class="failed-key"><span class="ring worst"></span>茶の点線の丸は損傷がいちばん大きい点</div>' : ''}`;
@@ -1331,13 +1409,13 @@ export class SolidMode {
       return l;
     };
     const f = this.flat3d;
-    const scale = select('高さの倍率', 'solid-flat-scale', FLAT_SCALES, FLAT_LOOK.scale, (v) => `×${v}`, (v) => ((f.look.scale = v), f.draw()));
-    const pitch = select('波のピッチ', 'solid-flat-pitch', FLAT_PITCHES, FLAT_LOOK.pitch, (v) => `板幅の ${v} 倍`, (v) => ((f.look.pitch = v), f.draw()));
+    const scale = select('高さの倍率', 'solid-flat-scale', FLAT_SCALES, FLAT_LOOK.scale, (v) => `×${v}`, (v) => ((f.look.scale = v), f.draw(), this.syncWave()));
+    const pitch = select('波のピッチ', 'solid-flat-pitch', FLAT_PITCHES, FLAT_LOOK.pitch, (v) => `板幅の ${v} 倍`, (v) => ((f.look.pitch = v), f.draw(), this.syncWave()));
     const latent = el('label', 'flat3d-latent');
     const box2 = el('input');
     box2.type = 'checkbox';
     box2.id = 'solid-flat-latent';
-    box2.addEventListener('change', () => ((f.look.latent = box2.checked), f.reshape()));
+    box2.addEventListener('change', () => ((f.look.latent = box2.checked), f.reshape(), this.syncWave()));
     latent.append(box2, el('span', undefined, '参考: 不感帯を無視して伸び差を波に'));
     latent.title = '座屈の判定（形状不感帯 −40(h/B)² 〜 80(h/B)²）を外し、伸び差の全部が λ = (2/π)√Δε の波になったとして描く。狭い板や平坦な板が持っている伸び差の形を見る用';
     const back = el('button', undefined, '元の向き');
@@ -1356,15 +1434,34 @@ export class SolidMode {
     const pin = this.flatPinned;
     if (pin) {
       this.flat3d.set(pin, pin.halfWidth, pin.thickness);
+      this.syncWave();
       return;
     }
     const st = shown?.st;
     if (!st || !st.looks) {
       this.flat3d.set(null, 0, 0, this.replay ? '再生中の枚の時点ではまだ定常でない' : '');
+      this.syncWave();
       return;
     }
     const hc = 2 * st.halfThickness.find(Number.isFinite)!;
     this.flat3d.set({ exitZ: st.exitZ, flatness: st.flatness }, st.halfWidth, hc);
+    this.syncWave();
+  }
+
+  /**
+   * The picture's wave (SolidView.wave) from 平坦度の形: its shape, its pitch over the strip's width and its exaggeration
+   * of the heights, when the strip buckles (or the band is ignored) and the 「平坦度の波」 button is on; a flat strip
+   * gets none. The picture is redrawn when it changes
+   */
+  private syncWave(): void {
+    const f = this.flat3d;
+    const s = f.shape;
+    const hw = f.stripHalfWidth;
+    const next = this.waveOn && s && s.kind !== 'flat' && hw > 0 ? { shape: s, pitch: f.look.pitch * 2 * hw, scale: f.look.scale, halfWidth: hw } : null;
+    const was = this.view.wave;
+    if (was === next || (was && next && was.shape === next.shape && was.pitch === next.pitch && was.scale === next.scale && was.halfWidth === next.halfWidth)) return;
+    this.view.wave = next;
+    this.dirty = true;
   }
 
   /** the charts' canvases changed size (the splitter under the drawing): redraw them */
@@ -1857,7 +1954,8 @@ export class SolidMode {
       },
       get view() {
         const v = self.view;
-        return { yaw: v.yaw, pitch: v.pitch, zoom: v.zoom, cut: v.cut, cutY: v.cutY, rolls: v.rolls, fit: v.fit, yScale: v.yScale, pan: [v.panX, v.panY], pivot: v.pivot };
+        const w = v.wave;
+        return { yaw: v.yaw, pitch: v.pitch, zoom: v.zoom, cut: v.cut, cutY: v.cutY, rolls: v.rolls, fit: v.fit, yScale: v.yScale, pan: [v.panX, v.panY], pivot: v.pivot, wave: w ? { kind: w.shape.kind, pitch: w.pitch, scale: w.scale, halfWidth: w.halfWidth, steepness: w.shape.steepness } : null };
       },
       screenOfPoint: (x: number, y: number, z: number) => self.view.screenOfPoint(x, y, z),
       /** 平坦度の形: the shape drawn (flatShape.ts, SI and fractions; null before a steady reading), the look, the words */

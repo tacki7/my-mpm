@@ -3,6 +3,7 @@
 // three-dimensional model's quantities. One stand: the section stays hidden.
 import type { Stand3Result } from '../mpm/solid/tandem3.ts';
 import type { TandemStop } from '../mpm/tandem.ts';
+import { FLAT_NAMES } from '../mpm/solid/flatShape.ts';
 import { standColor } from './explorer.ts';
 import { stopPhrase } from './standTable.ts';
 
@@ -22,7 +23,8 @@ const ROWS: [string, (r: Stand3Result) => string, string][] = [
   ['先進率', (r) => num(r.steady?.forwardSlip, 100, 2), '%'],
   ['最大損傷', (r) => r.maxDamage.toFixed(3), ''],
   ['亀裂の点', (r) => String(r.nFailed), '個'],
-  ['粒子数（1/4）', (r) => r.particles.toLocaleString(), '個'],
+  ['入側の波（前のスタンドの平坦度から）', (r) => (r.entryWave ? `${FLAT_NAMES[r.entryWave.shape.kind]} 高さ ${num(2 * r.entryWave.amplitude, 1e6, 1)} µm・ピッチ ${num(r.entryWave.pitch, 1e3, 1)} mm` : '平坦'), ''],
+  ['粒子数', (r) => `${r.particles.toLocaleString()}（${r.fullThickness ? '1/2 モデル' : '1/4 モデル'}）`, '個'],
 ];
 
 function cell(tag: 'th' | 'td', text: string, cls?: string): HTMLElement {

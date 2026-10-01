@@ -63,6 +63,11 @@ export class FlatView {
   private readonly canvas: HTMLCanvasElement;
   private readonly changed: () => void;
 
+  /** the drawn strip's exit half width [m] (0 before a reading) */
+  get stripHalfWidth(): number {
+    return this.shape ? this.halfWidth : 0;
+  }
+
   constructor(canvas: HTMLCanvasElement, changed: () => void = () => {}) {
     this.canvas = canvas;
     this.changed = changed;

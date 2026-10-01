@@ -129,16 +129,25 @@ export const FLAT_NAMES: Record<FlatKind, string> = {
   quarter: 'クォーター伸び（複合伸び）',
 };
 
+/** the fibre's steepness λ at ζ (−1 the one edge, 1 the other), linear between the shape's samples, the edges' beyond them */
+export function steepnessAt(s: FlatShape, zeta: number): number {
+  const zs = s.zeta;
+  if (zeta <= zs[0]) return s.lambda[0];
+  if (zeta >= zs[zs.length - 1]) return s.lambda[zs.length - 1];
+  const f = ((zeta - zs[0]) / (zs[zs.length - 1] - zs[0])) * (zs.length - 1);
+  const k = Math.min(zs.length - 2, Math.floor(f));
+  return s.lambda[k] + (f - k) * (s.lambda[k + 1] - s.lambda[k]);
+}
+
 /** the wave's height at (x, ζ) for a pitch p [any length unit]: δ(ζ)/2 · sin(2π x / p), δ = λ p */
 export function waveHeight(s: FlatShape, x: number, zeta: number, pitch: number): number {
-  const zs = s.zeta;
-  let lam: number;
-  if (zeta <= zs[0]) lam = s.lambda[0];
-  else if (zeta >= zs[zs.length - 1]) lam = s.lambda[zs.length - 1];
-  else {
-    const f = ((zeta - zs[0]) / (zs[zs.length - 1] - zs[0])) * (zs.length - 1);
-    const k = Math.min(zs.length - 2, Math.floor(f));
-    lam = s.lambda[k] + (f - k) * (s.lambda[k + 1] - s.lambda[k]);
-  }
-  return ((lam * pitch) / 2) * Math.sin((2 * Math.PI * x) / pitch);
+  return ((steepnessAt(s, zeta) * pitch) / 2) * Math.sin((2 * Math.PI * x) / pitch);
+}
+
+/**
+ * The elongation a fibre puts into a wave of steepness λ (eq. 4.46: a sine wave of height δ and pitch l is longer
+ * than l by (π/2)² (δ/l)²): what a buckled fibre no longer holds as residual stress [strain]
+ */
+export function releasedStrain(lambda: number): number {
+  return (Math.PI * Math.PI * lambda * lambda) / 4;
 }

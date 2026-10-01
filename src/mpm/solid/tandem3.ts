@@ -17,7 +17,8 @@
 import { elasticConstants } from '../material.ts';
 import { cloneParams } from '../params.ts';
 import { MAX_STANDS, RAMP_SHARE_MAX, type Handoff, type TandemStop } from '../tandem.ts';
-import { Sim3, solidScales, type Sim3Options, type Solid3Params } from './sim3.ts';
+import { Sim3, solidScales, type EntryWave, type Sim3Options, type Solid3Params } from './sim3.ts';
+import { flatShape, releasedStrain, steepnessAt, waveHeight } from './flatShape.ts';
 import type { Team } from './team.ts';
 import { READ_STEPS, SolidSampler, type SolidLook, type SolidSteady } from './steady.ts';
 
@@ -54,6 +55,9 @@ export interface Stand3Result {
   rollRadius: number;
   gap: number;
   rollsSettled: boolean;
+  /** the waves the stand's strip came in with (solid.flatIn: the stand before's flatness; null: none, or the first stand), and whether the stand solved the whole thickness */
+  entryWave: EntryWave | null;
+  fullThickness: boolean;
 }
 
 export interface Stand3Done {
@@ -216,7 +220,7 @@ export class Tandem3 {
       const whole = result.thicknessOut > 0 && result.widthOut > 0;
       this.stopped = phase === 'stalled' ? 'stalled' : result.separated ? 'separated' : result.massLost > 0 || !whole ? 'lost' : null;
     }
-    const next = more && !this.stopped ? remap3(old, this.base, result.thicknessOut, result.widthOut, sample, this.simOpts, crop) : null;
+    const next = more && !this.stopped ? remap3(old, this.base, result.thicknessOut, result.widthOut, sample, this.simOpts, crop, entryWaveOf(this.base, result)) : null;
     this.onStandDone?.({ stand: this.stand, sim: old, next, result });
     if (!next) {
       this.finished = true;
@@ -259,7 +263,28 @@ function close(sim: Sim3, stand: number, phase: 'done' | 'steady' | 'cropped' | 
     rollRadius: sim.roll.R,
     gap: sim.gap,
     rollsSettled: sim.rollsSettled,
+    entryWave: sim.params.solid.entryWave ?? null,
+    fullThickness: sim.fullThickness,
   };
+}
+
+/**
+ * The waves the strip of a finished stand comes into the next one with (solid.flatIn): the shape its steady
+ * flatness makes (flatShape.ts; the band ignored when asked), with the pitch as a multiple of the strip's width.
+ * Null without flatIn, without a steady reading, or when the strip stays flat (its difference of elongation
+ * within the insensitive band: it stays as the residual stress the points carry anyway)
+ */
+export function entryWaveOf(P: Solid3Params, r: Stand3Result): EntryWave | null {
+  const f = P.solid.flatIn;
+  const st = r.steady;
+  if (!f || !st) return null;
+  const hc = st.halfThickness.find(Number.isFinite);
+  if (!(hc && hc > 0 && r.widthOut > 0)) return null;
+  const shape = flatShape(st.exitZ, st.flatness, st.halfWidth, 2 * hc, f.ignoreBand === true);
+  // a steepness under 1e-5 (a height under 1e-5 of the pitch, tens of nm) is a flat strip: the fit's rounding
+  if (!shape || shape.kind === 'flat' || !(shape.steepness > 1e-5)) return null;
+  const pitch = f.pitch * r.widthOut;
+  return { shape, pitch, halfWidth: r.widthOut / 2, amplitude: (Math.max(...shape.lambda) * pitch) / 2 };
 }
 
 /** mean x of lattice column i (NaN when one of its points has left the grid) */
@@ -391,6 +416,13 @@ export function cropOut3(sim: Sim3, crop: [number, number]): boolean {
  *   and rolls that follow the pass never settle); what varies over millimetres is. A new point's volume is its
  *   share of the section where it sits (the spacing of the carried y and z against the new lattice's), scaled so
  *   that the strip's volume is the lattice's, and its mass is the strip's over the points (equal).
+ * With `wave` (solid.flatIn: the stand before's strip buckled, entryWaveOf) the strip comes in wavy: every point is
+ * lifted by the wave's height at its (x, ζ) (a sine along x from the tail, the fibres' steepness across the width,
+ * both edges up together), as a bend and not a strain (F and the stresses stay), and the elongation each fibre put
+ * into its wave comes off its longitudinal stress (releasedStrain; uniaxial, the strip's mean over the width taken
+ * off every fibre so that the whole carries the force it did). The stand is solved through the whole thickness
+ * (with solid.flatIn every stand after the first is: a wave bends the strip out of its mid-thickness plane), the
+ * quarter's points mirrored below it (the shear stresses across the plane change sign)
  */
 export function remap3(
   old: Sim3,
@@ -400,6 +432,7 @@ export function remap3(
   sample: [number, number] | null = null,
   simOpts: Sim3Options = {},
   crop: [number, number] | null = null,
+  wave: EntryWave | null = null,
 ): Sim3 {
   const P: Solid3Params = { ...cloneParams(base), solid: { ...base.solid, width: w1 } };
   const rho = P.material.rho * P.numerics.massScale;
@@ -408,6 +441,9 @@ export function remap3(
   // the section's shape comes from the old strip (below), not from the entry crown input
   delete P.solid.crownIn;
   delete P.rolling.lengthMode;
+  if (wave) P.solid.entryWave = wave;
+  else delete P.solid.entryWave;
+  if (P.solid.flatIn) P.solid.fullThickness = true;
   const m = old.NJ * old.NK;
   // the old columns the new strip is made of (tail to head)
   const c0 = crop ? crop[0] : 0;
@@ -438,11 +474,22 @@ export function remap3(
   const sim = new Sim3(P, simOpts);
   const n = sim.n;
   const K = sim.el.K;
+  const E = sim.youngs;
+  // a whole strip made from a quarter: the rows below the mid-thickness plane are the quarter's mirror image
+  const doubling = sim.fullThickness && !old.fullThickness;
+  const xTail = sim.xHead0 - P.rolling.sheetLength;
+  // the elongation the fibres put into their waves, its mean over the width (the lattice's columns)
+  let relMean = 0;
+  if (wave) {
+    for (let k = 0; k < sim.NK; k++) relMean += releasedStrain(steepnessAt(wave.shape, ((k + 0.5) * sim.dz) / wave.halfWidth));
+    relMean /= sim.NK;
+  }
   // new columns per old column: the ratio of the masses of a lattice column, old to new
   const share = (old.dp * old.params.rolling.h0 * old.halfWidth0) / (sim.dp * h1 * sim.halfWidth0);
   const len = sample ? sample[1] - sample[0] + 1 : 0;
   const nc = c1 - c0 + 1;
-  const mass = M / n;
+  // the whole strip made from a quarter has twice its mass
+  const mass = (doubling ? 2 * M : M) / n;
   const cell = sim.dp * sim.dp * sim.dz;
   let nFailed = 0;
   const parentOf = new Int32Array(n);
@@ -560,7 +607,11 @@ export function remap3(
     const s = (fromHead / sim.NI) * nc;
     const io = sample ? sample[1] - (Math.floor(fromHead / share) % len) : c1 - Math.min(nc - 1, Math.floor(s));
     const iof = c1 + 0.5 - s;
-    const jf = ((j + 0.5) / sim.NJ) * old.NJ - 0.5;
+    // the row through the thickness: the same share of the way; doubling, the row at |y| of the quarter, and its
+    // sign (the rows below the plane are the mirror image)
+    const yc = j + 0.5 - sim.jOff;
+    const flip = doubling && yc < 0 ? -1 : 1;
+    const jf = doubling ? (Math.abs(yc) / (sim.NJ / 2)) * old.NJ - 0.5 : ((j + 0.5) / sim.NJ) * old.NJ - 0.5;
     const kf = ((k + 0.5) / sim.NK) * old.NK - 0.5;
     const jo = Math.max(0, Math.min(old.NJ - 1, Math.round(jf)));
     const ko = Math.max(0, Math.min(old.NK - 1, Math.round(kf)));
@@ -568,11 +619,11 @@ export function remap3(
     parentOf[q] = p;
     // the shape: y and z where the old strip has them; the symmetry planes are not crossed
     const yq = shapeAt(meanY, dY, iof, jf, kf);
-    sim.py[q] = sim.fullThickness ? yq : Math.max(0.25 * sim.dp, yq);
+    sim.py[q] = doubling ? flip * Math.max(0.25 * sim.dp, yq) : sim.fullThickness ? yq : Math.max(0.25 * sim.dp, yq);
     sim.pz[q] = Math.max(0.25 * sim.dz, shapeAt(meanZ, dZ, iof, jf, kf));
     if (dX) sim.px[q] += shapeAt(zeros, dX, iof, jf, kf);
     if (cellShare) {
-      const hj = (0.5 * old.NJ) / sim.NJ;
+      const hj = (0.5 * old.NJ) / (doubling ? sim.NJ / 2 : sim.NJ);
       const hk = (0.5 * old.NK) / sim.NK;
       const fy = (shapeAt(meanY, dY, iof, jf + hj, kf) - shapeAt(meanY, dY, iof, jf - hj, kf)) / sim.dp;
       const fz = (shapeAt(meanZ, dZ, iof, jf, kf + hk) - shapeAt(meanZ, dZ, iof, jf, kf - hk)) / sim.dz;
@@ -582,10 +633,21 @@ export function remap3(
     sim.sxx[q] = old.sxx[p];
     sim.syy[q] = old.syy[p];
     sim.szz[q] = old.szz[p];
-    sim.sxy[q] = old.sxy[p];
-    sim.syz[q] = old.syz[p];
+    sim.sxy[q] = flip * old.sxy[p];
+    sim.syz[q] = flip * old.syz[p];
     sim.szx[q] = old.szx[p];
     sim.pres[q] = old.pres[p];
+    if (wave) {
+      const zeta = sim.pz[q] / wave.halfWidth;
+      sim.py[q] += waveHeight(wave.shape, sim.px[q] - xTail, zeta, wave.pitch);
+      // the elongation the fibre put into its wave no longer sits in it as stress: uniaxial along x, two thirds
+      // deviatoric and a third off the pressure (a pressure is compression)
+      const ds = E * (releasedStrain(steepnessAt(wave.shape, zeta)) - relMean);
+      sim.sxx[q] += (2 / 3) * ds;
+      sim.syy[q] -= ds / 3;
+      sim.szz[q] -= ds / 3;
+      sim.pres[q] -= ds / 3;
+    }
     sim.ep[q] = old.ep[p];
     sim.temp[q] = old.temp[p];
     sim.seq[q] = old.seq[p];
@@ -596,7 +658,7 @@ export function remap3(
     // the pusher's column stays whole (Sim3.fail)
     sim.failed[q] = i === 0 ? 0 : old.failed[p];
     if (sim.failed[q]) nFailed++;
-    const J = Math.exp(-old.pres[p] / K);
+    const J = Math.exp(-sim.pres[q] / K);
     const sc = Math.cbrt(J);
     sim.F[9 * q] = sc;
     sim.F[9 * q + 4] = sc;
