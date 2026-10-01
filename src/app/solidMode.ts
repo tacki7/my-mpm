@@ -117,7 +117,7 @@ const NUMBERS: NumberField[] = [
   { key: 'crown', group: 'strip', query: 'crown3', label: '入側の板クラウン', unit: 'µm', step: 5, min: -500, max: 500, scale: 1e-6, hint: '板幅の中央の板厚（h0）から端の板厚を引いた差。幅方向に 2 次曲線。負なら中央が薄い。板厚の半分まで' },
   { key: 'barrel', group: 'bend', query: 'barrel3', label: 'バレル長', unit: 'mm', step: 10, min: 2, max: 5000, scale: mm, hint: 'ロールの胴の長さ。板幅の 1.5 倍以上（幅広がりの余裕）。板は胴の中央' },
   { key: 'span', group: 'bend', query: 'span3', label: '支点間距離', unit: 'mm', step: 10, min: 2, max: 6000, scale: mm, hint: '軸受の中心の間。バレル長より長く、胴の外に張り出した分だけ撓みが増える' },
-  { key: 'flatPitch', group: 'flat', query: 'flatpitch3', label: '波のピッチ', unit: '× 板幅', step: 0.5, min: 0.5, max: 4, scale: 1, hint: '平坦度にはピッチが無い（座屈解析で決まる量）ので与える。「平坦度の形」の絵のピッチと同じ意味' },
+  { key: 'flatPitch', group: 'flat', query: 'flatpitch3', label: '波のピッチ', unit: '× 板幅', step: 0.1, min: 0.1, max: 4, scale: 1, hint: '平坦度にはピッチが無い（座屈解析で決まる量）ので与える。「平坦度の形」の絵のピッチと同じ意味。板の長さ（定常の長さは十数 mm）に波が収まるよう、広い板では 0.1〜0.2' },
 ];
 /** the barrel is at least this many times the strip's width */
 const BARREL_OVER = 1.5;
