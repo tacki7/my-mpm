@@ -1382,23 +1382,39 @@ export class SolidMode {
     return this.replay && f ? Math.min(this.standResults.length, f.diag.stand) : this.standResults.length;
   }
 
+  /**
+   * A stand's steady means as they stood at the end of its pass: the result of a stand that ended, or the latest
+   * frame's for the stand still on it. Played back, a frame from before the stand's first steady look shows these
+   * (the pass's reading, not nothing), and the figures' tags say so
+   */
+  private endSteady(k: number): SolidSteady | null {
+    const r = this.standResults[k]?.steady;
+    if (r) return r;
+    const d = this.last?.diag;
+    return d && d.stand === k && d.steady && d.steady.looks > 0 ? d.steady : null;
+  }
+
   /** the steady means the width graphs show: the shown frame's stand's (the running one, or the one of the frame
-   *  played back), or until it has any the last stand's before it that had */
-  private shownSteady(): { st: SolidSteady; g: SolidGeometry } | null {
+   *  played back; before it had any, the stand's at the end of its pass — `later`), or the last stand's before it
+   *  that had */
+  private shownSteady(): { st: SolidSteady; g: SolidGeometry; later: boolean } | null {
     const f = this.shownFrame();
     const now = f?.diag.steady;
     const gNow = f ? (this.geometries[f.diag.stand] ?? this.geometry) : this.geometry;
-    if (now && now.looks > 0 && gNow) return { st: now, g: gNow };
+    if (now && now.looks > 0 && gNow) return { st: now, g: gNow, later: false };
+    const end = f && this.replay ? this.endSteady(f.diag.stand) : null;
+    if (end && gNow) return { st: end, g: gNow, later: true };
     for (let k = this.endedStands() - 1; k >= 0; k--) {
       const st = this.standResults[k]?.steady;
-      if (st && this.geometries[k]) return { st, g: this.geometries[k] };
+      if (st && this.geometries[k]) return { st, g: this.geometries[k], later: false };
     }
     return null;
   }
 
   /**
    * A tandem's stands with steady means, in order: the stands that ended with some, and the running one once it has
-   * any. The width, crown and flatness graphs draw each in its stand's colour
+   * any (played back before it had, the stand's means at the end of its pass). The width, crown and flatness graphs
+   * draw each in its stand's colour
    */
   private standSteadies(): { k: number; st: SolidSteady; g: SolidGeometry }[] {
     const out: { k: number; st: SolidSteady; g: SolidGeometry }[] = [];
@@ -1410,16 +1426,20 @@ export class SolidMode {
     }
     const d = this.shownFrame()?.diag;
     const g = d ? (this.geometries[d.stand] ?? this.geometry) : null;
-    if (d?.steady && d.steady.looks > 0 && g && d.stand >= ended) out.push({ k: d.stand, st: d.steady, g });
+    const st = d?.steady && d.steady.looks > 0 ? d.steady : d && this.replay ? this.endSteady(d.stand) : null;
+    if (d && st && g && d.stand >= ended) out.push({ k: d.stand, st, g });
     return out;
   }
 
   private drawWidthCharts(): void {
-    // playing back: the graphs across the width are the steady means as they stood at the frame on show, and say so
+    // playing back: the graphs across the width are the steady means as they stood at the frame on show, and say so;
+    // from before the stand's first steady look they are the stand's at the end of its pass, and say that
     const f = this.shownFrame();
-    const when = this.replay && f ? `再生 ${(this.replay.at + 1).toLocaleString()} 枚目（${(this.geometry?.stands ?? 1) > 1 ? `#${f.diag.stand + 1}、` : ''}${(f.diag.t * 1e3).toFixed(2)} ms）の時点` : '';
-    for (const e of this.$('solid-stage').querySelectorAll<HTMLElement>('.fig-when')) if (e.textContent !== when) e.textContent = when;
     const shown = this.shownSteady();
+    const when = this.replay && f
+      ? `再生 ${(this.replay.at + 1).toLocaleString()} 枚目（${(this.geometry?.stands ?? 1) > 1 ? `#${f.diag.stand + 1}、` : ''}${(f.diag.t * 1e3).toFixed(2)} ms）の時点${shown?.later ? '。この枚ではまだ定常でない: 圧延の終わりの読み' : ''}`
+      : '';
+    for (const e of this.$('solid-stage').querySelectorAll<HTMLElement>('.fig-when')) if (e.textContent !== when) e.textContent = when;
     const st = shown?.st ?? null;
     const g = shown?.g ?? this.geometry!;
     const tandem = g.stands > 1;
