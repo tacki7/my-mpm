@@ -26,6 +26,8 @@ export { MAX_STANDS };
 
 /** steady looks a stand takes before a 'steady' handoff (as many steps as the section model's two readings) */
 export const STEADY_LOOKS = 4;
+/** the tail still to come when the pass is steady, as a share of the width (steadyLength3) */
+export const TAIL_PER_WIDTH = 0.5;
 
 /** One finished stand. Lengths [m], force [N] on one roll over the whole width, time [s] within the stand. */
 export interface Stand3Result {
@@ -70,8 +72,14 @@ export interface Stand3Done {
 /**
  * The strip length a stand needs to get to a 'steady' handoff (tandem.ts steadyLength, with the 3D model's looks):
  * what fills the bite, what has to be out by then (the head at 3 h0 + a contact length for steadySample3, or
- * STEADY_LOOKS looks after the exit probe, whichever is later), one look more, and one h0 over. It does not
- * depend on the width.
+ * STEADY_LOOKS looks after the exit probe, whichever is later), one look more, and one h0 over, plus a tail of
+ * half the width still to come (TAIL_PER_WIDTH): a strip wider than it is long has no stiffness in its own plane,
+ * so where the columns across the width are rolled to different lengths (an entry crown, a bent roll) the bite
+ * pulls the tail in at different speeds instead and the exit comes out at one speed — the elongation difference
+ * (what the flatness is read from) is lost to a bowed tail. The tail resists in plane with τ_y h × its length
+ * while the bite pulls with about μ p Lc × the width, and half the width was enough (W 60 mm, crown 40 µm: the
+ * entry speed within 0.5 % across the width and the whole ln(h_in / h_out) difference in the flatness; a quarter
+ * of the width left the edge entering 1.3 % faster and 12 % of the difference missing; docs/validation.md).
  */
 export function steadyLength3(P: Solid3Params): number {
   const s = solidScales(P);
@@ -83,7 +91,7 @@ export function steadyLength3(P: Solid3Params): number {
   // rolled after that; under gapControl 'reduction' up to one more transit for the gauge to come onto the target
   // (Sim3.gaugeWait)
   const settle = s.rollsAdjusted ? (r.gapControl === 'reduction' ? 2 : 1) * s.contactLength : 0;
-  const base = s.contactLength + out + settle + look + r.h0;
+  const base = s.contactLength + out + settle + look + r.h0 + TAIL_PER_WIDTH * P.solid.width;
   // a front tension ramps up after the head is out, and 'steady' waits for it (tandem.ts steadyLength: the ramp's
   // stretch at most RAMP_SHARE_MAX of the strip, or the length ran away and went negative with a large mass scaling)
   if (r.frontTension === 0) return base;
