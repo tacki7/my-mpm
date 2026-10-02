@@ -9,7 +9,7 @@ import { ok, near, between, done } from './lib.mjs';
 import { defaultParams } from '../../src/mpm/params.ts';
 import { elasticConstants } from '../../src/mpm/material.ts';
 import { RAMP_SHARE_MAX, READ_STEPS, steadyLength } from '../../src/mpm/tandem.ts';
-import { steadyLength3 } from '../../src/mpm/solid/tandem3.ts';
+import { TAIL_PER_WIDTH, steadyLength3 } from '../../src/mpm/solid/tandem3.ts';
 import { solidParams } from '../../src/mpm/solid/sim3.ts';
 
 const P = (ms, tf = 100e6, ramp = 0) => {
@@ -52,5 +52,15 @@ for (const [name, L] of [
   ok(bad.length === 0, `${name}: L / base is between 1 and the cap and never falls as the mass scaling grows`, bad.join(', '));
   near(L(P(1e6, 100e6, 2e-3)), base(1e6) + 2e-3 * vIn, 1e-12, `${name}: a ramp given adds ramp × vIn whatever the mass scaling`);
   near(L(P(1e6, 0, 2e-3)), base(1e6), 0, `${name}: with no front tension the ramp given changes nothing`);
+}
+// the 3D length carries a tail of TAIL_PER_WIDTH × the width (a strip wider than it is long bows in plane instead of
+// coming out with the elongation difference its crown rolled: docs/model.md「板の長さ「定常状態になるまで」」)
+{
+  const L3 = (w) => steadyLength3(solidParams(P(1e4, 0), { width: w }));
+  between(TAIL_PER_WIDTH, 0.3, 1, 'the tail is a good share of the width');
+  near(L3(60e-3) - L3(4e-3), TAIL_PER_WIDTH * 56e-3, 1e-12, '3D: a strip 56 mm wider is TAIL_PER_WIDTH × 56 mm longer');
+  ok(L3(4e-3) - TAIL_PER_WIDTH * 4e-3 > 5e-3, '3D: the width-free part is the bite and the head out, several mm', `${((L3(4e-3) - TAIL_PER_WIDTH * 4e-3) * 1e3).toFixed(2)} mm`);
+  const Q = P(1e4);
+  near(steadyLength3(solidParams(Q, { width: 60e-3 })) - steadyLength3(solidParams(Q, { width: 4e-3 })), (TAIL_PER_WIDTH * 56e-3) / (1 - share(Q)), 1e-12, '3D: under a front tension the tail holds its share of the ramp too');
 }
 done();
